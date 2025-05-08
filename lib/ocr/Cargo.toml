@@ -23,6 +23,8 @@ workspace_root = "0.1.1"
 
 [dev-dependencies]
 tokio = { version = "1.45.0", features = ["macros", "test-util"] }
+criterion = { version = "0.5.1", features = ["html_reports"] }
 
-[build-dependencies]
-dotenvy = "0.15.7"
+[[bench]]
+name = "ocr"
+harness = false
