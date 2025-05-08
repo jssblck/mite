@@ -1,0 +1,28 @@
+[package]
+name = "ocr"
+version = "0.0.0"
+edition = "2024"
+authors = ["Jessica Black <me@jessica.black>"]
+description = "みて is an all-in-one application for interacting with Japanese text in visual content."
+license = "AGPL-3.0-only"
+repository = "https://github.com/jssblck/mite"
+homepage = "https://github.com/jssblck/mite"
+documentation = "https://github.com/jssblck/mite"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+bon = "3.6.3"
+color-eyre = "0.6.4"
+image = "0.25.6"
+num_cpus = "1.16.0"
+paddle-ocr-rs = "0.3.0"
+workspace_root = "0.1.1"
+
+[dev-dependencies]
+tokio = { version = "1.45.0", features = ["macros", "test-util"] }
+
+[build-dependencies]
+dotenvy = "0.15.7"

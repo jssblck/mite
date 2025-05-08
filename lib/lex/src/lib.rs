@@ -1,0 +1,1 @@
+//! Powers sentence lexing operations.
