@@ -1,0 +1,4 @@
+[submodule "PaddleOCR-json"]
+	path = PaddleOCR-json
+	url = https://github.com/hiroi-sora/PaddleOCR-json.git
+    branch = release/1.4.1

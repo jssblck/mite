@@ -11,7 +11,6 @@ use paddle_ocr_rs::{
 use crate::{Annotation, Image, Vertice};
 
 static ENGINE: LazyLock<OcrLite> = LazyLock::new(|| {
-    eprintln!("init engine");
     let cpus = num_cpus::get();
     let models = workspace_root::get_workspace_root().join("models");
     let mut engine = OcrLite::new();

@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:latest
+    environment:
+      POSTGRES_USER: mite
+      POSTGRES_DB: mite
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "${MITE_DB_PORT:-3001}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mite -d mite"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  paddleocr:
+    build:
+      context: PaddleOCR-json/cpp
+    environment:
+      PADDLE_OCR_PORT: 3746
+    ports:
+      - "${PADDLE_OCR_PORT:-3746}:3746"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["serve"]
+  mite:
+    build:
+      context: .
+      target: server
+    environment:
+      MITE_PORT: 3000
+    ports:
+      - "${MITE_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      paddleocr:
+        condition: service_started
+    command: ["serve"]
