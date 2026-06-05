@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Mite Eval UI</title>
+    <link rel="stylesheet" href="/app.css">
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-title">Mite Eval UI</div>
+          <div id="rootLabel" class="brand-subtitle">Loading eval/</div>
+        </div>
+        <div class="toolbar">
+          <button id="reloadBtn" type="button">Reload</button>
+          <label class="file-upload">
+            <input id="uploadInput" type="file" accept="image/png,image/jpeg">
+            Upload
+          </label>
+          <button id="runOcrBtn" type="button">Run OCR</button>
+          <button id="fitBtn" type="button">Fit</button>
+        </div>
+        <div class="toggles">
+          <label><input id="showLabels" type="checkbox" checked> Labels</label>
+          <label><input id="showRaw" type="checkbox"> Raw</label>
+          <label><input id="showDiff" type="checkbox"> Diff</label>
+          <label><input id="showChars" type="checkbox"> Chars</label>
+          <label><input id="showIgnored" type="checkbox" checked> Ignored</label>
+        </div>
+      </header>
+
+      <main class="layout">
+        <aside class="sidebar">
+          <div class="pane-head">
+            <div>
+              <div class="pane-title">Eval Bundles</div>
+              <div id="imageStats" class="muted">0 bundles</div>
+            </div>
+          </div>
+          <input id="searchBox" class="search" type="search" placeholder="Filter bundles">
+          <div id="imageList" class="image-list"></div>
+        </aside>
+
+        <section class="stage">
+          <div class="stage-head">
+            <div>
+              <div id="selectedPath" class="selected-path">Select an eval bundle</div>
+              <div id="statusLine" class="muted">No image loaded</div>
+            </div>
+            <div class="modebar">
+              <button id="selectModeBtn" type="button" class="active">Select</button>
+              <button id="drawLabelBtn" type="button">Label</button>
+              <button id="drawIgnoreBtn" type="button">Ignore</button>
+            </div>
+          </div>
+          <div id="canvasWrap" class="canvas-wrap">
+            <canvas id="imageCanvas"></canvas>
+            <div id="emptyState" class="empty-state">Choose an eval bundle from eval/</div>
+          </div>
+        </section>
+
+        <aside class="inspector">
+          <div class="tabs">
+            <button id="tabLabels" type="button" class="active">Labels</button>
+            <button id="tabRaw" type="button">Raw</button>
+            <button id="tabDiff" type="button">Diff</button>
+            <button id="tabJson" type="button">JSON</button>
+          </div>
+
+          <section id="labelsPanel" class="panel active">
+            <div class="row-actions">
+              <button id="addLabelBtn" type="button">Add label</button>
+              <button id="addIgnoreBtn" type="button">Add ignore</button>
+              <button id="undoBtn" type="button" disabled>Undo</button>
+              <button id="redoBtn" type="button" disabled>Redo</button>
+              <button id="saveBtn" type="button" class="primary">Save</button>
+            </div>
+            <div id="labelSummary" class="muted"></div>
+            <div id="labelList" class="item-list"></div>
+            <form id="labelForm" class="editor-form">
+              <div class="form-title">Selection</div>
+              <label>Kind <input id="selKind" type="text" readonly></label>
+              <label>ID <input id="detId" type="text"></label>
+              <label>Text <textarea id="detText" rows="3"></textarea></label>
+              <label>Reason <textarea id="ignoreReason" rows="3"></textarea></label>
+              <div class="grid-4">
+                <label>X <input id="rectX" type="number" step="0.01"></label>
+                <label>Y <input id="rectY" type="number" step="0.01"></label>
+                <label>W <input id="rectW" type="number" step="0.01"></label>
+                <label>H <input id="rectH" type="number" step="0.01"></label>
+              </div>
+              <div class="grid-4">
+                <label>Tol X <input id="tolX" type="number" step="0.01"></label>
+                <label>Tol Y <input id="tolY" type="number" step="0.01"></label>
+                <label>Tol W <input id="tolW" type="number" step="0.01"></label>
+                <label>Tol H <input id="tolH" type="number" step="0.01"></label>
+              </div>
+              <label>Notes <textarea id="detNotes" rows="3"></textarea></label>
+              <div class="row-actions">
+                <button id="applyFormBtn" type="button">Apply</button>
+                <button id="rebuildBtn" type="button">Rebuild tokens</button>
+                <button id="deleteBtn" type="button" class="danger">Delete</button>
+              </div>
+            </form>
+          </section>
+
+          <section id="rawPanel" class="panel">
+            <div id="rawSummary" class="muted">Run OCR to see raw detections.</div>
+            <div id="rawList" class="item-list"></div>
+          </section>
+
+          <section id="diffPanel" class="panel">
+            <div id="diffSummary" class="muted">Run OCR to score labels.</div>
+            <div id="diffList" class="item-list"></div>
+          </section>
+
+          <section id="jsonPanel" class="panel">
+            <div class="row-actions">
+              <button id="formatJsonBtn" type="button">Format</button>
+              <button id="saveJsonBtn" type="button" class="primary">Save JSON</button>
+            </div>
+            <textarea id="jsonEditor" spellcheck="false"></textarea>
+          </section>
+        </aside>
+      </main>
+    </div>
+    <pre id="diagState" hidden></pre>
+    <script src="/app.js"></script>
+  </body>
+</html>

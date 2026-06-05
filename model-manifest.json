@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "source": {
+    "name": "RapidAI/RapidOCR",
+    "homepage": "https://github.com/RapidAI/RapidOCR",
+    "modelscope": "https://www.modelscope.cn/models/RapidAI/RapidOCR",
+    "default_models_yaml": "https://raw.githubusercontent.com/RapidAI/RapidOCR/main/python/rapidocr/default_models.yaml",
+    "license": "Apache-2.0"
+  },
+  "lexicons": [
+    {
+      "id": "jmdict-eng",
+      "kind": "lexicon",
+      "local_path": "models/jmdict-eng.json",
+      "archive": {
+        "format": "zip",
+        "url": "https://github.com/scriptin/jmdict-simplified/releases/download/3.6.2%2B20260518145612/jmdict-eng-3.6.2%2B20260518145612.json.zip",
+        "member_glob": "jmdict-eng-*.json"
+      },
+      "sha256": null,
+      "license": "CC-BY-SA-4.0",
+      "attribution": "JMdict/EDICT dictionary data, © Electronic Dictionary Research and Development Group (EDRDG), via scriptin/jmdict-simplified (CC BY-SA 4.0)."
+    }
+  ],
+  "frequencies": [
+    {
+      "id": "jpdb-freq",
+      "kind": "frequency",
+      "local_path": "models/jpdb-freq",
+      "archive": {
+        "format": "zip",
+        "url": "https://github.com/MarvNC/jpdb-freq-list/releases/download/2022-05-09/Freq.JPDB_2022-05-10T03_27_02.930Z.zip",
+        "extract_dir": true
+      },
+      "license": "https://github.com/MarvNC/jpdb-freq-list",
+      "attribution": "JPDB frequency list by Marv (github.com/MarvNC/jpdb-freq-list), rank-based frequencies derived from the jpdb.io media corpus (anime/drama/light novels/visual novels/games)."
+    }
+  ],
+  "models": [
+    {
+      "id": "pp-ocrv5-mobile-det",
+      "kind": "detector",
+      "local_path": "models/pp-ocrv5-mobile-det.onnx",
+      "source_name": "ch_PP-OCRv5_det_mobile.onnx",
+      "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.8.0/onnx/PP-OCRv5/det/ch_PP-OCRv5_det_mobile.onnx",
+      "sha256": "4d97c44a20d30a81aad087d6a396b08f786c4635742afc391f6621f5c6ae78ae"
+    },
+    {
+      "id": "pp-ocrv5-mobile-rec",
+      "kind": "recognizer",
+      "local_path": "models/pp-ocrv5-mobile-rec.onnx",
+      "source_name": "ch_PP-OCRv5_rec_mobile.onnx",
+      "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.8.0/onnx/PP-OCRv5/rec/ch_PP-OCRv5_rec_mobile.onnx",
+      "sha256": "5825fc7ebf84ae7a412be049820b4d86d77620f204a041697b0494669b1742c5"
+    },
+    {
+      "id": "pp-ocrv5-dict",
+      "kind": "dictionary",
+      "local_path": "models/pp-ocrv5-dict.txt",
+      "source_name": "ppocrv5_dict.txt",
+      "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.8.0/paddle/PP-OCRv5/rec/ch_PP-OCRv5_rec_mobile/ppocrv5_dict.txt",
+      "sha256": null
+    }
+  ]
+}

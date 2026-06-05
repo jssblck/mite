@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+if command -v pwsh >/dev/null 2>&1; then
+  exec pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/precommit.ps1
+fi
+
+if command -v powershell.exe >/dev/null 2>&1; then
+  exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/precommit.ps1
+fi
+
+echo "Neither pwsh nor powershell.exe is available; cannot run scripts/precommit.ps1" >&2
+exit 1
