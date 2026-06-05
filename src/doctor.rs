@@ -60,13 +60,13 @@ impl DoctorReport {
         if let Some(runtime) = &gpu_runtime {
             if !runtime.cache_missing.is_empty() {
                 warnings.push(format!(
-                    "GPU runtime cache is missing required DLLs: {}. Run scripts\\install-gpu-runtime.ps1.",
+                    "GPU runtime cache is missing required DLLs: {}. Run scripts\\bootstrap-dev.ps1 -GpuRuntimeOnly.",
                     runtime.cache_missing.join(", ")
                 ));
             }
             if !runtime.executable_missing.is_empty() {
                 warnings.push(format!(
-                    "Current executable directory is missing GPU runtime DLLs: {}. Rebuild after installing the runtime, or rerun scripts\\install-gpu-runtime.ps1 to stage existing targets.",
+                    "Current executable directory is missing GPU runtime DLLs: {}. Rebuild after installing the runtime, or rerun scripts\\bootstrap-dev.ps1 -GpuRuntimeOnly to stage existing targets.",
                     runtime.executable_missing.join(", ")
                 ));
             }

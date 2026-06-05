@@ -84,8 +84,8 @@ wired end to end with a graceful fallback chain **TensorRT -> CUDA -> CPU**
 3. **CPU EP** is the last resort for correctness without a GPU runtime.
 
 TensorRT and CUDA need NVIDIA runtime DLLs next to the binary; ORT ships only the
-provider shims. Run `scripts\install-gpu-runtime.ps1` once to fetch pinned
-TensorRT 10 / CUDA 12 / cuDNN 9 wheels into `.gpu-runtime\bin`. `build.rs`
+provider shims. Run `scripts\bootstrap-dev.ps1 -GpuRuntimeOnly` once to fetch
+pinned TensorRT 10 / CUDA 12 / cuDNN 9 wheels into `.gpu-runtime\bin`. `build.rs`
 stages that cache into the active Cargo profile output dir on every build, so
 debug and release binaries get the same provider DLL dependencies.
 

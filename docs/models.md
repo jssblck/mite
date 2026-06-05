@@ -18,10 +18,13 @@ download commands and `docs/architecture.md` for the measured trade-off.
 ## Download
 
 ```powershell
-.\scripts\download-models.ps1
+.\scripts\bootstrap-dev.ps1 -ModelsOnly
 ```
 
 This reads `model-manifest.json`, downloads the ONNX files from RapidAI's RapidOCR ModelScope repository, verifies the published SHA256 hashes for the ONNX artifacts, and writes `models\MODELS.lock.json` with the exact local hashes.
+
+Use `.\scripts\bootstrap-dev.ps1 -ModelsOnly -IncludeServerModels` to download
+the optional heavier server detector and recognizer too.
 
 ## Verify ONNX Loading
 

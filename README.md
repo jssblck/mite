@@ -9,11 +9,7 @@ On the reference NVIDIA setup, a full OCR pass over a true-4K game window is **~
 ## Quick start
 
 ```powershell
-.\scripts\setup-windows.ps1      # local dirs + Rust/nvidia-smi checks
-.\scripts\download-models.ps1    # PP-OCRv5 ONNX + JMdict + JPDB freq list -> models/
-cargo build --release
-.\scripts\install-gpu-runtime.ps1 # fetch TensorRT/CUDA/cuDNN DLLs into .gpu-runtime and stage the build
-cargo run -- doctor              # confirm GPU + model files are ready
+.\scripts\bootstrap-dev.ps1      # checks tools, downloads assets, installs GPU runtime, builds, runs doctor
 cargo run -- list-windows        # find the window id / title to capture
 
 cargo run -- watch                                   # hold SHIFT over a window to OCR + define
@@ -22,7 +18,13 @@ cargo run -- watch --hud                             # with the on-screen latenc
 cargo run -- watch --metrics-interval-secs 5         # headless per-stage timing to stderr
 ```
 
-`mite.toml` is optional — without it, built-in Windows/NVIDIA defaults are used (`cargo run -- init-config` writes a template you can edit). The defaults assume:
+`bootstrap-dev.ps1` intentionally checks for Rust, Git, `uv`, and an NVIDIA
+driver instead of trying to install them. Use `-SkipGpuRuntime` for non-NVIDIA or
+CPU-only development, `-IncludeEvalData` to initialize the private eval submodule
+and pull its LFS objects, and `-IncludeServerModels` to download the heavier
+PP-OCRv5 server ONNX files too.
+
+`mite.toml` is optional - without it, built-in Windows/NVIDIA defaults are used (`cargo run -- init-config` writes a template you can edit). The defaults assume:
 
 - runtime backend: `nvidia_tensor_rt_then_cuda`, FP16 on
 - detector model: `models/pp-ocrv5-mobile-det.onnx`, recognizer: `models/pp-ocrv5-mobile-rec.onnx`
@@ -35,17 +37,19 @@ cargo run -- watch --metrics-interval-secs 5         # headless per-stage timing
 ## Local Windows setup
 
 ```powershell
-.\scripts\setup-windows.ps1
+.\scripts\bootstrap-dev.ps1
 ```
 
-creates the local model/cache directories and checks Rust and `nvidia-smi`.
+creates local directories, installs local Git hooks, downloads models and data,
+generates `mite.toml` when missing, installs the pinned GPU runtime cache, builds
+Mite, and runs `doctor`.
 
 ### TensorRT acceleration (recommended)
 
 ONNX Runtime ships the TensorRT/CUDA *provider shims* but not the NVIDIA runtime DLLs they depend on. Fetch the pinned TensorRT 10 / CUDA 12 / cuDNN 9 runtime once:
 
 ```powershell
-.\scripts\install-gpu-runtime.ps1
+.\scripts\bootstrap-dev.ps1 -GpuRuntimeOnly
 cargo build --release
 ```
 
@@ -53,17 +57,13 @@ This uses `uv pip install` to download pinned NVIDIA wheels into `.venv-models`,
 
 **Mobile vs. server models (accuracy/latency knob):** the default mobile models are fast and accurate under TensorRT. For higher body-text accuracy at the cost of speed/GPU, download the server variants and point the config at them with FP16 disabled (server models overflow in FP16):
 
-```powershell
-# optional, larger + heavier; requires runtime.fp16 = false in mite.toml
-$base = "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.8.0/onnx/PP-OCRv5"
-curl.exe -L "$base/det/ch_PP-OCRv5_det_server.onnx" -o models\pp-ocrv5-server-det.onnx
-curl.exe -L "$base/rec/ch_PP-OCRv5_rec_server.onnx" -o models\pp-ocrv5-server-rec.onnx
-```
+Download them with `.\scripts\bootstrap-dev.ps1 -ModelsOnly -IncludeServerModels`, then
+set `runtime.fp16 = false` in `mite.toml`.
 
 ### Models and dictionaries
 
 ```powershell
-.\scripts\download-models.ps1
+.\scripts\bootstrap-dev.ps1 -ModelsOnly
 ```
 
 installs the PP-OCRv5 ONNX models, the JMdict English lexicon (`models/jmdict-eng.json`, JMdict/EDICT data via scriptin/jmdict-simplified, CC BY-SA 4.0), and the JPDB frequency list (`models/jpdb-freq/`, rank-based frequencies from [MarvNC/jpdb-freq-list](https://github.com/MarvNC/jpdb-freq-list), used to weight segmentation). All assets are recorded in `models/MODELS.lock.json`.
@@ -193,7 +193,7 @@ Install the local precommit hook once if you want these checks before every
 commit:
 
 ```powershell
-.\scripts\install-precommit-hook.ps1
+.\scripts\bootstrap-dev.ps1 -HooksOnly
 ```
 
 The hook runs `.\scripts\precommit.ps1`. Use

@@ -70,7 +70,7 @@ pub(super) fn commit_session(
             Err(error) => {
                 tracing::warn!(
                     "{label}: TensorRT EP unavailable ({error}); falling back to CUDA. \
-                     Run `scripts\\install-gpu-runtime.ps1` to fetch and stage the TensorRT/CUDA DLLs."
+                     Run `scripts\\bootstrap-dev.ps1 -GpuRuntimeOnly` to fetch and stage the TensorRT/CUDA DLLs."
                 );
             }
         }
@@ -88,7 +88,7 @@ pub(super) fn commit_session(
             Err(error) => {
                 tracing::warn!(
                     "{label}: CUDA execution provider unavailable ({error}); falling back to CPU. \
-                     Run `scripts\\install-gpu-runtime.ps1` to fetch and stage the CUDA/cuDNN DLLs."
+                     Run `scripts\\bootstrap-dev.ps1 -GpuRuntimeOnly` to fetch and stage the CUDA/cuDNN DLLs."
                 );
             }
         }

@@ -3,11 +3,13 @@
 ## Setup
 
 ```powershell
-.\scripts\setup-windows.ps1
+.\scripts\bootstrap-dev.ps1
 ```
 
-This creates `models\`, `cache\engines\`, and `mite.toml`, and verifies Rust and
-`nvidia-smi`.
+This checks Git, Rust, `uv`, and the NVIDIA driver; creates local directories;
+downloads OCR models, dictionaries, and frequency data; writes `mite.toml` if
+missing; installs local Git hooks; installs the pinned GPU runtime cache; builds
+Mite; and runs `doctor`.
 
 The real eval capture corpus is a private Git submodule at `eval\` and uses Git
 LFS for image assets. Initialize it when you need local accuracy checks or label
@@ -20,7 +22,7 @@ git -C eval lfs pull
 
 ## Model files
 
-Place model artifacts here (or run `.\scripts\download-models.ps1`):
+Place model artifacts here (or run `.\scripts\bootstrap-dev.ps1 -ModelsOnly`):
 
 ```text
 models\pp-ocrv5-mobile-det.onnx
@@ -221,11 +223,11 @@ only the provider shims, so fetch the NVIDIA runtime DLLs once and let Cargo
 stage them:
 
 ```powershell
-.\scripts\install-gpu-runtime.ps1
+.\scripts\bootstrap-dev.ps1 -GpuRuntimeOnly
 cargo build --release
 ```
 
-`scripts\install-gpu-runtime.ps1` installs pinned Python wheels for
+`scripts\bootstrap-dev.ps1 -GpuRuntimeOnly` installs pinned Python wheels for
 `tensorrt-cu12`, CUDA runtime, NVRTC, cuBLAS, and cuDNN into `.venv-models`, then
 copies their DLLs into `.gpu-runtime\bin`. The cache is intentionally ignored by
 Git because it is several GB. The script also stages the cache into existing

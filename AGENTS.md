@@ -47,7 +47,7 @@ cargo clippy --all-targets -- -D warnings
 Local precommit:
 
 ```powershell
-.\scripts\install-precommit-hook.ps1
+.\scripts\bootstrap-dev.ps1 -HooksOnly
 .\scripts\precommit.ps1
 .\scripts\precommit.ps1 -IncludeEval
 ```
@@ -55,11 +55,9 @@ Local precommit:
 First-time Windows setup:
 
 ```powershell
-.\scripts\setup-windows.ps1
-.\scripts\download-models.ps1
-.\scripts\install-gpu-runtime.ps1
-cargo build --release
-cargo run -- doctor
+.\scripts\bootstrap-dev.ps1
+.\scripts\bootstrap-dev.ps1 -IncludeEvalData
+.\scripts\bootstrap-dev.ps1 -SkipGpuRuntime
 ```
 
 Product commands:
@@ -91,9 +89,10 @@ The following are local/runtime artifacts and should not be committed:
 - `.venv-models\`
 - `.env`
 
-Model files and dictionaries are acquired with `scripts\download-models.ps1`.
+Model files and dictionaries are acquired with
+`scripts\bootstrap-dev.ps1 -ModelsOnly`.
 TensorRT/CUDA/cuDNN runtime DLLs are cached with
-`scripts\install-gpu-runtime.ps1` and staged by `build.rs`.
+`scripts\bootstrap-dev.ps1 -GpuRuntimeOnly` and staged by `build.rs`.
 Real-image eval captures live under the private `eval\` submodule, usually as
 `eval\collection-name\capture-<ts>\` bundles.
 Each scored capture should keep the original full-frame `underlying.png`, the
