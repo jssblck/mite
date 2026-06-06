@@ -45,6 +45,11 @@ const MEANINGFUL_SYMBOLS: &[char] = &[
 /// `min_single_character_confidence`; lines longer than this are kept on the
 /// ordinary confidence floor.
 const MIN_MULTICHAR_LEN: usize = 1;
+/// Low-contrast detector passes often pick up tiny Latin pseudo-text from
+/// background decals and UI chrome. Expected ASCII-only UI labels in the eval
+/// corpus are taller than this, while the junk runs are microscopic.
+const MAX_ASCII_MICROTEXT_HEIGHT: f32 = 12.0;
+const MIN_SINGLE_ASCII_WIDTH: f32 = 12.0;
 
 pub fn filter_recognized_items(
     items: impl IntoIterator<Item = RecognizedText>,
@@ -62,6 +67,12 @@ fn is_usable_recognized_item(item: &RecognizedText, config: &PipelineConfig) -> 
     if text.is_empty() || item.confidence < config.min_recognition_confidence {
         return false;
     }
+    if is_id_like_numeric_noise(text) {
+        return false;
+    }
+    if is_ascii_microtext_noise(item, text) {
+        return false;
+    }
 
     let visible_chars = text.chars().filter(|ch| !ch.is_whitespace()).count();
     if visible_chars <= MAX_NONALNUM_NOISE_CHARS
@@ -77,6 +88,27 @@ fn is_usable_recognized_item(item: &RecognizedText, config: &PipelineConfig) -> 
 fn is_meaningful_symbol_text(text: &str) -> bool {
     let mut chars = text.chars().filter(|ch| !ch.is_whitespace()).peekable();
     chars.peek().is_some() && chars.all(|ch| MEANINGFUL_SYMBOLS.contains(&ch))
+}
+
+fn is_id_like_numeric_noise(text: &str) -> bool {
+    let Some((left, right)) = text.trim().split_once('-') else {
+        return false;
+    };
+    !right.contains('-')
+        && left.chars().count() >= 3
+        && right.chars().count() >= 3
+        && left.chars().all(|ch| ch.is_ascii_digit())
+        && right.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn is_ascii_microtext_noise(item: &RecognizedText, text: &str) -> bool {
+    if !text.chars().all(|ch| ch.is_ascii() && !ch.is_control()) {
+        return false;
+    }
+    let visible_chars = text.chars().filter(|ch| !ch.is_whitespace()).count();
+    visible_chars > 0
+        && (item.text_box.rect.height <= MAX_ASCII_MICROTEXT_HEIGHT
+            || (visible_chars == 1 && item.text_box.rect.width < MIN_SINGLE_ASCII_WIDTH))
 }
 
 fn merge_adjacent_recognized_fragments(mut items: Vec<RecognizedText>) -> Vec<RecognizedText> {
@@ -318,6 +350,46 @@ mod tests {
     }
 
     #[test]
+    fn filters_id_like_numeric_noise_without_dropping_ui_numbers() {
+        let config = PipelineConfig::default();
+        let items = vec![
+            recognized(0, "001-001", 0.99),
+            recognized(1, "101-001", 0.99),
+            recognized(2, "2026/05/22", 0.99),
+            recognized(3, "0/6", 0.99),
+            recognized(4, "3840x2160", 0.99),
+            recognized(5, "65", 0.99),
+        ];
+
+        let kept = filter_recognized_items(items, &config)
+            .into_iter()
+            .map(|item| item.text)
+            .collect::<Vec<_>>();
+
+        assert_eq!(kept, vec!["2026/05/22", "0/6", "3840x2160", "65"]);
+    }
+
+    #[test]
+    fn filters_tiny_ascii_microtext_without_dropping_ui_labels() {
+        let config = PipelineConfig::default();
+        let items = vec![
+            recognized_at(0, Rect::new(2607.0, 409.0, 107.0, 9.0), "\"OO 2 DTM", 0.99),
+            recognized_at(1, Rect::new(863.0, 328.0, 8.0, 23.0), "A", 0.99),
+            recognized_at(2, Rect::new(3087.0, 558.0, 52.0, 24.0), "HP", 0.99),
+            recognized_at(3, Rect::new(3038.0, 458.0, 134.0, 29.0), "Lv.1", 0.99),
+            recognized_at(4, Rect::new(3246.0, 1198.0, 16.0, 15.0), "S", 0.99),
+            recognized_at(5, Rect::new(2159.0, 1674.0, 39.0, 25.0), "x5", 0.99),
+        ];
+
+        let kept = filter_recognized_items(items, &config)
+            .into_iter()
+            .map(|item| item.text)
+            .collect::<Vec<_>>();
+
+        assert_eq!(kept, vec!["Lv.1", "HP", "S", "x5"]);
+    }
+
+    #[test]
     fn merges_tightly_adjacent_same_line_fragments() {
         let config = PipelineConfig::default();
         let items = vec![
@@ -417,7 +489,7 @@ mod tests {
     }
 
     fn recognized(id: u64, text: &str, confidence: f32) -> RecognizedText {
-        recognized_at(id, Rect::new(0.0, 0.0, 10.0, 10.0), text, confidence)
+        recognized_at(id, Rect::new(0.0, 0.0, 80.0, 24.0), text, confidence)
     }
 
     fn recognized_at(id: u64, rect: Rect, text: &str, confidence: f32) -> RecognizedText {

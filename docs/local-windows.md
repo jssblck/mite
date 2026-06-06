@@ -276,7 +276,8 @@ current executable directory status.
 > `lanczos3` was measurably *worse* for small-text detection here (ringing), and
 > `triangle` ties `catmull_rom`. The recognizer always crops from the full-res
 > frame, so recognition quality is independent of the detector downscale.
-> If a scene has faint grey-on-grey labels that are genuinely absent from the raw
-> detector boxes, set `pipeline.detector_low_contrast_pass = true` in `mite.toml`.
-> It adds a local-contrast detector pass and dedupes against the primary boxes,
-> so use it as a recall/latency trade rather than the default game path.
+> The default high-recall path also runs
+> `pipeline.detector_low_contrast_pass = true`, which adds a local-contrast
+> detector pass and dedupes against the primary boxes. Set it to `false` for the
+> lower-latency path when faint grey-on-grey labels are less important than GPU
+> time.

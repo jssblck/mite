@@ -230,12 +230,22 @@ pub fn popup_content(
                 .and_then(|entry| entry.kana.first())
                 .filter(|reading| has_kanji(&word) && reading.as_str() != word)
                 .cloned();
-            match &reading {
-                Some(reading) => furigana_segments(&word, reading),
-                None => vec![FuriSegment {
-                    text: word.clone(),
+            if entry.is_none()
+                && token.source_pos == Some(crate::pos::LinderaPos::AuxVerb)
+                && token.surface != token.dictionary_form
+            {
+                vec![FuriSegment {
+                    text: token.surface.clone(),
                     furigana: None,
-                }],
+                }]
+            } else {
+                match &reading {
+                    Some(reading) => furigana_segments(&word, reading),
+                    None => vec![FuriSegment {
+                        text: word.clone(),
+                        furigana: None,
+                    }],
+                }
             }
         });
 
@@ -602,6 +612,28 @@ mod tests {
             }]
         );
         assert_eq!(content.category, WordCategory::Particle);
+    }
+
+    #[test]
+    fn popup_content_uses_surface_ruby_for_unknown_auxiliary() {
+        let mut token = tok("ました");
+        token.dictionary_form = "ます".to_string();
+        token.reasons = vec!["丁寧".to_string(), "過去".to_string()];
+        token.source_pos = Some(LinderaPos::AuxVerb);
+        token.note_override = Some("Polite past auxiliary.".to_string());
+
+        let content = popup_content(&token, SenseHint::default(), 3, 4);
+
+        assert_eq!(content.word, "ます");
+        assert_eq!(
+            content.ruby,
+            vec![FuriSegment {
+                text: "ました".to_string(),
+                furigana: None,
+            }]
+        );
+        assert_eq!(content.note.as_deref(), Some("Polite past auxiliary."));
+        assert_eq!(content.category, WordCategory::Auxiliary);
     }
 
     #[test]

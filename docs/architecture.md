@@ -26,13 +26,14 @@ hardware-specific code is finished.
   (`ort_engine/mod.rs`, `ort_engine/text.rs`) runs the PP-OCRv5 ONNX
   detector/recognizer and OCR text normalization. The default pass recognizes
   every plausible detector box and keeps short Japanese lines if they clear the
-  confidence floor, since game UI often uses compact labels. An optional
-  `detector_low_contrast_pass` runs a second detector inference over a
-  local-contrast luminance image, then dedupes those boxes against the primary
-  pass; it is off by default because it spends extra GPU time only for frames
-  where the primary detector truly misses faint text. `MockOcrEngine` backs unit
-  tests. `StableIdAllocator` assigns cross-frame-stable box ids so a box that
-  stays put isn't treated as new each frame.
+  confidence floor, since game UI often uses compact labels. The default
+  high-recall path also runs `detector_low_contrast_pass`: a second detector
+  inference over a local-contrast luminance image, deduped against the primary
+  pass. This spends extra GPU time, but recovers faint text on translucent game
+  panels that the primary detector otherwise misses; disable it only when the
+  lower-latency path matters more than recall. `MockOcrEngine` backs unit tests.
+  `StableIdAllocator` assigns cross-frame-stable box ids so a box that stays put
+  isn't treated as new each frame.
 - `interactive::Worker` (`interactive/mod.rs`, `interactive/smoothing.rs`):
   owns the engine, dictionary, capture source, and `SmoothingState`, and runs one
   capture -> detect -> recognize ->

@@ -241,7 +241,7 @@ impl Default for PipelineConfig {
             stale_frame_budget: 1,
             detector_probability_threshold: 0.30,
             detector_box_score_threshold: 0.45,
-            detector_low_contrast_pass: false,
+            detector_low_contrast_pass: true,
             detector_low_contrast_probability_threshold: 0.20,
             detector_low_contrast_box_score_threshold: 0.25,
             detector_min_component_area: 8,

@@ -1,10 +1,10 @@
 //! Offline Japanese dictionary lookup over OCR'd text.
 //!
-//! Segmentation and lemmatization are done by Lindera (embedded IPADIC, see
+//! Segmentation and per-morpheme lemmatization are done by Lindera (embedded IPADIC, see
 //! [`crate::morphology`]): each line is split into morphemes carrying a
-//! dictionary (base) form, which is then looked up in the bundled JMdict lexicon
-//! (scriptin/jmdict-simplified, CC BY-SA 4.0) for glosses. This replaced the
-//! earlier hand-rolled longest-match segmentation + deinflection rule table.
+//! dictionary (base) form. Multi-morpheme spans are then resolved through a
+//! recursive deinflection layer and the bundled JMdict lexicon
+//! (scriptin/jmdict-simplified, CC BY-SA 4.0) for glosses.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -19,8 +19,10 @@ use crate::morphology::{Analyzer, Morpheme};
 use crate::pos::{LinderaPos, PosClass};
 use crate::script::is_katakana;
 
+mod deinflection;
 mod raw;
 
+use deinflection::{deinflect, entry_matches_type};
 use raw::RawWord;
 
 /// Most consecutive morphemes a single token may span (二人, 朝ご飯, 手に入れる,
@@ -696,7 +698,9 @@ impl Dictionary {
                 if slice.len() > 1 && is_false_particle_merge(slice, &resolution.entries) {
                     return None;
                 }
-                let reasons = if resolution.matched_lemma && last.is_inflected() {
+                let reasons = if !resolution.reasons.is_empty() {
+                    resolution.reasons.clone()
+                } else if resolution.matched_lemma && last.is_inflected() {
                     inflection_reasons(last)
                 } else {
                     Vec::new()
@@ -741,23 +745,87 @@ impl Dictionary {
         })
     }
 
-    /// Resolve a span against JMdict, preferring the deinflected lemma form over
-    /// the literal surface. `surface` is the precomputed literal surface.
+    /// Resolve a span against JMdict, preferring Lindera's lemma and literal
+    /// surface before recursive deinflection. `surface` is the precomputed
+    /// literal surface.
     fn resolve_span(&self, slice: &[Morpheme], surface: &str) -> Option<Resolution<'_>> {
         let lemma = span_lemma(slice);
+        if let Some(resolution) = self.suru_stem_resolution(surface, &lemma) {
+            return Some(resolution);
+        }
+
         if let Some(entries) = self.entries_for(&lemma) {
             return Some(Resolution {
                 form: lemma,
                 entries,
                 matched_lemma: true,
+                reasons: Vec::new(),
             });
         }
-        let entries = self.entries_for(surface)?;
-        Some(Resolution {
-            form: surface.to_string(),
-            entries,
-            matched_lemma: false,
-        })
+
+        if let Some(entries) = self.entries_for(surface) {
+            return Some(Resolution {
+                form: surface.to_string(),
+                entries,
+                matched_lemma: false,
+                reasons: Vec::new(),
+            });
+        }
+
+        if can_deinflect_span(slice) {
+            for candidate in deinflect(surface) {
+                if let Some(entries) = self.entries_for(&candidate.form) {
+                    let entries = entries
+                        .into_iter()
+                        .filter(|entry| entry_matches_type(entry, candidate.word_type))
+                        .collect::<Vec<_>>();
+                    if !entries.is_empty() {
+                        return Some(Resolution {
+                            form: candidate.form,
+                            entries,
+                            matched_lemma: true,
+                            reasons: candidate.reasons,
+                        });
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn suru_stem_resolution<'a>(
+        &'a self,
+        surface: &str,
+        lindera_lemma: &str,
+    ) -> Option<Resolution<'a>> {
+        if !surface.ends_with('し') || !lindera_lemma.ends_with('す') {
+            return None;
+        }
+
+        for candidate in deinflect(surface) {
+            if !candidate.form.ends_with("する") {
+                continue;
+            }
+            let Some(entries) = self.entries_for(&candidate.form) else {
+                continue;
+            };
+            let entries = entries
+                .into_iter()
+                .filter(|entry| entry_matches_type(entry, candidate.word_type))
+                .collect::<Vec<_>>();
+            if entries.is_empty() {
+                continue;
+            }
+            return Some(Resolution {
+                form: candidate.form,
+                entries,
+                matched_lemma: true,
+                reasons: candidate.reasons,
+            });
+        }
+
+        None
     }
 
     fn refine_unknown_token(&self, token: Token) -> Vec<Token> {
@@ -1090,7 +1158,7 @@ fn is_iru_existential_token(token: &Token) -> bool {
 fn te_iru_auxiliary_token() -> Token {
     Token {
         surface: "いる".to_string(),
-        dictionary_form: "居る".to_string(),
+        dictionary_form: "いる".to_string(),
         reasons: vec!["補助動詞".to_string()],
         entries: vec![Entry {
             kanji: vec!["居る".to_string()],
@@ -1102,16 +1170,10 @@ fn te_iru_auxiliary_token() -> Token {
             }],
             common: true,
             popup_override: Some(PopupOverride {
-                ruby: vec![
-                    RubySegment {
-                        text: "居".to_string(),
-                        furigana: Some("い".to_string()),
-                    },
-                    RubySegment {
-                        text: "る".to_string(),
-                        furigana: None,
-                    },
-                ],
+                ruby: vec![RubySegment {
+                    text: "いる".to_string(),
+                    furigana: None,
+                }],
                 glosses: vec!["to be ...-ing  (aux-v, v1)".to_string()],
             }),
         }],
@@ -1938,6 +2000,7 @@ struct Resolution<'a> {
     form: String,
     entries: Vec<&'a Entry>,
     matched_lemma: bool,
+    reasons: Vec<String>,
 }
 
 /// Concatenated literal surfaces of a span.
@@ -1953,6 +2016,20 @@ fn span_lemma(slice: &[Morpheme]) -> String {
         .map(|m| m.surface.as_str())
         .chain(std::iter::once(last.base_form.as_str()))
         .collect()
+}
+
+/// Whether recursive deinflection may resolve this span as one dictionary token.
+/// Single morphemes are always eligible. Multi-morpheme spans must not absorb
+/// grammatical boundary tokens; the eval and hover contract intentionally keeps
+/// auxiliaries and particles addressable as their own tokens.
+fn can_deinflect_span(slice: &[Morpheme]) -> bool {
+    slice.len() == 1
+        || slice.iter().skip(1).all(|morpheme| {
+            !matches!(
+                morpheme.major_pos(),
+                LinderaPos::AuxVerb | LinderaPos::Particle | LinderaPos::Other
+            )
+        })
 }
 
 /// Whether a multi-morpheme span is a grammatical false-merge: it swallows a
@@ -2647,7 +2724,7 @@ mod tests {
             .iter()
             .find(|token| token.surface == "いる")
             .unwrap_or_else(|| panic!("いる token in {tokens:?}"));
-        assert_eq!(token.dictionary_form, "居る");
+        assert_eq!(token.dictionary_form, "いる");
         assert_eq!(token.reasons, vec!["補助動詞".to_string()]);
         assert_eq!(token.source_pos, Some(LinderaPos::AuxVerb));
         let popup = token.entries[0].popup_override.as_ref().expect("popup");
@@ -2703,7 +2780,7 @@ mod tests {
             .iter()
             .find(|token| token.surface == "いる")
             .unwrap_or_else(|| panic!("いる token in {tokens:?}"));
-        assert_eq!(iru.dictionary_form, "居る");
+        assert_eq!(iru.dictionary_form, "いる");
         assert_eq!(iru.source_pos, Some(LinderaPos::AuxVerb));
     }
 
@@ -2841,6 +2918,90 @@ mod tests {
         assert_eq!(
             token.note_override.as_deref(),
             Some("Polite past auxiliary.")
+        );
+    }
+
+    #[test]
+    fn single_morpheme_potential_contraction_resolves_to_godan_lemma() {
+        let dict = Dictionary::from_entries(vec![entry(&["読む"], &["よむ"], "v5m", &["to read"])]);
+        let token = dict
+            .analyze_line("読める")
+            .into_iter()
+            .find(|token| token.surface == "読める")
+            .expect("deinflected potential token");
+
+        assert_eq!(token.dictionary_form, "読む");
+        assert!(token.is_known());
+        assert_eq!(token.reasons, vec!["可能".to_string()]);
+    }
+
+    #[test]
+    fn exact_headword_beats_deinflection_candidate() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["焼ける"], &["やける"], "v1", &["to burn"]),
+            entry(&["焼く"], &["やく"], "v5k", &["to grill"]),
+        ]);
+        let token = dict
+            .analyze_line("焼ける")
+            .into_iter()
+            .find(|token| token.surface == "焼ける")
+            .expect("exact lexical token");
+
+        assert_eq!(token.dictionary_form, "焼ける");
+        assert!(token.is_known());
+        assert!(token.reasons.is_empty());
+    }
+
+    #[test]
+    fn suru_stem_deinflection_beats_godan_s_lemma() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["達す"], &["たっす"], "v5s", &["to reach"]),
+            entry(&["達する"], &["たっする"], "vs-s", &["to reach"]),
+        ]);
+        let morpheme = Morpheme {
+            surface: "達し".to_string(),
+            base_form: "達す".to_string(),
+            reading: Some("タッシ".to_string()),
+            pos: vec!["動詞".to_string(), "自立".to_string()],
+            conjugation_form: Some("連用形".to_string()),
+        };
+
+        let (_, token) = dict
+            .node(&[morpheme], 0, 1)
+            .expect("single morpheme resolves");
+
+        assert_eq!(token.dictionary_form, "達する");
+        assert_eq!(token.reasons, vec!["連用形".to_string()]);
+    }
+
+    #[test]
+    fn recursive_deinflection_engine_handles_complex_auxiliary_chain() {
+        let forms = deinflection::deinflect("食べさせられたくなかった")
+            .into_iter()
+            .map(|candidate| candidate.form)
+            .collect::<Vec<_>>();
+        assert!(forms.contains(&"食べる".to_string()), "{forms:?}");
+    }
+
+    #[test]
+    fn contracted_deinflection_engine_handles_te_auxiliary_shortening() {
+        let dict =
+            Dictionary::from_entries(vec![entry(&["走る"], &["はしる"], "v5r", &["to run"])]);
+        let candidate = deinflection::deinflect("走ってた")
+            .into_iter()
+            .find(|candidate| {
+                candidate.form == "走る"
+                    && dict.entries_for(&candidate.form).is_some_and(|entries| {
+                        entries.into_iter().any(|entry| {
+                            deinflection::entry_matches_type(entry, candidate.word_type)
+                        })
+                    })
+            })
+            .expect("contracted godan candidate");
+
+        assert_eq!(
+            candidate.reasons,
+            vec!["継続".to_string(), "過去".to_string()]
         );
     }
 
