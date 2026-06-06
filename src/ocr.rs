@@ -36,6 +36,11 @@ pub trait OcrEngine {
 /// Recognized lines this short (visible, non-whitespace chars) with no
 /// alphanumeric content are treated as punctuation/symbol noise.
 const MAX_NONALNUM_NOISE_CHARS: usize = 2;
+/// Punctuation and symbols that are meaningful OCR output in Japanese UI text.
+const MEANINGFUL_SYMBOLS: &[char] = &[
+    '。', '、', '・', '…', 'ー', '「', '」', '『', '』', '【', '】', '（', '）', '(', ')', '—',
+    '―', '◇', '◆', '％',
+];
 /// A single-character line is only kept if its confidence clears
 /// `min_single_character_confidence`; lines longer than this are kept on the
 /// ordinary confidence floor.
@@ -45,10 +50,11 @@ pub fn filter_recognized_items(
     items: impl IntoIterator<Item = RecognizedText>,
     config: &PipelineConfig,
 ) -> Vec<RecognizedText> {
-    items
+    let kept = items
         .into_iter()
         .filter(|item| is_usable_recognized_item(item, config))
-        .collect()
+        .collect::<Vec<_>>();
+    merge_adjacent_recognized_fragments(kept)
 }
 
 fn is_usable_recognized_item(item: &RecognizedText, config: &PipelineConfig) -> bool {
@@ -58,11 +64,213 @@ fn is_usable_recognized_item(item: &RecognizedText, config: &PipelineConfig) -> 
     }
 
     let visible_chars = text.chars().filter(|ch| !ch.is_whitespace()).count();
-    if visible_chars <= MAX_NONALNUM_NOISE_CHARS && !text.chars().any(char::is_alphanumeric) {
+    if visible_chars <= MAX_NONALNUM_NOISE_CHARS
+        && !text.chars().any(char::is_alphanumeric)
+        && !is_meaningful_symbol_text(text)
+    {
         return false;
     }
 
     visible_chars > MIN_MULTICHAR_LEN || item.confidence >= config.min_single_character_confidence
+}
+
+fn is_meaningful_symbol_text(text: &str) -> bool {
+    let mut chars = text.chars().filter(|ch| !ch.is_whitespace()).peekable();
+    chars.peek().is_some() && chars.all(|ch| MEANINGFUL_SYMBOLS.contains(&ch))
+}
+
+fn merge_adjacent_recognized_fragments(mut items: Vec<RecognizedText>) -> Vec<RecognizedText> {
+    if items.len() < 2 {
+        return items;
+    }
+
+    items.sort_by(|a, b| {
+        a.text_box
+            .rect
+            .y
+            .total_cmp(&b.text_box.rect.y)
+            .then_with(|| a.text_box.rect.x.total_cmp(&b.text_box.rect.x))
+            .then_with(|| a.text_box.rect.width.total_cmp(&b.text_box.rect.width))
+            .then_with(|| a.text_box.rect.height.total_cmp(&b.text_box.rect.height))
+            .then_with(|| a.text_box.id.cmp(&b.text_box.id))
+    });
+
+    let mut merged = Vec::with_capacity(items.len());
+    let mut iter = items.into_iter().peekable();
+    while let Some(mut current) = iter.next() {
+        while iter
+            .peek()
+            .is_some_and(|next| should_merge_adjacent_fragments(&current, next))
+        {
+            let next = iter
+                .next()
+                .expect("peek confirmed an adjacent recognized fragment");
+            current = merge_recognized_pair(current, next);
+        }
+        merged.push(current);
+    }
+    merged
+}
+
+fn should_merge_adjacent_fragments(left: &RecognizedText, right: &RecognizedText) -> bool {
+    let left_text = left.text.trim();
+    let right_text = right.text.trim();
+    if left_text.len() != left.text.len()
+        || right_text.len() != right.text.len()
+        || left_text.is_empty()
+        || right_text.is_empty()
+    {
+        return false;
+    }
+
+    let a = left.text_box.rect;
+    let b = right.text_box.rect;
+    if b.x < a.x || b.y < a.y - a.height.max(1.0) * 0.30 {
+        return false;
+    }
+
+    let avg_height = ((a.height + b.height) / 2.0).max(1.0);
+    let height_ratio = a.height.max(b.height) / a.height.min(b.height).max(1.0);
+    if height_ratio > 1.35 {
+        return false;
+    }
+
+    let gap = b.x - a.right();
+    if !(-avg_height * 0.15..=avg_height * 0.12).contains(&gap) {
+        return false;
+    }
+
+    if vertical_overlap_ratio(a, b) < 0.70 {
+        return false;
+    }
+
+    let Some(left_last) = left_text.chars().next_back() else {
+        return false;
+    };
+    let Some(right_first) = right_text.chars().next() else {
+        return false;
+    };
+    if left_text.chars().count() < 5 || has_recent_fragment_boundary_stop(left_text) {
+        return false;
+    }
+    if !left_text.contains('・') {
+        return false;
+    }
+    is_mergeable_inline_char(left_last)
+        && is_mergeable_inline_char(right_first)
+        && !is_fragment_boundary_stop(left_last)
+}
+
+fn merge_recognized_pair(left: RecognizedText, right: RecognizedText) -> RecognizedText {
+    let left_rect = left.text_box.rect;
+    let right_rect = right.text_box.rect;
+    let x = left_rect.x.min(right_rect.x);
+    let y = left_rect.y.min(right_rect.y);
+    let right_edge = left_rect.right().max(right_rect.right());
+    let bottom = left_rect.bottom().max(right_rect.bottom());
+    let left_chars = left.text.chars().count();
+    let right_chars = right.text.chars().count();
+
+    let char_centers =
+        if left.char_centers.len() == left_chars && right.char_centers.len() == right_chars {
+            left.char_centers
+                .iter()
+                .chain(right.char_centers.iter())
+                .copied()
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+    let raw_text = [left.text.as_str(), right.text.as_str()].concat();
+    let text = crate::text_corrections::apply_common_replacements(&raw_text);
+    let char_centers = if text.chars().count() == raw_text.chars().count() {
+        char_centers
+    } else {
+        Vec::new()
+    };
+    let text_box = TextBox {
+        id: left.text_box.id,
+        rect: Rect::new(x, y, right_edge - x, bottom - y),
+        confidence: left.text_box.confidence.min(right.text_box.confidence),
+        content_fingerprint: combine_fragment_fingerprints(
+            left.text_box.content_fingerprint,
+            right.text_box.content_fingerprint,
+        ),
+    };
+    let confidence =
+        weighted_confidence(left.confidence, left_chars, right.confidence, right_chars);
+    let reused = left.reused && right.reused;
+
+    RecognizedText {
+        text_box,
+        text,
+        confidence,
+        reused,
+        char_centers,
+    }
+}
+
+fn vertical_overlap_ratio(a: Rect, b: Rect) -> f32 {
+    let overlap = (a.bottom().min(b.bottom()) - a.y.max(b.y)).max(0.0);
+    let narrow = a.height.min(b.height).max(1.0);
+    overlap / narrow
+}
+
+fn is_mergeable_inline_char(ch: char) -> bool {
+    ch.is_alphanumeric()
+        || matches!(
+            ch,
+            '\u{3040}'..='\u{309f}'
+                | '\u{30a0}'..='\u{30ff}'
+                | '\u{3400}'..='\u{9fff}'
+                | '\u{ff10}'..='\u{ff19}'
+                | '\u{ff21}'..='\u{ff3a}'
+                | '\u{ff41}'..='\u{ff5a}'
+                | '％'
+                | '%'
+                | '+'
+                | '-'
+                | '/'
+                | '.'
+                | ':'
+        )
+}
+
+fn is_fragment_boundary_stop(ch: char) -> bool {
+    matches!(
+        ch,
+        '。' | '．'
+            | '.'
+            | '！'
+            | '!'
+            | '？'
+            | '?'
+            | '、'
+            | ','
+            | '」'
+            | '』'
+            | '）'
+            | ')'
+            | ']'
+            | '］'
+    )
+}
+
+fn has_recent_fragment_boundary_stop(text: &str) -> bool {
+    text.chars().rev().take(3).any(is_fragment_boundary_stop)
+}
+
+fn weighted_confidence(left: f32, left_chars: usize, right: f32, right_chars: usize) -> f32 {
+    let total_chars = left_chars + right_chars;
+    if total_chars == 0 {
+        return left.min(right);
+    }
+    ((left * left_chars as f32) + (right * right_chars as f32)) / total_chars as f32
+}
+
+fn combine_fragment_fingerprints(left: u64, right: u64) -> u64 {
+    left.rotate_left(17) ^ right.rotate_right(7) ^ 0x9e37_79b9_7f4a_7c15
 }
 
 pub fn build_ocr_engine(
@@ -95,6 +303,10 @@ mod tests {
             recognized(4, "住", 0.95),
             recognized(5, "A", 0.95),
             recognized(6, "Jess", 0.99),
+            recognized(7, "。", 0.95),
+            recognized(8, "◇", 0.95),
+            recognized(9, "……", 0.95),
+            recognized(10, "・", 0.95),
         ];
 
         let kept = filter_recognized_items(items, &config)
@@ -102,14 +314,117 @@ mod tests {
             .map(|item| item.text)
             .collect::<Vec<_>>();
 
-        assert_eq!(kept, vec!["住", "A", "Jess"]);
+        assert_eq!(kept, vec!["住", "A", "Jess", "。", "◇", "……", "・"]);
+    }
+
+    #[test]
+    fn merges_tightly_adjacent_same_line_fragments() {
+        let config = PipelineConfig::default();
+        let items = vec![
+            recognized_at(
+                0,
+                Rect::new(251.0, 451.0, 380.0, 21.0),
+                "ラハイロイ・エンドボ",
+                0.99,
+            ),
+            recognized_at(1, Rect::new(632.0, 452.0, 147.0, 21.0), "イスエビ", 0.93),
+        ];
+
+        let kept = filter_recognized_items(items, &config);
+
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].text, "ラハイロイ・エンドボイスエピ");
+        assert_eq!(kept[0].text_box.rect, Rect::new(251.0, 451.0, 528.0, 22.0));
+    }
+
+    #[test]
+    fn keeps_separate_same_row_labels_when_gap_is_not_tiny() {
+        let config = PipelineConfig::default();
+        let items = vec![
+            recognized_at(0, Rect::new(100.0, 200.0, 60.0, 24.0), "外す", 0.99),
+            recognized_at(1, Rect::new(190.0, 200.0, 70.0, 24.0), "強化", 0.99),
+        ];
+
+        let kept = filter_recognized_items(items, &config);
+
+        assert_eq!(
+            kept.into_iter().map(|item| item.text).collect::<Vec<_>>(),
+            vec!["外す", "強化"]
+        );
+    }
+
+    #[test]
+    fn keeps_fragments_separate_after_sentence_boundary() {
+        let config = PipelineConfig::default();
+        let items = vec![
+            recognized_at(0, Rect::new(100.0, 200.0, 110.0, 24.0), "完了した。1", 0.99),
+            recognized_at(1, Rect::new(211.0, 200.0, 72.0, 24.0), "次項目", 0.99),
+        ];
+
+        let kept = filter_recognized_items(items, &config);
+
+        assert_eq!(
+            kept.into_iter().map(|item| item.text).collect::<Vec<_>>(),
+            vec!["完了した。1", "次項目"]
+        );
+    }
+
+    #[test]
+    fn keeps_short_prefix_separate_from_adjacent_title() {
+        let config = PipelineConfig::default();
+        let items = vec![
+            recognized_at(0, Rect::new(995.0, 1259.0, 148.0, 31.0), "今期の", 0.99),
+            recognized_at(
+                1,
+                Rect::new(1144.0, 1261.0, 399.0, 28.0),
+                "千の扉の奇想",
+                0.99,
+            ),
+        ];
+
+        let kept = filter_recognized_items(items, &config);
+
+        assert_eq!(
+            kept.into_iter().map(|item| item.text).collect::<Vec<_>>(),
+            vec!["今期の", "千の扉の奇想"]
+        );
+    }
+
+    #[test]
+    fn keeps_prose_fragments_separate_without_compound_name_marker() {
+        let config = PipelineConfig::default();
+        let items = vec![
+            recognized_at(
+                0,
+                Rect::new(120.0, 515.0, 460.0, 23.0),
+                "周囲の目標を牽引して集",
+                0.99,
+            ),
+            recognized_at(
+                1,
+                Rect::new(581.0, 515.0, 462.0, 25.0),
+                "焦熱ダメージを与える。",
+                0.99,
+            ),
+        ];
+
+        let kept = filter_recognized_items(items, &config);
+
+        assert_eq!(
+            kept.into_iter().map(|item| item.text).collect::<Vec<_>>(),
+            vec!["周囲の目標を牽引して集", "焦熱ダメージを与える。"]
+        );
     }
 
     fn recognized(id: u64, text: &str, confidence: f32) -> RecognizedText {
+        recognized_at(id, Rect::new(0.0, 0.0, 10.0, 10.0), text, confidence)
+    }
+
+    fn recognized_at(id: u64, rect: Rect, text: &str, confidence: f32) -> RecognizedText {
         RecognizedText {
             text_box: TextBox {
                 id,
-                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                rect,
                 confidence,
                 content_fingerprint: id,
             },

@@ -203,6 +203,9 @@ fn lexically_continues_block(dict: &Dictionary, block_text: &str, next_text: &st
     if block_text.trim().is_empty() || next_text.trim().is_empty() {
         return false;
     }
+    if dict.is_domain_unknown_term(block_text.trim()) {
+        return false;
+    }
 
     let boundary = block_text.chars().count();
     let joined = [block_text, next_text].concat();
@@ -317,6 +320,8 @@ mod tests {
             dictionary_form: surface.to_string(),
             reasons: Vec::new(),
             entries: Vec::new(),
+            source_pos: None,
+            note_override: None,
         }
     }
 
@@ -330,6 +335,7 @@ mod tests {
                 misc: Vec::new(),
             }],
             common: true,
+            popup_override: None,
         }
     }
 
@@ -416,6 +422,17 @@ mod tests {
     }
 
     #[test]
+    fn does_not_join_complete_domain_name_into_next_line() {
+        let dict = block_test_dict();
+        let items = vec![
+            recognized(1, Rect::new(100.0, 100.0, 180.0, 24.0), "フラクトシデス"),
+            recognized(2, Rect::new(100.0, 145.0, 240.0, 24.0), "れ、残星組織は"),
+        ];
+
+        assert_eq!(group_text_blocks(&dict, &items), vec![vec![0], vec![1]]);
+    }
+
+    #[test]
     fn projects_tokens_across_line_boundaries() {
         let block_text = "クリティカルダメージ";
         let tokens = vec![token("クリティカル"), token("ダメージ")];
@@ -449,6 +466,7 @@ mod tests {
                     misc: Vec::new(),
                 }],
                 common: true,
+                popup_override: None,
             },
             Entry {
                 kanji: Vec::new(),
@@ -459,6 +477,7 @@ mod tests {
                     misc: Vec::new(),
                 }],
                 common: true,
+                popup_override: None,
             },
         ]);
         let items = vec![

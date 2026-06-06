@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -136,6 +136,332 @@ pub struct EvalOptions {
 impl Default for EvalOptions {
     fn default() -> Self {
         Self { min_iou: 0.50 }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EvalBundle {
+    pub image: PathBuf,
+    pub labels: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct EvalCorpusOptions {
+    pub min_iou: f32,
+    pub out_dir: Option<PathBuf>,
+    pub progress: bool,
+}
+
+impl Default for EvalCorpusOptions {
+    fn default() -> Self {
+        Self {
+            min_iou: EvalOptions::default().min_iou,
+            out_dir: None,
+            progress: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvalCorpusReport {
+    pub artifact_version: u32,
+    pub root: String,
+    pub eval_count: usize,
+    pub passed_count: usize,
+    pub failed_count: usize,
+    pub aggregate_score: f32,
+    pub detection_score: f32,
+    pub character_score: f32,
+    pub metadata_score: f32,
+    pub entries: Vec<EvalCorpusEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvalCorpusEntry {
+    pub image: String,
+    pub eval: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report: Option<String>,
+    pub aggregate_score: f32,
+    pub detection_score: f32,
+    pub character_score: f32,
+    pub metadata_score: f32,
+    pub expected_detection_count: usize,
+    pub actual_detection_count: usize,
+    pub matched_detection_count: usize,
+    pub ignored_actual_count: usize,
+    pub unexpected_actual_count: usize,
+    pub passed: bool,
+}
+
+#[derive(Debug, Default)]
+struct CorpusScoreTotals {
+    detection_credit: f32,
+    detection_denominator: usize,
+    character_errors: usize,
+    character_denominator: usize,
+    metadata_credit: f32,
+    metadata_denominator: usize,
+}
+
+impl CorpusScoreTotals {
+    fn add_report(&mut self, report: &EvalReport) {
+        self.detection_credit += report
+            .detections
+            .iter()
+            .map(|detection| detection.detection_score)
+            .sum::<f32>();
+        self.detection_denominator +=
+            report.expected_detection_count + report.unexpected_actual_count;
+
+        self.character_errors += report
+            .detections
+            .iter()
+            .map(|detection| detection.char_edit_distance)
+            .sum::<usize>()
+            + report
+                .unexpected_actual
+                .iter()
+                .map(|actual| actual.text.chars().count())
+                .sum::<usize>();
+        self.character_denominator += report
+            .detections
+            .iter()
+            .map(|detection| {
+                let expected_len = detection.expected_text.chars().count();
+                let actual_len = detection
+                    .actual
+                    .as_ref()
+                    .map(|actual| actual.text.chars().count())
+                    .unwrap_or(0);
+                expected_len.max(actual_len)
+            })
+            .sum::<usize>()
+            + report
+                .unexpected_actual
+                .iter()
+                .map(|actual| actual.text.chars().count())
+                .sum::<usize>();
+
+        self.metadata_credit += report
+            .detections
+            .iter()
+            .flat_map(|detection| detection.token_scores.iter())
+            .map(|token| token.metadata_score)
+            .sum::<f32>();
+        self.metadata_denominator += report
+            .detections
+            .iter()
+            .map(|detection| detection.token_scores.len())
+            .sum::<usize>()
+            + report
+                .unexpected_actual
+                .iter()
+                .map(|actual| actual.tokens.len().max(1))
+                .sum::<usize>();
+    }
+
+    fn detection_score(&self) -> f32 {
+        ratio_or_perfect(self.detection_credit, self.detection_denominator)
+    }
+
+    fn character_score(&self) -> f32 {
+        if self.character_denominator == 0 {
+            1.0
+        } else {
+            1.0 - (self.character_errors as f32 / self.character_denominator as f32)
+        }
+    }
+
+    fn metadata_score(&self) -> f32 {
+        ratio_or_perfect(self.metadata_credit, self.metadata_denominator)
+    }
+
+    fn aggregate_score(&self) -> f32 {
+        self.detection_score() * AGGREGATE_DETECTION_WEIGHT
+            + self.character_score() * AGGREGATE_CHARACTER_WEIGHT
+            + self.metadata_score() * AGGREGATE_METADATA_WEIGHT
+    }
+}
+
+fn ratio_or_perfect(numerator: f32, denominator: usize) -> f32 {
+    if denominator == 0 {
+        1.0
+    } else {
+        numerator / denominator as f32
+    }
+}
+
+pub fn discover_eval_bundles(root: &Path) -> Result<Vec<EvalBundle>> {
+    let mut labels = Vec::new();
+    collect_eval_files(root, &mut labels)?;
+    labels.sort();
+
+    labels
+        .into_iter()
+        .map(|labels| {
+            let image = labels
+                .parent()
+                .with_context(|| format!("eval path has no parent: {}", labels.display()))?
+                .join("underlying.png");
+            if !image.is_file() {
+                bail!(
+                    "eval labels {} have no sibling underlying.png",
+                    labels.display()
+                );
+            }
+            Ok(EvalBundle { image, labels })
+        })
+        .collect()
+}
+
+fn collect_eval_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))? {
+        let entry =
+            entry.with_context(|| format!("failed to read entry under {}", dir.display()))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("failed to inspect {}", path.display()))?;
+        if file_type.is_dir() {
+            collect_eval_files(&path, out)?;
+        } else if file_type.is_file() && entry.file_name() == "eval.json" {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+pub fn run_eval_corpus(
+    config: &AppConfig,
+    root: &Path,
+    lexicon: &Path,
+    options: EvalCorpusOptions,
+) -> Result<EvalCorpusReport> {
+    let bundles = discover_eval_bundles(root)?;
+    if bundles.is_empty() {
+        bail!("no eval.json files found under {}", root.display());
+    }
+
+    let dict = Dictionary::load(lexicon)?;
+    let mut engine = build_ocr_engine(&config.runtime, &config.models)?;
+    let mut entries = Vec::with_capacity(bundles.len());
+    let mut totals = CorpusScoreTotals::default();
+    let total = bundles.len();
+
+    for (index, bundle) in bundles.into_iter().enumerate() {
+        if options.progress {
+            eprintln!(
+                "eval corpus {}/{}: {}",
+                index + 1,
+                total,
+                display_relative(root, &bundle.labels)
+            );
+        }
+
+        let spec = load_eval_spec(&bundle.labels)?;
+        validate_eval_spec(&spec)?;
+        let result = ocr_lookup_image(&mut *engine, &config.pipeline, &dict, &bundle.image)?;
+        let report = score_ocr_lookup(
+            &bundle.image,
+            &bundle.labels,
+            &spec,
+            &result,
+            options.min_iou,
+        );
+        totals.add_report(&report);
+
+        let report_path = options
+            .out_dir
+            .as_ref()
+            .map(|out_dir| corpus_entry_report_path(out_dir, root, &bundle.labels))
+            .transpose()?;
+        if let Some(path) = &report_path {
+            crate::artifact::write_json_pretty(path, &report)?;
+        }
+
+        entries.push(EvalCorpusEntry {
+            image: bundle.image.display().to_string(),
+            eval: bundle.labels.display().to_string(),
+            report: report_path.as_ref().map(|path| path.display().to_string()),
+            aggregate_score: report.aggregate_score,
+            detection_score: report.detection_score,
+            character_score: report.character_score,
+            metadata_score: report.metadata_score,
+            expected_detection_count: report.expected_detection_count,
+            actual_detection_count: report.actual_detection_count,
+            matched_detection_count: report.matched_detection_count,
+            ignored_actual_count: report.ignored_actual_count,
+            unexpected_actual_count: report.unexpected_actual_count,
+            passed: report.passed,
+        });
+    }
+
+    let passed_count = entries.iter().filter(|entry| entry.passed).count();
+    let failed_count = entries.len() - passed_count;
+    Ok(EvalCorpusReport {
+        artifact_version: crate::artifact::ARTIFACT_VERSION,
+        root: root.display().to_string(),
+        eval_count: entries.len(),
+        passed_count,
+        failed_count,
+        aggregate_score: totals.aggregate_score(),
+        detection_score: totals.detection_score(),
+        character_score: totals.character_score(),
+        metadata_score: totals.metadata_score(),
+        entries,
+    })
+}
+
+fn corpus_entry_report_path(out_dir: &Path, root: &Path, labels: &Path) -> Result<PathBuf> {
+    let bundle_dir = labels
+        .parent()
+        .with_context(|| format!("eval path has no parent: {}", labels.display()))?;
+    let relative = bundle_dir.strip_prefix(root).unwrap_or(bundle_dir);
+    let mut stem = relative
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("__");
+    if stem.is_empty() {
+        stem.push_str("eval");
+    }
+    Ok(out_dir.join(format!("{stem}.json")))
+}
+
+fn display_relative<'a>(root: &Path, path: &'a Path) -> std::borrow::Cow<'a, str> {
+    path.strip_prefix(root).unwrap_or(path).to_string_lossy()
+}
+
+pub fn render_eval_corpus_report(report: &EvalCorpusReport, worst_limit: usize) {
+    println!(
+        "eval corpus: aggregate {:.2}% | detection {:.2}% | characters {:.2}% | metadata {:.2}% | passed {}/{}",
+        report.aggregate_score * 100.0,
+        report.detection_score * 100.0,
+        report.character_score * 100.0,
+        report.metadata_score * 100.0,
+        report.passed_count,
+        report.eval_count
+    );
+
+    let mut worst = report.entries.iter().collect::<Vec<_>>();
+    worst.sort_by(|left, right| left.aggregate_score.total_cmp(&right.aggregate_score));
+    for entry in worst
+        .into_iter()
+        .filter(|entry| !entry.passed)
+        .take(worst_limit)
+    {
+        println!(
+            "  {:.2}% | det {:.1}% char {:.1}% meta {:.1}% | matched {}/{} expected, {} unexpected | {}",
+            entry.aggregate_score * 100.0,
+            entry.detection_score * 100.0,
+            entry.character_score * 100.0,
+            entry.metadata_score * 100.0,
+            entry.matched_detection_count,
+            entry.expected_detection_count,
+            entry.unexpected_actual_count,
+            entry.eval
+        );
     }
 }
 
@@ -678,6 +1004,8 @@ fn complete_token_spans(dict: &Dictionary, text: &str) -> Vec<DraftTokenSpan> {
                 dictionary_form: surface,
                 reasons: Vec::new(),
                 entries: Vec::new(),
+                source_pos: None,
+                note_override: None,
             },
             start,
             end: index,
@@ -692,6 +1020,8 @@ fn complete_token_spans(dict: &Dictionary, text: &str) -> Vec<DraftTokenSpan> {
                 dictionary_form: surface,
                 reasons: Vec::new(),
                 entries: Vec::new(),
+                source_pos: None,
+                note_override: None,
             },
             start: 0,
             end: char_count,
@@ -1138,25 +1468,30 @@ fn score_token(expected: &ExpectedToken, actual_tokens: &[ActualTokenSummary]) -
         .find(|token| token.span == expected.span)
         .cloned();
     let field_scores = match &actual {
-        Some(actual) => vec![
-            field_score("surface", &expected.surface, &actual.surface),
-            field_score(
-                "dictionary_form",
-                &expected.dictionary_form,
-                &actual.dictionary_form,
-            ),
-            field_score("known", &expected.known, &actual.known),
-            field_score("category", &expected.category, &actual.category),
-            field_score("reasons", &expected.reasons, &actual.reasons),
-            field_score(
-                "part_of_speech",
-                &expected.part_of_speech,
-                &actual.part_of_speech,
-            ),
-            field_score("furigana", &expected.furigana, &actual.furigana),
-            field_score("note", &expected.note, &actual.note),
-            field_score("glosses", &expected.glosses, &actual.glosses),
-        ],
+        Some(actual) => {
+            let mut scores = vec![
+                field_score("surface", &expected.surface, &actual.surface),
+                field_score(
+                    "dictionary_form",
+                    &expected.dictionary_form,
+                    &actual.dictionary_form,
+                ),
+                field_score("known", &expected.known, &actual.known),
+                field_score("category", &expected.category, &actual.category),
+                field_score("reasons", &expected.reasons, &actual.reasons),
+                field_score(
+                    "part_of_speech",
+                    &expected.part_of_speech,
+                    &actual.part_of_speech,
+                ),
+                field_score("furigana", &expected.furigana, &actual.furigana),
+            ];
+            if should_score_expected_note(expected) {
+                scores.push(field_score("note", &expected.note, &actual.note));
+            }
+            scores.push(field_score("glosses", &expected.glosses, &actual.glosses));
+            scores
+        }
         None => vec![FieldScore {
             field: "span",
             passed: false,
@@ -1178,6 +1513,25 @@ fn score_token(expected: &ExpectedToken, actual_tokens: &[ActualTokenSummary]) -
         actual,
         field_scores,
         metadata_score,
+    }
+}
+
+fn should_score_expected_note(expected: &ExpectedToken) -> bool {
+    expected.note == runtime_note_from_expected_token(expected)
+}
+
+fn runtime_note_from_expected_token(expected: &ExpectedToken) -> Option<String> {
+    if expected.surface != expected.dictionary_form {
+        let reasons = if expected.reasons.is_empty() {
+            String::new()
+        } else {
+            format!(" · {}", expected.reasons.join(" < "))
+        };
+        Some(format!("{}{reasons}", expected.surface))
+    } else if !expected.reasons.is_empty() {
+        Some(expected.reasons.join(" < "))
+    } else {
+        None
     }
 }
 
@@ -1432,6 +1786,7 @@ mod tests {
                 misc: Vec::new(),
             }],
             common: true,
+            popup_override: None,
         }
     }
 
@@ -1441,6 +1796,8 @@ mod tests {
             dictionary_form: dictionary_form.to_string(),
             reasons: Vec::new(),
             entries: vec![entry],
+            source_pos: None,
+            note_override: None,
         }
     }
 
@@ -1453,6 +1810,47 @@ mod tests {
             block_token_index: 0,
             wraps_before: false,
             wraps_after: false,
+        }
+    }
+
+    fn actual_token(surface: &str, start: usize, end: usize) -> ActualTokenSummary {
+        ActualTokenSummary {
+            span: CharSpan { start, end },
+            block_span: TextSpan { start, end },
+            surface: surface.to_string(),
+            full_surface: surface.to_string(),
+            dictionary_form: surface.to_string(),
+            known: false,
+            category: WordCategory::Unknown,
+            reasons: Vec::new(),
+            part_of_speech: Vec::new(),
+            furigana: vec![FuriSegment {
+                text: surface.to_string(),
+                furigana: None,
+            }],
+            note: None,
+            glosses: Vec::new(),
+            wraps_before: false,
+            wraps_after: false,
+        }
+    }
+
+    fn expected_unknown_token(id: &str, surface: &str, start: usize, end: usize) -> ExpectedToken {
+        ExpectedToken {
+            id: id.to_string(),
+            span: CharSpan { start, end },
+            surface: surface.to_string(),
+            dictionary_form: surface.to_string(),
+            known: false,
+            category: WordCategory::Unknown,
+            reasons: Vec::new(),
+            part_of_speech: Vec::new(),
+            furigana: vec![FuriSegment {
+                text: surface.to_string(),
+                furigana: None,
+            }],
+            note: None,
+            glosses: Vec::new(),
         }
     }
 
@@ -1584,6 +1982,44 @@ mod tests {
         });
         let error = validate_eval_spec(&spec).unwrap_err().to_string();
         assert!(error.contains("bounds_tolerance.x"));
+    }
+
+    #[test]
+    fn token_score_excludes_annotation_notes() {
+        let mut expected = expected_unknown_token("count", "0/2", 0, 3);
+        expected.note = Some("Purchase limit/count value.".to_string());
+        let actual = vec![actual_token("0/2", 0, 3)];
+
+        let score = score_token(&expected, &actual);
+
+        assert_eq!(score.metadata_score, 1.0);
+        assert!(score.field_scores.iter().all(|field| field.field != "note"));
+    }
+
+    #[test]
+    fn token_score_keeps_runtime_notes_exact() {
+        let mut expected = expected_unknown_token("verb", "し", 0, 1);
+        expected.dictionary_form = "する".to_string();
+        expected.known = true;
+        expected.category = WordCategory::Verb;
+        expected.reasons = vec!["連用形".to_string()];
+        expected.note = Some("し · 連用形".to_string());
+        let mut actual = actual_token("し", 0, 1);
+        actual.dictionary_form = "する".to_string();
+        actual.known = true;
+        actual.category = WordCategory::Verb;
+        actual.reasons = vec!["連用形".to_string()];
+        actual.note = None;
+
+        let score = score_token(&expected, &[actual]);
+
+        assert!(
+            score
+                .field_scores
+                .iter()
+                .any(|field| field.field == "note" && !field.passed)
+        );
+        assert!(score.metadata_score < 1.0);
     }
 
     #[test]
@@ -1744,5 +2180,57 @@ mod tests {
         assert_eq!(report.ignored_actual_count, 1);
         assert_eq!(report.unexpected_actual_count, 0);
         assert!(report.passed);
+    }
+
+    #[test]
+    fn discovers_eval_bundles_in_stable_order() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let second = root.join("b").join("capture-2");
+        let first = root.join("a").join("capture-1");
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::write(second.join("eval.json"), "{}").unwrap();
+        std::fs::write(second.join("underlying.png"), "not decoded by discovery").unwrap();
+        std::fs::write(first.join("eval.json"), "{}").unwrap();
+        std::fs::write(first.join("underlying.png"), "not decoded by discovery").unwrap();
+
+        let bundles = discover_eval_bundles(root).unwrap();
+
+        assert_eq!(bundles.len(), 2);
+        assert!(bundles[0].labels.ends_with("a/capture-1/eval.json"));
+        assert!(bundles[1].labels.ends_with("b/capture-2/eval.json"));
+    }
+
+    #[test]
+    fn corpus_totals_weight_underlying_denominators() {
+        let spec = water_spec();
+        let perfect = score_eval(
+            Path::new("image-1.png"),
+            Path::new("eval-1.json"),
+            &spec,
+            &water_result("水", rect(10.0, 20.0, 30.0, 40.0)),
+            0.50,
+        );
+        let with_unexpected = score_eval(
+            Path::new("image-2.png"),
+            Path::new("eval-2.json"),
+            &spec,
+            &two_line_result(
+                "水",
+                rect(10.0, 20.0, 30.0, 40.0),
+                "extra",
+                rect(100.0, 20.0, 50.0, 20.0),
+            ),
+            0.50,
+        );
+
+        let mut totals = CorpusScoreTotals::default();
+        totals.add_report(&perfect);
+        totals.add_report(&with_unexpected);
+
+        assert!((totals.detection_score() - (2.0 / 3.0)).abs() < 0.0001);
+        assert!((totals.character_score() - (2.0 / 7.0)).abs() < 0.0001);
+        assert!((totals.metadata_score() - (2.0 / 3.0)).abs() < 0.0001);
     }
 }

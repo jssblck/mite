@@ -62,6 +62,16 @@ cargo run -- eval `
   --out target\eval\capture-<ts>.json
 ```
 
-Use `.\scripts\precommit.ps1 -IncludeEval` to run every labeled
-capture in the private `eval\` submodule. The eval output is the accuracy side of the
-performance trade.
+Use the aggregate scorer when a change should be judged against every labeled
+capture in the private `eval\` submodule:
+
+```powershell
+cargo run -- eval-corpus `
+  --root eval `
+  --out target\eval\corpus-summary.json `
+  --allow-failures
+```
+
+The eval output is the accuracy side of the performance trade. The local
+precommit script still supports `.\scripts\precommit.ps1 -IncludeEval` for a
+strict perfect-score gate over each image.

@@ -7,9 +7,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::dictionary::Token;
+use crate::dictionary::{RubySegment, Token};
 use crate::geometry::{Rect, ScreenRect};
-use crate::pos::PosClass;
+use crate::pos::{LinderaPos, PosClass};
 use crate::text_blocks::LineToken;
 
 mod furigana;
@@ -155,7 +155,10 @@ pub enum WordCategory {
 /// tokens (no entry) get [`WordCategory::Unknown`].
 pub fn categorize(token: &Token) -> WordCategory {
     if !token.is_known() {
-        return WordCategory::Unknown;
+        return token
+            .source_pos
+            .map(category_from_lindera_pos)
+            .unwrap_or(WordCategory::Unknown);
     }
     token
         .entries
@@ -164,6 +167,22 @@ pub fn categorize(token: &Token) -> WordCategory {
         .and_then(|sense| sense.part_of_speech.iter().find(|pos| !pos.is_empty()))
         .map(|pos| category_from_pos(pos))
         .unwrap_or(WordCategory::Other)
+}
+
+fn category_from_lindera_pos(pos: LinderaPos) -> WordCategory {
+    match pos {
+        LinderaPos::Particle => WordCategory::Particle,
+        LinderaPos::AuxVerb => WordCategory::Auxiliary,
+        LinderaPos::Verb => WordCategory::Verb,
+        LinderaPos::Adjective => WordCategory::Adjective,
+        LinderaPos::Adverb => WordCategory::Adverb,
+        LinderaPos::Adnominal => WordCategory::Adjective,
+        LinderaPos::Conjunction
+        | LinderaPos::Interjection
+        | LinderaPos::Prefix
+        | LinderaPos::Other => WordCategory::Other,
+        LinderaPos::Noun => WordCategory::Noun,
+    }
 }
 
 fn category_from_pos(pos: &str) -> WordCategory {
@@ -202,21 +221,27 @@ pub fn popup_content(
     max_glosses: usize,
 ) -> PopupContent {
     let word = token.dictionary_form.clone();
-    let reading = token
-        .entries
-        .first()
-        .and_then(|entry| entry.kana.first())
-        .filter(|reading| has_kanji(&word) && reading.as_str() != word)
-        .cloned();
-    let ruby = match &reading {
-        Some(reading) => furigana_segments(&word, reading),
-        None => vec![FuriSegment {
-            text: word.clone(),
-            furigana: None,
-        }],
-    };
+    let entry = token.entries.first();
+    let ruby = entry
+        .and_then(|entry| entry.popup_override.as_ref())
+        .map(|popup| ruby_segments_from_override(&popup.ruby))
+        .unwrap_or_else(|| {
+            let reading = entry
+                .and_then(|entry| entry.kana.first())
+                .filter(|reading| has_kanji(&word) && reading.as_str() != word)
+                .cloned();
+            match &reading {
+                Some(reading) => furigana_segments(&word, reading),
+                None => vec![FuriSegment {
+                    text: word.clone(),
+                    furigana: None,
+                }],
+            }
+        });
 
-    let note = if token.surface != token.dictionary_form {
+    let note = if let Some(note) = &token.note_override {
+        Some(note.clone())
+    } else if token.surface != token.dictionary_form {
         let reasons = if token.reasons.is_empty() {
             String::new()
         } else {
@@ -230,7 +255,9 @@ pub fn popup_content(
     };
 
     let mut glosses = Vec::new();
-    if let Some(entry) = token.entries.first() {
+    if let Some(popup) = entry.and_then(|entry| entry.popup_override.as_ref()) {
+        glosses = popup.glosses.clone();
+    } else if let Some(entry) = entry {
         let order = ordered_sense_indices(&entry.senses, hint);
         for &index in order.iter().take(max_senses) {
             let sense = &entry.senses[index];
@@ -413,6 +440,16 @@ fn pad_word_spans(box_rect: Rect, words: &mut [WordSpan]) {
     }
 }
 
+fn ruby_segments_from_override(segments: &[RubySegment]) -> Vec<FuriSegment> {
+    segments
+        .iter()
+        .map(|segment| FuriSegment {
+            text: segment.text.clone(),
+            furigana: segment.furigana.clone(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,6 +548,7 @@ mod tests {
                 misc: Vec::new(),
             }],
             common: true,
+            popup_override: None,
         }];
         token
     }
@@ -553,6 +591,7 @@ mod tests {
                 misc: Vec::new(),
             }],
             common: true,
+            popup_override: None,
         }];
         let content = popup_content(&token, SenseHint::default(), 3, 4);
         assert_eq!(
@@ -629,6 +668,10 @@ mod tests {
     fn categorizes_by_part_of_speech() {
         assert_eq!(categorize(&verb_token()), WordCategory::Verb);
         assert_eq!(categorize(&tok("謎")), WordCategory::Unknown); // no entries
+        let mut auxiliary = tok("ました");
+        auxiliary.dictionary_form = "ます".to_string();
+        auxiliary.source_pos = Some(LinderaPos::AuxVerb);
+        assert_eq!(categorize(&auxiliary), WordCategory::Auxiliary);
     }
 
     #[test]
@@ -725,6 +768,8 @@ mod tests {
             dictionary_form: surface.to_string(),
             reasons: Vec::new(),
             entries: Vec::new(),
+            source_pos: None,
+            note_override: None,
         }
     }
 }

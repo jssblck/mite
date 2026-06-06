@@ -97,6 +97,18 @@ that text or region as ignored. The command exits non-zero unless the score is
 perfect. Use `--allow-failures` when collecting a diagnostic report during
 accuracy work.
 
+Run the aggregate corpus scorer when accuracy work needs the full private eval
+set. It reuses one initialized OCR engine and dictionary, writes per-image
+reports under `target\eval\corpus`, and weights the aggregate by the underlying
+detection, character, and metadata denominators:
+
+```powershell
+cargo run -- eval-corpus `
+  --root eval `
+  --out target\eval\corpus-summary.json `
+  --allow-failures
+```
+
 OCR lookup is block-aware: adjacent same-column recognized lines are joined for
 dictionary analysis only when a known token crosses the boundary and the
 boundary fragments are not both complete known tokens. Each resolved token is

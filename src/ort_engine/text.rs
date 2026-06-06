@@ -10,7 +10,8 @@ pub(super) fn normalize_recognized_text(raw: &str) -> String {
 
     let collapsed = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
     let dekanji = fix_katakana_lookalikes(&collapsed);
-    let separated = split_latin_ui_boundaries(&dekanji);
+    let quantity_normalized = normalize_item_quantity_multipliers(&dekanji);
+    let separated = split_latin_ui_boundaries(&quantity_normalized);
     normalize_common_game_text(&separated)
 }
 
@@ -18,6 +19,7 @@ pub(super) fn normalize_recognized_text(raw: &str) -> String {
 /// near-identical glyphs.
 fn katakana_lookalike(ch: char) -> Option<char> {
     Some(match ch {
+        '一' => 'ー', // kanji "one" vs long vowel mark
         '二' => 'ニ', // kanji "two" vs katakana NI
         '力' => 'カ', // kanji "power" vs katakana KA
         '口' => 'ロ', // kanji "mouth" vs katakana RO
@@ -38,11 +40,12 @@ fn fix_katakana_lookalikes(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     for (index, &ch) in chars.iter().enumerate() {
-        let between_katakana = index > 0
-            && index + 1 < chars.len()
-            && is_katakana(chars[index - 1])
-            && is_katakana(chars[index + 1]);
+        let prev_is_katakana = index > 0 && is_katakana(chars[index - 1]);
+        let next_is_katakana = index + 1 < chars.len() && is_katakana(chars[index + 1]);
+        let between_katakana = prev_is_katakana && next_is_katakana;
+        let adjacent_katakana = prev_is_katakana || next_is_katakana;
         match katakana_lookalike(ch) {
+            Some(kana) if matches!(ch, '一' | '工') && adjacent_katakana => out.push(kana),
             Some(kana) if between_katakana => out.push(kana),
             _ => out.push(ch),
         }
@@ -68,31 +71,77 @@ fn split_latin_ui_boundaries(text: &str) -> String {
 
 fn should_insert_latin_boundary(left: char, right: char) -> bool {
     (left.is_ascii_lowercase() && right.is_ascii_uppercase())
-        || (left.is_ascii_alphabetic() && right.is_ascii_digit())
+        || (left.is_ascii_alphabetic() && right.is_ascii_digit() && !matches!(left, 'x' | 'X'))
         || (left.is_ascii_digit() && right.is_ascii_alphabetic())
+}
+
+fn normalize_item_quantity_multipliers(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    for (index, &ch) in chars.iter().enumerate() {
+        if ch == '×'
+            && index > 0
+            && chars
+                .get(index + 1)
+                .is_some_and(|next| next.is_ascii_digit())
+            && is_item_quantity_prefix(chars[index - 1])
+        {
+            out.push('x');
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn is_item_quantity_prefix(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || is_kana(ch) || is_cjk(ch)
 }
 
 fn normalize_common_game_text(text: &str) -> String {
     let mut out = trim_leading_noise_marks(text);
     out = normalize_user_id(&out);
+    out = normalize_japanese_ascii_punctuation(&out);
     out = crate::text_corrections::apply_common_replacements(&out);
     out = space_after_punctuation(&out);
     collapse_spaces(&out)
 }
 
+fn normalize_japanese_ascii_punctuation(text: &str) -> String {
+    if !text.chars().any(|ch| is_kana(ch) || is_cjk(ch)) {
+        return text.to_string();
+    }
+
+    text.chars()
+        .map(|ch| match ch {
+            '!' => '！',
+            '?' => '？',
+            _ => ch,
+        })
+        .collect()
+}
+
 fn trim_leading_noise_marks(text: &str) -> String {
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.peek().copied() {
+    let source = text.chars().collect::<Vec<_>>();
+    let mut start = 0;
+    while let Some(&ch) = source.get(start) {
+        let next = source.get(start + 1).copied();
         // Stop at the first real word character so leading symbol/punctuation
         // noise is trimmed but Japanese text (kana/kanji) is preserved. Using
         // is_ascii_alphanumeric alone wrongly strips entire all-CJK strings.
-        if ch.is_ascii_alphanumeric() || ch == '\'' || ch == '"' || is_kana(ch) || is_cjk(ch) {
+        if ch.is_ascii_alphanumeric()
+            || ch == '\''
+            || ch == '"'
+            || is_kana(ch)
+            || is_cjk(ch)
+            || (ch == '×' && next.is_some_and(|next| next.is_ascii_digit()))
+        {
             break;
         }
-        chars.next();
+        start += 1;
     }
 
-    let trimmed = chars.collect::<String>();
+    let trimmed = source[start..].iter().collect::<String>();
     let mut chars = trimmed.chars();
     if let (Some(first), Some(second)) = (chars.next(), chars.next())
         && is_cjk(first)
@@ -150,10 +199,24 @@ fn space_after_punctuation(text: &str) -> String {
         let should_space = matches!(ch, '.' | ',' | '!' | '?' | ';')
             && !next.is_whitespace()
             && next.is_ascii_alphabetic()
+            && !is_initialism_period(&chars, index)
             && !(ch == '.' && previous.is_some_and(|previous| previous.is_ascii_digit()));
         if should_space {
             out.push(' ');
         }
     }
     out
+}
+
+fn is_initialism_period(chars: &[char], index: usize) -> bool {
+    if chars.get(index) != Some(&'.') {
+        return false;
+    }
+    let Some(next) = chars.get(index + 1).copied() else {
+        return false;
+    };
+    if !next.is_ascii_uppercase() {
+        return false;
+    }
+    chars.get(index + 2) == Some(&'.')
 }

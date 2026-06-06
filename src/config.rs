@@ -130,6 +130,14 @@ pub struct PipelineConfig {
     pub detector_low_contrast_probability_threshold: f32,
     pub detector_low_contrast_box_score_threshold: f32,
     pub detector_min_component_area: usize,
+    /// Horizontal binary-close radius, in detector-map pixels, applied before
+    /// connected-component extraction. This bridges small gaps between glyph
+    /// strokes without invoking a whole low-contrast detector pass.
+    pub detector_close_radius_px: u32,
+    /// DB-style unclipping ratio applied to each detector component rectangle.
+    /// `0.0` disables expansion; higher values recover margins around text that
+    /// the detector probability map marks too tightly.
+    pub detector_unclip_ratio: f32,
     pub detector_max_box_height_ratio: f32,
     pub detector_max_box_area_ratio: f32,
     pub min_recognition_confidence: f32,
@@ -197,6 +205,12 @@ impl PipelineConfig {
                 self.detector_max_long_side
             );
         }
+        if !(0.0..=5.0).contains(&self.detector_unclip_ratio) {
+            bail!(
+                "detector_unclip_ratio must be in [0, 5], got {}",
+                self.detector_unclip_ratio
+            );
+        }
         Ok(())
     }
 
@@ -222,7 +236,7 @@ impl Default for PipelineConfig {
             detector_max_long_side: 3840,
             detector_resize_filter: ResizeFilter::CatmullRom,
             detector_cadence_frames: 2,
-            max_boxes_per_frame: 64,
+            max_boxes_per_frame: 128,
             recognition_cache_ttl_frames: 45,
             stale_frame_budget: 1,
             detector_probability_threshold: 0.30,
@@ -231,6 +245,8 @@ impl Default for PipelineConfig {
             detector_low_contrast_probability_threshold: 0.20,
             detector_low_contrast_box_score_threshold: 0.25,
             detector_min_component_area: 8,
+            detector_close_radius_px: 0,
+            detector_unclip_ratio: 0.0,
             detector_max_box_height_ratio: 0.08,
             detector_max_box_area_ratio: 0.02,
             min_recognition_confidence: 0.50,

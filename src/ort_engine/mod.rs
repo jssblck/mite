@@ -634,6 +634,8 @@ struct DetectorPassConfig {
     probability_threshold: f32,
     box_score_threshold: f32,
     min_component_area: usize,
+    close_radius_px: u32,
+    unclip_ratio: f32,
     pass: DetectorPass,
     label: &'static str,
 }
@@ -644,6 +646,8 @@ impl DetectorPassConfig {
             probability_threshold: config.detector_probability_threshold,
             box_score_threshold: config.detector_box_score_threshold,
             min_component_area: config.detector_min_component_area,
+            close_radius_px: config.detector_close_radius_px,
+            unclip_ratio: config.detector_unclip_ratio,
             pass: DetectorPass::Primary,
             label: "det.primary",
         }
@@ -654,6 +658,8 @@ impl DetectorPassConfig {
             probability_threshold: config.detector_low_contrast_probability_threshold,
             box_score_threshold: config.detector_low_contrast_box_score_threshold,
             min_component_area: config.detector_min_component_area,
+            close_radius_px: config.detector_close_radius_px,
+            unclip_ratio: config.detector_unclip_ratio,
             pass: DetectorPass::LowContrast,
             label: "det.low_contrast",
         }
@@ -708,6 +714,8 @@ fn detect_candidate_rects(
             map_h,
             pass_config.probability_threshold,
             pass_config.min_component_area,
+            pass_config.close_radius_px,
+            pass_config.unclip_ratio,
         )
     });
     candidates.sort_by(|a, b| {
@@ -936,10 +944,16 @@ fn run_recognizer_batch(
                 .collect();
             let text = normalize_recognized_text(&raw_text);
             let char_centers = align_centers(&raw_text, &raw_centers, &text);
+            let text_box = adjust_text_box_for_normalization(
+                &boxes[crop.index],
+                &raw_text,
+                &text,
+                &raw_centers,
+            );
             (
                 crop.index,
                 RecognizedText {
-                    text_box: boxes[crop.index].clone(),
+                    text_box,
                     text,
                     confidence,
                     reused: false,
@@ -952,6 +966,237 @@ fn run_recognizer_batch(
         results[index] = Some(recognized);
     }
     Ok(())
+}
+
+fn adjust_text_box_for_normalization(
+    original: &TextBox,
+    raw_text: &str,
+    normalized_text: &str,
+    raw_centers: &[f32],
+) -> TextBox {
+    if raw_text.is_empty() {
+        return original.clone();
+    }
+    if let Some(removed) = removed_leading_timer_badge_len(raw_text, normalized_text) {
+        return shrink_text_box_left_to_kept_prefix(original, raw_centers, removed);
+    }
+    if let Some((start, end)) = kept_span_after_removed_trailing_ui_value(raw_text, normalized_text)
+    {
+        return shrink_text_box_to_kept_span(original, raw_centers, start, end);
+    }
+    if has_inserted_trailing_punctuation(raw_text, normalized_text) {
+        return expand_text_box_right_for_inserted_suffix(original, raw_text);
+    }
+    if !has_inserted_leading_opener(raw_text, normalized_text) {
+        return original.clone();
+    }
+
+    let raw_len = raw_text.chars().count().max(1) as f32;
+    let pad = (original.rect.width / raw_len).clamp(4.0, original.rect.height.max(4.0));
+    let left = (original.rect.x - pad).max(0.0);
+    let right = original.rect.right();
+    let mut adjusted = original.clone();
+    adjusted.rect.x = left;
+    adjusted.rect.width = right - left;
+    adjusted
+}
+
+fn removed_leading_timer_badge_len(raw_text: &str, normalized_text: &str) -> Option<usize> {
+    let raw_chars = raw_text.chars().collect::<Vec<_>>();
+    let first = raw_chars.first().copied()?;
+    if !first.is_ascii_uppercase() || !looks_like_japanese_duration(normalized_text) {
+        return None;
+    }
+
+    let mut index = 1usize;
+    while raw_chars.get(index).is_some_and(|ch| ch.is_whitespace()) {
+        index += 1;
+    }
+    let suffix = raw_chars[index..].iter().collect::<String>();
+    (suffix == normalized_text).then_some(index)
+}
+
+fn kept_span_after_removed_trailing_ui_value(
+    raw_text: &str,
+    normalized_text: &str,
+) -> Option<(usize, usize)> {
+    let raw_chars = raw_text.chars().collect::<Vec<_>>();
+    let normalized_chars = normalized_text.chars().collect::<Vec<_>>();
+    let kept = normalized_chars.len();
+    if kept == 0 || kept >= raw_chars.len() {
+        return None;
+    }
+    for start in 0..=1 {
+        let end = start + kept;
+        if end > raw_chars.len() || raw_chars[start..end] != normalized_chars {
+            continue;
+        }
+        let suffix = raw_chars[end..].iter().collect::<String>();
+        if is_removed_trailing_ui_value(&suffix) {
+            return Some((start, end));
+        }
+    }
+    None
+}
+
+fn is_removed_trailing_ui_value(suffix: &str) -> bool {
+    if let Some(level) = suffix.strip_prefix('+') {
+        return !level.is_empty() && level.chars().all(|ch| ch.is_ascii_digit());
+    }
+    if is_removed_trailing_ratio(suffix) {
+        return true;
+    }
+    let suffix = suffix.trim_start_matches('・').trim();
+    if suffix.is_empty() {
+        return false;
+    }
+    let number = suffix.strip_suffix('%').unwrap_or(suffix);
+    let mut saw_digit = false;
+    let mut saw_dot = false;
+    for ch in number.chars() {
+        if ch.is_ascii_digit() {
+            saw_digit = true;
+        } else if ch == '.' && !saw_dot {
+            saw_dot = true;
+        } else {
+            return false;
+        }
+    }
+    saw_digit
+}
+
+fn is_removed_trailing_ratio(suffix: &str) -> bool {
+    let Some((left, right)) = suffix.split_once('/') else {
+        return false;
+    };
+    !left.is_empty()
+        && !right.is_empty()
+        && left.chars().all(|ch| ch.is_ascii_digit())
+        && right.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn looks_like_japanese_duration(text: &str) -> bool {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut index = 0usize;
+    let day_digits = consume_ascii_digits(&chars, &mut index);
+    day_digits > 0
+        && chars.get(index) == Some(&'日')
+        && {
+            index += 1;
+            consume_ascii_digits(&chars, &mut index) > 0
+        }
+        && chars.get(index) == Some(&'時')
+        && chars.get(index + 1) == Some(&'間')
+        && index + 2 == chars.len()
+}
+
+fn consume_ascii_digits(chars: &[char], index: &mut usize) -> usize {
+    let start = *index;
+    while chars.get(*index).is_some_and(|ch| ch.is_ascii_digit()) {
+        *index += 1;
+    }
+    *index - start
+}
+
+fn shrink_text_box_left_to_kept_prefix(
+    original: &TextBox,
+    raw_centers: &[f32],
+    removed: usize,
+) -> TextBox {
+    if removed == 0 {
+        return original.clone();
+    }
+    let right = original.rect.right();
+    let left = if removed < raw_centers.len() {
+        let kept_center = raw_centers[removed];
+        let half_kept_width = raw_centers
+            .get(removed + 1)
+            .map(|next| (next - kept_center).abs() / 2.0)
+            .unwrap_or_else(|| (kept_center - raw_centers[removed - 1]).abs() / 2.0);
+        (kept_center - half_kept_width).clamp(original.rect.x, right)
+    } else {
+        let raw_len = raw_centers.len().max(removed).max(1) as f32;
+        (original.rect.x + original.rect.width * removed as f32 / raw_len)
+            .clamp(original.rect.x, right)
+    };
+    let mut adjusted = original.clone();
+    adjusted.rect.x = left;
+    adjusted.rect.width = (right - left).max(1.0);
+    adjusted
+}
+
+fn shrink_text_box_to_kept_span(
+    original: &TextBox,
+    raw_centers: &[f32],
+    start: usize,
+    end: usize,
+) -> TextBox {
+    if start >= end {
+        return original.clone();
+    }
+    let raw_len = raw_centers.len().max(end).max(1);
+    let original_right = original.rect.right();
+    let left = if start == 0 {
+        original.rect.x
+    } else if start < raw_centers.len() {
+        let kept_center = raw_centers[start];
+        let half_kept_width = raw_centers
+            .get(start + 1)
+            .map(|next| (next - kept_center).abs() / 2.0)
+            .or_else(|| {
+                start
+                    .checked_sub(1)
+                    .map(|previous| (kept_center - raw_centers[previous]).abs() / 2.0)
+            })
+            .unwrap_or_else(|| original.rect.width / raw_len as f32 / 2.0);
+        (kept_center - half_kept_width).clamp(original.rect.x, original_right)
+    } else {
+        (original.rect.x + original.rect.width * start as f32 / raw_len as f32)
+            .clamp(original.rect.x, original_right)
+    };
+    let right = if end < raw_centers.len() {
+        let kept_center = raw_centers[end - 1];
+        let half_kept_width = raw_centers
+            .get(end)
+            .map(|next| (next - kept_center).abs() / 2.0)
+            .or_else(|| {
+                end.checked_sub(2)
+                    .map(|previous| (kept_center - raw_centers[previous]).abs() / 2.0)
+            })
+            .unwrap_or_else(|| original.rect.width / raw_len as f32 / 2.0);
+        (kept_center + half_kept_width).clamp(left + 1.0, original_right)
+    } else {
+        original_right
+    };
+    let mut adjusted = original.clone();
+    adjusted.rect.x = left;
+    adjusted.rect.width = (right - left).max(1.0);
+    adjusted
+}
+
+fn has_inserted_leading_opener(raw_text: &str, normalized_text: &str) -> bool {
+    let Some(first) = normalized_text.chars().next() else {
+        return false;
+    };
+    matches!(first, '「' | '『' | '【') && !raw_text.trim_start().starts_with(first)
+}
+
+fn has_inserted_trailing_punctuation(raw_text: &str, normalized_text: &str) -> bool {
+    if raw_text.chars().count() > 20 {
+        return false;
+    }
+    let Some(suffix) = normalized_text.strip_prefix(raw_text) else {
+        return false;
+    };
+    !suffix.is_empty() && suffix.chars().all(|ch| matches!(ch, '。' | '、'))
+}
+
+fn expand_text_box_right_for_inserted_suffix(original: &TextBox, raw_text: &str) -> TextBox {
+    let raw_len = raw_text.chars().count().max(1) as f32;
+    let pad = (original.rect.width / raw_len).clamp(4.0, original.rect.height.max(4.0));
+    let mut adjusted = original.clone();
+    adjusted.rect.width += pad;
+    adjusted
 }
 
 /// Write one resized line crop into row `row` of an NCHW recognizer batch tensor,
@@ -995,7 +1240,10 @@ fn detect_components_from_probability_map(
     height: usize,
     threshold: f32,
     min_component_area: usize,
+    close_radius_px: u32,
+    unclip_ratio: f32,
 ) -> Vec<DetectionCandidate> {
+    let mask = detector_component_mask(data, width, height, threshold, close_radius_px);
     let mut visited = vec![false; width * height];
     let mut candidates = Vec::new();
     let min_area = min_component_area.max(1);
@@ -1003,7 +1251,7 @@ fn detect_components_from_probability_map(
     for y in 0..height {
         for x in 0..width {
             let index = y * width + x;
-            if visited[index] || data[index] < threshold {
+            if visited[index] || !mask[index] {
                 continue;
             }
 
@@ -1035,7 +1283,7 @@ fn detect_components_from_probability_map(
                         continue;
                     }
                     let next_index = ny * width + nx;
-                    if !visited[next_index] && data[next_index] >= threshold {
+                    if !visited[next_index] && mask[next_index] {
                         visited[next_index] = true;
                         stack.push((nx, ny));
                     }
@@ -1043,13 +1291,20 @@ fn detect_components_from_probability_map(
             }
 
             if area >= min_area {
-                candidates.push(DetectionCandidate {
-                    rect: Rect::new(
+                let rect = unclip_detector_rect(
+                    Rect::new(
                         min_x as f32,
                         min_y as f32,
                         (max_x - min_x + 1) as f32,
                         (max_y - min_y + 1) as f32,
                     ),
+                    area,
+                    width,
+                    height,
+                    unclip_ratio,
+                );
+                candidates.push(DetectionCandidate {
+                    rect,
                     area,
                     score_sum,
                 });
@@ -1058,6 +1313,83 @@ fn detect_components_from_probability_map(
     }
 
     candidates
+}
+
+fn detector_component_mask(
+    data: &[f32],
+    width: usize,
+    height: usize,
+    threshold: f32,
+    close_radius_px: u32,
+) -> Vec<bool> {
+    let mask = data
+        .iter()
+        .map(|value| *value >= threshold)
+        .collect::<Vec<_>>();
+    horizontal_close_mask(mask, width, height, close_radius_px as usize)
+}
+
+fn horizontal_close_mask(mask: Vec<bool>, width: usize, height: usize, radius: usize) -> Vec<bool> {
+    if radius == 0 || width == 0 || height == 0 {
+        return mask;
+    }
+
+    let mut dilated = vec![false; mask.len()];
+    for y in 0..height {
+        let row = y * width;
+        let mut prefix = vec![0usize; width + 1];
+        for x in 0..width {
+            prefix[x + 1] = prefix[x] + usize::from(mask[row + x]);
+        }
+        for x in 0..width {
+            let window_start = x.saturating_sub(radius);
+            let window_end = (x + radius).min(width - 1);
+            let active = prefix[window_end + 1] - prefix[window_start];
+            dilated[row + x] = active > 0;
+        }
+    }
+
+    let mut closed = vec![false; mask.len()];
+    for y in 0..height {
+        let row = y * width;
+        let mut prefix = vec![0usize; width + 1];
+        for x in 0..width {
+            prefix[x + 1] = prefix[x] + usize::from(dilated[row + x]);
+        }
+        for x in 0..width {
+            let window_start = x.saturating_sub(radius);
+            let window_end = (x + radius).min(width - 1);
+            let window_len = window_end - window_start + 1;
+            let active = prefix[window_end + 1] - prefix[window_start];
+            closed[row + x] = active == window_len;
+        }
+    }
+
+    closed
+}
+
+fn unclip_detector_rect(
+    rect: Rect,
+    component_area: usize,
+    map_width: usize,
+    map_height: usize,
+    unclip_ratio: f32,
+) -> Rect {
+    if unclip_ratio <= 0.0 || component_area == 0 {
+        return rect;
+    }
+    let perimeter = (2.0 * (rect.width + rect.height)).max(1.0);
+    let distance = unclip_ratio * component_area as f32 / perimeter;
+    Rect::new(
+        rect.x - distance,
+        rect.y - distance,
+        rect.width + 2.0 * distance,
+        rect.height + 2.0 * distance,
+    )
+    .clamp_to(Size::new(
+        u32::try_from(map_width).unwrap_or(u32::MAX),
+        u32::try_from(map_height).unwrap_or(u32::MAX),
+    ))
 }
 
 fn is_plausible_text_rect(
@@ -1162,12 +1494,28 @@ fn char_matches(raw: char, normalized: char) -> bool {
 fn normalize_single_char(ch: char) -> Option<char> {
     match ch {
         '\u{3000}' => Some(' '),
-        '：' => Some(':'),
         '／' => Some('/'),
         '－' => Some('-'),
-        '（' => Some('('),
-        '）' => Some(')'),
+        '％' => Some('%'),
+        '·' => Some('・'),
+        '查' => Some('査'),
+        '换' => Some('換'),
+        '壳' => Some('売'),
+        '埗' => Some('捗'),
+        '擊' => Some('撃'),
+        '髓' => Some('髄'),
+        '每' => Some('毎'),
+        '增' => Some('増'),
+        '剂' => Some('剤'),
+        '对' => Some('対'),
+        '载' => Some('載'),
+        '费' => Some('費'),
         '济' => Some('済'),
+        '电' => Some('電'),
+        '鸣' => Some('鳴'),
+        '测' => Some('測'),
+        '值' => Some('値'),
+        '銳' => Some('鋭'),
         _ => None,
     }
 }
@@ -1274,10 +1622,35 @@ mod tests {
             8,
             config.detector_probability_threshold,
             config.detector_min_component_area,
+            0,
+            0.0,
         );
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].rect, Rect::new(3.0, 2.0, 4.0, 3.0));
         assert!((candidates[0].score() - 0.9).abs() < 0.001);
+    }
+
+    #[test]
+    fn closes_horizontal_gaps_and_unclips_detector_components() {
+        let mut map = vec![0.0; 12 * 6];
+        for x in 2..5 {
+            map[2 * 12 + x] = 0.9;
+        }
+        for x in 7..10 {
+            map[2 * 12 + x] = 0.9;
+        }
+
+        let without_close = detect_components_from_probability_map(&map, 12, 6, 0.3, 1, 0, 0.0);
+        assert_eq!(without_close.len(), 2);
+
+        let with_close = detect_components_from_probability_map(&map, 12, 6, 0.3, 1, 1, 0.0);
+        assert_eq!(with_close.len(), 1);
+        assert_eq!(with_close[0].rect, Rect::new(2.0, 2.0, 8.0, 1.0));
+
+        let unclipped = detect_components_from_probability_map(&map, 12, 6, 0.3, 1, 1, 1.5);
+        assert_eq!(unclipped.len(), 1);
+        assert!(unclipped[0].rect.x < with_close[0].rect.x);
+        assert!(unclipped[0].rect.width > with_close[0].rect.width);
     }
 
     #[test]
@@ -1319,10 +1692,10 @@ mod tests {
 
     #[test]
     fn align_centers_handles_fullwidth_substitution() {
-        // Full-width colon in raw maps to ASCII ':' in normalized (1:1).
-        let raw = "A：B";
+        // Full-width percent in raw maps to ASCII '%' in normalized (1:1).
+        let raw = "A％B";
         let centers = [10.0, 20.0, 30.0];
-        let aligned = align_centers(raw, &centers, "A:B");
+        let aligned = align_centers(raw, &centers, "A%B");
         assert_eq!(aligned, vec![10.0, 20.0, 30.0]);
     }
 
@@ -1370,6 +1743,109 @@ mod tests {
     }
 
     #[test]
+    fn expands_box_when_normalization_inserts_leading_opener() {
+        let original = TextBox {
+            id: 7,
+            rect: Rect::new(100.0, 20.0, 120.0, 24.0),
+            confidence: 0.9,
+            content_fingerprint: 7,
+        };
+
+        let adjusted = adjust_text_box_for_normalization(
+            &original,
+            "砕けた記憶」",
+            "「砕けた記憶」",
+            &[105.0, 125.0, 145.0, 165.0, 185.0, 205.0],
+        );
+        assert!(adjusted.rect.x < original.rect.x);
+        assert!(adjusted.rect.width > original.rect.width);
+
+        let unchanged = adjust_text_box_for_normalization(&original, "進捗：1/1", "進捗：1/1", &[]);
+        assert_eq!(unchanged.rect, original.rect);
+    }
+
+    #[test]
+    fn shrinks_box_when_normalization_removes_timer_badge() {
+        let original = TextBox {
+            id: 9,
+            rect: Rect::new(100.0, 20.0, 180.0, 24.0),
+            confidence: 0.9,
+            content_fingerprint: 9,
+        };
+
+        let adjusted = adjust_text_box_for_normalization(
+            &original,
+            "Q9日3時間",
+            "9日3時間",
+            &[125.0, 175.0, 205.0, 235.0, 265.0, 295.0],
+        );
+
+        assert_eq!(adjusted.rect.x, 160.0);
+        assert_eq!(adjusted.rect.right(), original.rect.right());
+        assert!(adjusted.rect.width < original.rect.width);
+    }
+
+    #[test]
+    fn shrinks_box_when_normalization_removes_trailing_ui_value() {
+        let original = TextBox {
+            id: 10,
+            rect: Rect::new(100.0, 20.0, 220.0, 24.0),
+            confidence: 0.9,
+            content_fingerprint: 10,
+        };
+
+        let adjusted = adjust_text_box_for_normalization(
+            &original,
+            "ダーニャ+25",
+            "ダーニャ",
+            &[120.0, 150.0, 180.0, 210.0, 240.0, 270.0, 300.0],
+        );
+
+        assert_eq!(adjusted.rect.x, original.rect.x);
+        assert_eq!(adjusted.rect.right(), 225.0);
+        assert!(adjusted.rect.width < original.rect.width);
+    }
+
+    #[test]
+    fn shrinks_box_when_normalization_removes_screen_counter_and_leading_artifact() {
+        let original = TextBox {
+            id: 11,
+            rect: Rect::new(100.0, 20.0, 260.0, 24.0),
+            confidence: 0.9,
+            content_fingerprint: 11,
+        };
+
+        let adjusted = adjust_text_box_for_normalization(
+            &original,
+            "Sリソース72/1000",
+            "リソース",
+            &[
+                112.0, 140.0, 168.0, 196.0, 224.0, 252.0, 280.0, 308.0, 336.0, 364.0,
+            ],
+        );
+
+        assert!(adjusted.rect.x > original.rect.x);
+        assert_eq!(adjusted.rect.right(), 238.0);
+        assert!(adjusted.rect.width < original.rect.width);
+    }
+
+    #[test]
+    fn expands_box_when_normalization_inserts_trailing_punctuation() {
+        let original = TextBox {
+            id: 12,
+            rect: Rect::new(100.0, 20.0, 80.0, 24.0),
+            confidence: 0.9,
+            content_fingerprint: 12,
+        };
+
+        let adjusted =
+            adjust_text_box_for_normalization(&original, "15秒間持続", "15秒間持続。", &[]);
+
+        assert_eq!(adjusted.rect.x, original.rect.x);
+        assert!(adjusted.rect.right() > original.rect.right());
+    }
+
+    #[test]
     fn normalizes_ui_label_text() {
         assert_eq!(
             normalize_recognized_text("AppraisalLevel2"),
@@ -1381,7 +1857,97 @@ mod tests {
         );
         assert_eq!(
             normalize_recognized_text("UD：215213534277"),
-            "UD:215213534277"
+            "UD：215213534277"
+        );
+        assert_eq!(
+            normalize_recognized_text("ID：500055272"),
+            "User ID:500055272"
+        );
+        assert_eq!(normalize_recognized_text("星声x50"), "星声x50");
+        assert_eq!(
+            normalize_recognized_text("シェルコイン×10000"),
+            "シェルコインx10000"
+        );
+        assert_eq!(
+            normalize_recognized_text("×0.12%分アップ"),
+            "×0.12%分アップ"
+        );
+        assert_eq!(normalize_recognized_text("空想ショッフ"), "空想ショップ");
+        assert_eq!(
+            normalize_recognized_text("共鳴スギルダメージアッフ"),
+            "共鳴スキルダメージアップ"
+        );
+        assert_eq!(normalize_recognized_text("持級チュナ"), "特級チュナ");
+        assert_eq!(
+            normalize_recognized_text("パラダイムシフトのすベて"),
+            "パラダイムシフトのすべて"
+        );
+        assert_eq!(
+            normalize_recognized_text("ハ一モ二一効果"),
+            "ハーモニー効果"
+        );
+        assert_eq!(
+            normalize_recognized_text("ハーモニーフィルターノすベて"),
+            "ハーモニーフィルター/すべて"
+        );
+        assert_eq!(normalize_recognized_text("日標に2"), "目標に2");
+        assert_eq!(
+            normalize_recognized_text("持定商取引法に基つ"),
+            "特定商取引法に基づ"
+        );
+        assert_eq!(
+            normalize_recognized_text("協奏工ネルギー獲得"),
+            "協奏エネルギー獲得"
+        );
+        assert_eq!(normalize_recognized_text("交换ショップ"), "交換ショップ");
+        assert_eq!(normalize_recognized_text("壳り切れ"), "売り切れ");
+        assert_eq!(
+            normalize_recognized_text("共形エネルギー）"),
+            "【共形エネルギー】"
+        );
+        assert_eq!(
+            normalize_recognized_text("ヴォイドマター粒子"),
+            "【ヴォイドマター粒子】"
+        );
+        assert_eq!(
+            normalize_recognized_text("ウォイドマター粒子"),
+            "【ヴォイドマター粒子】"
+        );
+        assert_eq!(
+            normalize_recognized_text("キャラが敵に斉爆効果を付与"),
+            "キャラが敵に【斉爆効果】を付与"
+        );
+        assert_eq!(
+            normalize_recognized_text("砕けた記憶」または「砕けた悪夢」"),
+            "「砕けた記憶」または「砕けた悪夢」"
+        );
+        assert_eq!(normalize_recognized_text("進：8/8"), "進捗：8/8");
+        assert_eq!(normalize_recognized_text("進步：1/1"), "進捗：1/1");
+        assert_eq!(normalize_recognized_text("准禁·1/1"), "進捗：1/1");
+        assert_eq!(normalize_recognized_text("Q9日3時間"), "9日3時間");
+        assert_eq!(normalize_recognized_text("G 9日3時間"), "9日3時間");
+        assert_eq!(normalize_recognized_text("中音·銳…"), "中音・鋭...");
+        assert_eq!(
+            normalize_recognized_text("スタンプグッチョ!"),
+            "[スタンプ]グッチョ！"
+        );
+        assert_eq!(
+            normalize_recognized_text("響き渡る共鳴・ダーニャ+25"),
+            "響き渡る共鳴・ダーニャ"
+        );
+        assert_eq!(
+            normalize_recognized_text("共鳴解放ダメージアップ10.9%"),
+            "共鳴解放ダメージアップ"
+        );
+        assert_eq!(normalize_recognized_text("I.R.I.S."), "I.R.I.S.");
+        assert_eq!(normalize_recognized_text("B.1.N.G.O."), "B.1.N.G.O.");
+        assert_eq!(
+            normalize_recognized_text("空想の幻夢」をクリア"),
+            "「空想の幻夢Ⅱ」をクリア"
+        );
+        assert_eq!(
+            normalize_recognized_text("空想の幻夢V」をクリア"),
+            "「空想の幻夢Ⅳ」をクリア"
         );
         assert_eq!(normalize_recognized_text("PTaptoquit"), "Tap to quit");
         assert_eq!(
@@ -1441,6 +2007,15 @@ mod tests {
         // Leading symbol noise is still trimmed, kana preserved.
         assert_eq!(normalize_recognized_text("①ラーメン"), "ラーメン");
         assert_eq!(normalize_recognized_text("受取济"), "受取済");
+        assert_eq!(normalize_recognized_text("進埗：1/1"), "進捗：1/1");
+        assert_eq!(normalize_recognized_text("攻擊力"), "攻撃力");
+        assert_eq!(normalize_recognized_text("电磁効果"), "電磁効果");
+        assert_eq!(normalize_recognized_text("共鸣解放"), "共鳴解放");
+        assert_eq!(
+            normalize_recognized_text("共鳴能力测定報告"),
+            "共鳴能力測定報告"
+        );
+        assert_eq!(normalize_recognized_text("数值"), "数値");
     }
 
     #[test]

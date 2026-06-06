@@ -58,6 +58,7 @@ impl RawWord {
                 })
                 .collect(),
             common,
+            popup_override: None,
         })
     }
 }

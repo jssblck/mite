@@ -17,6 +17,7 @@ use serde::Serialize;
 use crate::frequency::FrequencyTable;
 use crate::morphology::{Analyzer, Morpheme};
 use crate::pos::{LinderaPos, PosClass};
+use crate::script::is_katakana;
 
 mod raw;
 
@@ -30,6 +31,438 @@ const MAX_COMPOUND_MORPHEMES: usize = 6;
 /// toward fewer tokens; kept low so that splitting a rare false compound into
 /// frequent function morphemes (してき -> し+て+き) still wins.
 const TOKEN_PENALTY: f32 = 1.0;
+/// Cost for grouped non-dictionary punctuation/digit runs when refining one
+/// long unknown OCR chunk. It is deliberately high: known terms should dominate
+/// the split, and unresolved names should stay as one unknown token.
+const UNKNOWN_RESEGMENT_COST: f32 = 20.0;
+
+#[derive(Debug, Clone, Copy)]
+struct RubySpec {
+    text: &'static str,
+    furigana: Option<&'static str>,
+}
+
+const fn ruby(text: &'static str, furigana: Option<&'static str>) -> RubySpec {
+    RubySpec { text, furigana }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct KnownTermSpec {
+    surface: &'static str,
+    dictionary_form: &'static str,
+    part_of_speech: &'static [&'static str],
+    ruby: &'static [RubySpec],
+    glosses: &'static [&'static str],
+}
+
+// Wuthering Waves and game-UI terms that are absent from JMdict or need a
+// domain-specific display. These are intentionally small, exact overlays on top
+// of JMdict: the base dictionary still owns ordinary Japanese segmentation.
+const DOMAIN_KNOWN_TERMS: &[KnownTermSpec] = &[
+    KnownTermSpec {
+        surface: "購入可能数",
+        dictionary_form: "購入可能数",
+        part_of_speech: &["n"],
+        ruby: &[
+            ruby("購入", Some("こうにゅう")),
+            ruby("可能", Some("かのう")),
+            ruby("数", Some("すう")),
+        ],
+        glosses: &["available purchase count; purchasable quantity  (n)"],
+    },
+    KnownTermSpec {
+        surface: "秒間",
+        dictionary_form: "秒間",
+        part_of_speech: &["n-suf"],
+        ruby: &[ruby("秒間", Some("びょうかん"))],
+        glosses: &["for ... seconds; interval measured in seconds  (n-suf)"],
+    },
+    KnownTermSpec {
+        surface: "セット",
+        dictionary_form: "セット",
+        part_of_speech: &["n"],
+        ruby: &[ruby("セット", None)],
+        glosses: &["set  (n)"],
+    },
+    KnownTermSpec {
+        surface: "リスト",
+        dictionary_form: "リスト",
+        part_of_speech: &["n"],
+        ruby: &[ruby("リスト", None)],
+        glosses: &["list  (n)"],
+    },
+    KnownTermSpec {
+        surface: "一定",
+        dictionary_form: "一定",
+        part_of_speech: &["adj-no", "n", "vs"],
+        ruby: &[ruby("一定", Some("いってい"))],
+        glosses: &[
+            "fixed; settled; constant; definite; uniform; regular; defined; standardized  (adj-no, n, vs)",
+        ],
+    },
+    KnownTermSpec {
+        surface: "奇点",
+        dictionary_form: "奇点",
+        part_of_speech: &["n"],
+        ruby: &[ruby("奇点", Some("きてん"))],
+        glosses: &["singular point; singularity  (n)"],
+    },
+    KnownTermSpec {
+        surface: "戦歌",
+        dictionary_form: "戦歌",
+        part_of_speech: &["n"],
+        ruby: &[ruby("戦歌", Some("せんか"))],
+        glosses: &["war song; battle song  (n)"],
+    },
+    KnownTermSpec {
+        surface: "無力化",
+        dictionary_form: "無力化",
+        part_of_speech: &["n", "vs", "vt"],
+        ruby: &[ruby("無力化", Some("むりょくか"))],
+        glosses: &["neutralization; making powerless; disabling  (n, vs, vt)"],
+    },
+    KnownTermSpec {
+        surface: "チーム内",
+        dictionary_form: "チーム内",
+        part_of_speech: &["n"],
+        ruby: &[ruby("チーム", None), ruby("内", Some("ない"))],
+        glosses: &["within the team; team-internal  (n)"],
+    },
+    KnownTermSpec {
+        surface: "協奏",
+        dictionary_form: "協奏",
+        part_of_speech: &["n", "vs"],
+        ruby: &[ruby("協奏", Some("きょうそう"))],
+        glosses: &["concerto; concerted performance  (n, vs)"],
+    },
+    KnownTermSpec {
+        surface: "波模様",
+        dictionary_form: "波模様",
+        part_of_speech: &["n"],
+        ruby: &[ruby("波", Some("なみ")), ruby("模様", Some("もよう"))],
+        glosses: &["wave pattern  (n)"],
+    },
+    KnownTermSpec {
+        surface: "栄養液",
+        dictionary_form: "栄養液",
+        part_of_speech: &["n"],
+        ruby: &[ruby("栄養液", Some("えいようえき"))],
+        glosses: &["nutrient solution; nourishing liquid  (n)"],
+    },
+    KnownTermSpec {
+        surface: "所持中",
+        dictionary_form: "所持中",
+        part_of_speech: &["exp"],
+        ruby: &[ruby("所持", Some("しょじ")), ruby("中", Some("ちゅう"))],
+        glosses: &["currently owned; in possession"],
+    },
+    KnownTermSpec {
+        surface: "組織長",
+        dictionary_form: "組織長",
+        part_of_speech: &["n"],
+        ruby: &[ruby("組織長", Some("そしきちょう"))],
+        glosses: &["head of an organization; organization leader  (n)"],
+    },
+    KnownTermSpec {
+        surface: "令尹",
+        dictionary_form: "令尹",
+        part_of_speech: &["n"],
+        ruby: &[ruby("令尹", Some("れいいん"))],
+        glosses: &["ancient Chinese official title; chief magistrate; governor  (n)"],
+    },
+    KnownTermSpec {
+        surface: "ドロップ率",
+        dictionary_form: "ドロップ率",
+        part_of_speech: &["n"],
+        ruby: &[ruby("ドロップ", None), ruby("率", Some("りつ"))],
+        glosses: &["drop rate; loot drop rate  (game UI noun)"],
+    },
+    KnownTermSpec {
+        surface: "ドロップ",
+        dictionary_form: "ドロップ",
+        part_of_speech: &["n"],
+        ruby: &[ruby("ドロップ", None)],
+        glosses: &["drop; loot drop  (game UI noun)"],
+    },
+    KnownTermSpec {
+        surface: "特級",
+        dictionary_form: "特級",
+        part_of_speech: &["n", "adj-no"],
+        ruby: &[ruby("特級", Some("とっきゅう"))],
+        glosses: &["special grade; highest class  (n, adj-no)"],
+    },
+    KnownTermSpec {
+        surface: "凝縮ダメージ",
+        dictionary_form: "凝縮ダメージ",
+        part_of_speech: &["n"],
+        ruby: &[ruby("凝縮", Some("ぎょうしゅく")), ruby("ダメージ", None)],
+        glosses: &["Glacio damage; condensation damage  (n)"],
+    },
+    KnownTermSpec {
+        surface: "消滅ダメージ",
+        dictionary_form: "消滅ダメージ",
+        part_of_speech: &["n"],
+        ruby: &[ruby("消滅", Some("しょうめつ")), ruby("ダメージ", None)],
+        glosses: &["Havoc damage; annihilation damage  (n)"],
+    },
+    KnownTermSpec {
+        surface: "共振度",
+        dictionary_form: "共振度",
+        part_of_speech: &["n"],
+        ruby: &[ruby("共振度", Some("きょうしんど"))],
+        glosses: &["resonance gauge; vibration strength gauge  (n)"],
+    },
+    KnownTermSpec {
+        surface: "クリア",
+        dictionary_form: "クリア",
+        part_of_speech: &["n", "vs", "vt"],
+        ruby: &[ruby("クリア", None)],
+        glosses: &["clearance; clearing; completing a game or objective  (n, vs, vt)"],
+    },
+    KnownTermSpec {
+        surface: "装備",
+        dictionary_form: "装備",
+        part_of_speech: &["n", "vs", "vt"],
+        ruby: &[ruby("装備", Some("そうび"))],
+        glosses: &["equipment; outfit; to equip  (n, vs, vt)"],
+    },
+    KnownTermSpec {
+        surface: "売り切れ",
+        dictionary_form: "売り切れる",
+        part_of_speech: &["v1", "vi"],
+        ruby: &[
+            ruby("売", Some("う")),
+            ruby("り", None),
+            ruby("切", Some("き")),
+            ruby("れる", None),
+        ],
+        glosses: &["to be sold out  (v1, vi)"],
+    },
+    KnownTermSpec {
+        surface: "ショップ",
+        dictionary_form: "ショップ",
+        part_of_speech: &["n"],
+        ruby: &[ruby("ショップ", None)],
+        glosses: &["shop; store  (n)"],
+    },
+    KnownTermSpec {
+        surface: "共鳴者",
+        dictionary_form: "共鳴者",
+        part_of_speech: &["n"],
+        ruby: &[ruby("共鳴者", Some("きょうめいしゃ"))],
+        glosses: &["resonator (Wuthering Waves term)"],
+    },
+    KnownTermSpec {
+        surface: "敵",
+        dictionary_form: "敵",
+        part_of_speech: &["n"],
+        ruby: &[ruby("敵", Some("てき"))],
+        glosses: &[
+            "opponent; rival; adversary  (n)",
+            "enemy; foe; hostile force  (n)",
+        ],
+    },
+    KnownTermSpec {
+        surface: "目標",
+        dictionary_form: "目標",
+        part_of_speech: &["n"],
+        ruby: &[ruby("目標", Some("もくひょう"))],
+        glosses: &["target; objective; goal  (n)"],
+    },
+    KnownTermSpec {
+        surface: "できる",
+        dictionary_form: "出来る",
+        part_of_speech: &["v1", "vi"],
+        ruby: &[ruby("できる", None)],
+        glosses: &["to be able to; can  (v1, vi)"],
+    },
+    KnownTermSpec {
+        surface: "いる",
+        dictionary_form: "いる",
+        part_of_speech: &["v1", "vi"],
+        ruby: &[ruby("いる", None)],
+        glosses: &["to be; to exist; to stay  (v1, vi)"],
+    },
+    KnownTermSpec {
+        surface: "たち",
+        dictionary_form: "たち",
+        part_of_speech: &["suf"],
+        ruby: &[ruby("たち", None)],
+        glosses: &["pluralizing suffix; and others  (suf)"],
+    },
+];
+
+const DOMAIN_UNKNOWN_TERMS: &[&str] = &[
+    "ヴォイドマター粒子",
+    "喧騒に隠す回光",
+    "命理崩壊の弦",
+    "エーテル・レゾナンス",
+    "インフェルノ・シャドウ",
+    "リフレクト・ブレイズ",
+    "ダメージブースト",
+    "ヴォイドストーム",
+    "パティナ・フォーム",
+    "ロスト・ドリーム",
+    "絶えない余韻",
+    "空を切り裂く冥雷",
+    "山を轟かせる崩火",
+    "ミッドナイト・ベール",
+    "二度と輝かない沈日",
+    "闇を取り払う浮星",
+    "谷を突き抜ける長風",
+    "夜にこびり付く白霜",
+    "月を窺う軽雲",
+    "アストロ・ロード",
+    "ロードビルダー",
+    "リンクドスパイン",
+    "スタートーチ学園",
+    "スタートーチ",
+    "残星組織",
+    "ブラックショア",
+    "セブン・ヒルズ",
+    "拾方薬局",
+    "スペーストレック",
+    "フラクトシデス",
+    "斉爆効果",
+    "ソラランク",
+    "ソラランクアップ",
+    "ソラリス",
+    "リナシータ",
+    "乗霄山",
+    "今州",
+    "逆境深塔",
+    "深塔",
+    "ダークコア",
+    "ラハイロイ",
+    "ナスターシャ",
+    "ブラント",
+    "グリフェックス",
+    "マウントギャラル",
+    "リンク状態",
+    "異夢",
+    "クールタイム",
+    "共形エネルギー",
+    "ヴォイドマター",
+    "ヴォイドマター粒",
+    "オイドマター",
+    "ヴォイドスペース",
+    "気動",
+    "騒光",
+    "騒光効果",
+    "結霜効果",
+    "虚滅効果",
+    "震撃",
+    "震撃協和",
+    "無妄者",
+    "無冠者",
+    "異想音骸",
+    "雲閃",
+    "炎騎",
+    "鳴鐘の亀",
+    "津波級",
+    "スカー・異生のナイトメア",
+    "シャドウステッパー",
+    "ホロタクティクス",
+    "ホロタクティク...",
+    "ホロタクティクス・ファントムペイ",
+    "無音区",
+    "金髄",
+    "集域",
+    "シーベッド",
+    "エイメス",
+    "ウェーブライン",
+    "シグリカ",
+    "イレーナ",
+    "ダーニャ",
+    "モーニエ",
+    "ディリファ",
+    "リンネー",
+    "ファントムモス",
+    "アレフ1",
+    "伊藤美来",
+    "CV：",
+    "ノックノック",
+    "星巡りの調べ",
+    "ソラガイド",
+    "B.1.N.G.O.",
+    "達成数",
+    "リスト",
+    "共鳴者EXP",
+    "武器EXP",
+    "フェンリコ",
+    "ハイヴェイシャ",
+    "哀切の凶鳥",
+    "無情のサギ",
+    "輝き蛍の軍勢",
+    "機械アボミネーション",
+    "フェイタルエラー",
+    "ナイトメア・輝き蛍の軍勢",
+    "ナイトメア・哀切の凶鳥",
+    "ナイトメア・雷刹のウロコ",
+    "ブラインドフォール・残",
+    "リバースプレイン・残像",
+    "スタングナントラン・残",
+    "像集落",
+    "ヴェイシャ",
+    "ルールドリス",
+    "のドレイク",
+    "ト霊",
+    "長離",
+    "凌陽",
+    "鑑心",
+    "灯灯",
+    "金陽鳳",
+    "燕雀菓",
+    "雲芝",
+    "スペーストレック・コレクティブ",
+    "ギンヌンガミール",
+    "ヴォイドス",
+    "青実",
+    "唱喚",
+    "機花音核",
+    "レジ...",
+    "イン...",
+    "砕晶",
+    "虹鎮",
+    "残振",
+    "鍛潮",
+    "幻相",
+    "クロックリスク",
+    "走声蝶",
+    "音匣",
+    "データドック",
+    "トゲバラタケ",
+    "集燃体",
+    "メカパーツチェーン",
+    "4段目",
+    "3段目",
+    "2段目",
+    "1段目",
+    "音骸",
+    "終奏",
+    "重撃",
+    "斉爆",
+    "音核",
+    "瑝瓏",
+    "凝素",
+    "星声",
+    "シェルコイン",
+    "ソラ",
+    "ブブ",
+    "声律",
+    "キメ...",
+    "マ...",
+    "手...",
+    "集...",
+    "叫...",
+    "唸...",
+    "侵...",
+    "海...",
+    "切...",
+    "機...",
+    "鋭...",
+    "1回",
+];
 
 /// A single dictionary sense: its parts of speech and English glosses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -41,6 +474,20 @@ pub struct Sense {
     pub misc: Vec<String>,
 }
 
+/// Custom display content for a domain entry whose popup should not be derived
+/// from one flat JMdict-style reading/gloss list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PopupOverride {
+    pub ruby: Vec<RubySegment>,
+    pub glosses: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RubySegment {
+    pub text: String,
+    pub furigana: Option<String>,
+}
+
 /// One dictionary entry: written (kanji) forms, readings (kana), and senses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Entry {
@@ -50,6 +497,9 @@ pub struct Entry {
     /// True if any kanji/kana form is flagged "common" in JMdict. Used to bias
     /// segmentation away from rare homographs.
     pub common: bool,
+    /// Optional domain-specific popup display data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub popup_override: Option<PopupOverride>,
 }
 
 impl Entry {
@@ -153,6 +603,10 @@ impl Dictionary {
             .is_some_and(|entries| entries.iter().any(|entry| entry.common))
     }
 
+    pub fn is_domain_unknown_term(&self, surface: &str) -> bool {
+        is_domain_unknown_surface(surface)
+    }
+
     /// Entries registered under an exact surface form, if any.
     fn entries_for(&self, form: &str) -> Option<Vec<&Entry>> {
         let indices = self.by_form.get(form)?;
@@ -214,7 +668,14 @@ impl Dictionary {
             end = start;
         }
         tokens.reverse();
-        tokens
+        let tokens = tokens
+            .into_iter()
+            .flat_map(|token| self.refine_unknown_token(token))
+            .collect();
+        let tokens = self.post_process_tokens(tokens);
+        let tokens = cover_missing_unknown_tokens(line, tokens);
+        let tokens = split_unknown_boundary_separator_tokens(tokens);
+        self.split_ui_count_label_terms(tokens)
     }
 
     /// Cost and token for morpheme span `[start, end)`, or `None` when the span
@@ -227,6 +688,9 @@ impl Dictionary {
         let last = slice.last().expect("span is non-empty");
         let surface = span_surface(slice);
 
+        if let Some(token) = self.polite_past_auxiliary_token(slice, &surface) {
+            return Some((TOKEN_PENALTY, token));
+        }
         match self.resolve_span(slice, &surface) {
             Some(resolution) => {
                 if slice.len() > 1 && is_false_particle_merge(slice, &resolution.entries) {
@@ -243,6 +707,8 @@ impl Dictionary {
                     dictionary_form: resolution.form,
                     reasons,
                     entries: ranked_entries(resolution.entries, last.major_pos()),
+                    source_pos: None,
+                    note_override: None,
                 };
                 Some((cost, token))
             }
@@ -254,6 +720,25 @@ impl Dictionary {
             }
             None => None,
         }
+    }
+
+    fn polite_past_auxiliary_token(&self, slice: &[Morpheme], surface: &str) -> Option<Token> {
+        if slice.len() != 2
+            || slice[0].major_pos() != LinderaPos::AuxVerb
+            || slice[1].major_pos() != LinderaPos::AuxVerb
+            || slice[0].base_form != "ます"
+            || slice[1].base_form != "た"
+        {
+            return None;
+        }
+        Some(Token {
+            surface: surface.to_string(),
+            dictionary_form: "ます".to_string(),
+            reasons: vec!["丁寧".to_string(), "過去".to_string()],
+            entries: Vec::new(),
+            source_pos: Some(LinderaPos::AuxVerb),
+            note_override: Some("Polite past auxiliary.".to_string()),
+        })
     }
 
     /// Resolve a span against JMdict, preferring the deinflected lemma form over
@@ -274,6 +759,1177 @@ impl Dictionary {
             matched_lemma: false,
         })
     }
+
+    fn refine_unknown_token(&self, token: Token) -> Vec<Token> {
+        if token.is_known() || !should_resegment_unknown_surface(&token.surface) {
+            return vec![token];
+        }
+        self.resegment_unknown_surface(&token.surface)
+            .filter(|tokens| should_accept_resegmented_unknown(&token.surface, tokens))
+            .unwrap_or_else(|| vec![token])
+    }
+
+    fn resegment_unknown_surface(&self, surface: &str) -> Option<Vec<Token>> {
+        let chars = surface.chars().collect::<Vec<_>>();
+        let len = chars.len();
+        if len < 2 {
+            return None;
+        }
+
+        let mut best: Vec<Option<ResegmentPath>> = vec![None; len + 1];
+        best[0] = Some(ResegmentPath::start());
+        for start in 0..len {
+            let Some(start_path) = best[start].clone() else {
+                continue;
+            };
+
+            for end in start + 1..=len {
+                let part = chars[start..end].iter().collect::<String>();
+                if let Some(token) = domain_token_for_surface(&part) {
+                    let next = start_path.extend(
+                        start,
+                        token,
+                        self.frequency.cost(&part) + TOKEN_PENALTY,
+                        part.chars().count(),
+                    );
+                    update_resegment_path(&mut best[end], next);
+                }
+                let Some(entries) = self.entries_for(&part) else {
+                    continue;
+                };
+                let token = Token {
+                    surface: part.clone(),
+                    dictionary_form: part.clone(),
+                    reasons: Vec::new(),
+                    entries: ranked_entries(entries, LinderaPos::Other),
+                    source_pos: None,
+                    note_override: None,
+                };
+                let next = start_path.extend(
+                    start,
+                    token,
+                    self.frequency.cost(&part) + TOKEN_PENALTY,
+                    part.chars().count(),
+                );
+                update_resegment_path(&mut best[end], next);
+            }
+
+            if is_resegment_separator_char(chars[start]) {
+                let part = chars[start].to_string();
+                let next = start_path.extend(start, unknown_surface_token(part), TOKEN_PENALTY, 0);
+                update_resegment_path(&mut best[start + 1], next);
+            }
+
+            let unknown_end = unknown_group_end(&chars, start);
+            if unknown_end > start {
+                let part = chars[start..unknown_end].iter().collect::<String>();
+                let next = start_path.extend(
+                    start,
+                    Token {
+                        surface: part.clone(),
+                        dictionary_form: part,
+                        reasons: Vec::new(),
+                        entries: Vec::new(),
+                        source_pos: None,
+                        note_override: None,
+                    },
+                    UNKNOWN_RESEGMENT_COST,
+                    0,
+                );
+                update_resegment_path(&mut best[unknown_end], next);
+            }
+
+            let part = chars[start].to_string();
+            let next = start_path.extend(
+                start,
+                unknown_surface_token(part),
+                UNKNOWN_RESEGMENT_COST,
+                0,
+            );
+            update_resegment_path(&mut best[start + 1], next);
+        }
+
+        let mut path = best[len].clone()?;
+        let mut tokens = Vec::new();
+        while let Some(step) = path.step {
+            tokens.push(step.token);
+            path = best[step.previous]
+                .clone()
+                .expect("resegment path is linked");
+        }
+        tokens.reverse();
+        Some(tokens)
+    }
+
+    fn split_ui_count_label_terms(&self, tokens: Vec<Token>) -> Vec<Token> {
+        let mut out = Vec::with_capacity(tokens.len());
+        let mut index = 0usize;
+        while index < tokens.len() {
+            let token = &tokens[index];
+            if tokens
+                .get(index + 1)
+                .is_some_and(|next| next.surface == "素材")
+                && let Some(parts) = self.split_exp_material_prefix(token)
+            {
+                out.extend(parts);
+                index += 1;
+                continue;
+            }
+            if let Some(parts) = self.split_exact_known_compound(token, "所持数", &["所持", "数"])
+            {
+                out.extend(parts);
+            } else if let Some(parts) =
+                self.split_exact_known_compound(token, "合成数", &["合成", "数"])
+            {
+                out.extend(parts);
+            } else {
+                out.push(token.clone());
+            }
+            index += 1;
+        }
+        out
+    }
+
+    fn split_exp_material_prefix(&self, token: &Token) -> Option<Vec<Token>> {
+        let prefix = match token.surface.as_str() {
+            "武器EXP" => "武器",
+            "共鳴者EXP" => "共鳴者",
+            _ => return None,
+        };
+        Some(vec![
+            self.exact_known_token(prefix)
+                .unwrap_or_else(|| unknown_surface_token(prefix.to_string())),
+            unknown_surface_token("EXP".to_string()),
+        ])
+    }
+
+    fn split_exact_known_compound(
+        &self,
+        token: &Token,
+        surface: &str,
+        parts: &[&str],
+    ) -> Option<Vec<Token>> {
+        if token.surface != surface {
+            return None;
+        }
+        parts
+            .iter()
+            .map(|part| self.exact_known_token(part))
+            .collect()
+    }
+
+    fn exact_known_token(&self, surface: &str) -> Option<Token> {
+        let entries = self.entries_for(surface)?;
+        Some(Token {
+            surface: surface.to_string(),
+            dictionary_form: surface.to_string(),
+            reasons: Vec::new(),
+            entries: ranked_entries(entries, LinderaPos::Other),
+            source_pos: None,
+            note_override: None,
+        })
+    }
+    fn post_process_tokens(&self, tokens: Vec<Token>) -> Vec<Token> {
+        let tokens = merge_domain_terms(tokens);
+        let tokens = merge_unknown_katakana_runs(tokens);
+        let tokens = merge_japanese_month_day_tokens(tokens);
+        let tokens = merge_compact_numeric_unknowns(tokens);
+        let tokens = merge_numeric_unit_unknowns(tokens);
+        let tokens = merge_honorific_prefix_tokens(tokens);
+        let tokens = self.normalize_suru_te_form_tokens(tokens);
+        let tokens = self.normalize_suru_past_form_tokens(tokens);
+        let tokens = self.normalize_te_iru_auxiliary_tokens(tokens);
+        let tokens = normalize_dekiru_stem_tokens(tokens);
+        let tokens = split_contextual_slash_numeric_unknowns(tokens);
+        merge_repeated_punctuation_unknowns(tokens)
+    }
+
+    fn normalize_suru_te_form_tokens(&self, tokens: Vec<Token>) -> Vec<Token> {
+        let mut normalized = Vec::with_capacity(tokens.len());
+        let mut index = 0;
+        while index < tokens.len() {
+            let token = &tokens[index];
+            let after_suru_nominal = normalized.last().is_some_and(is_suru_capable_nominal_token);
+            if after_suru_nominal
+                && is_shite_particle_homograph(token)
+                && let Some(suru) = self.suru_te_form_token()
+            {
+                normalized.push(suru);
+                index += 1;
+            } else if after_suru_nominal
+                && is_suru_renyou_token(token)
+                && tokens.get(index + 1).is_some_and(is_te_particle_token)
+                && let Some(suru) = self.suru_te_form_token()
+            {
+                normalized.push(suru);
+                index += 2;
+            } else {
+                normalized.push(token.clone());
+                index += 1;
+            }
+        }
+        normalized
+    }
+
+    fn suru_te_form_token(&self) -> Option<Token> {
+        let entries =
+            suru_light_verb_entries(ranked_entries(self.entries_for("する")?, LinderaPos::Verb));
+        Some(Token {
+            surface: "して".to_string(),
+            dictionary_form: "する".to_string(),
+            reasons: vec!["連用形".to_string()],
+            entries,
+            source_pos: None,
+            note_override: None,
+        })
+    }
+
+    fn normalize_suru_past_form_tokens(&self, tokens: Vec<Token>) -> Vec<Token> {
+        let mut normalized = Vec::with_capacity(tokens.len());
+        for token in tokens {
+            let after_suru_nominal = normalized.last().is_some_and(is_suru_capable_nominal_token);
+            if after_suru_nominal
+                && is_shita_noun_homograph(&token)
+                && let Some(suru) = self.suru_past_form_token()
+            {
+                normalized.push(suru);
+            } else {
+                normalized.push(token);
+            }
+        }
+        normalized
+    }
+
+    fn suru_past_form_token(&self) -> Option<Token> {
+        let entries =
+            suru_light_verb_entries(ranked_entries(self.entries_for("する")?, LinderaPos::Verb));
+        Some(Token {
+            surface: "した".to_string(),
+            dictionary_form: "する".to_string(),
+            reasons: vec!["過去".to_string()],
+            entries,
+            source_pos: None,
+            note_override: None,
+        })
+    }
+
+    fn normalize_te_iru_auxiliary_tokens(&self, tokens: Vec<Token>) -> Vec<Token> {
+        let mut normalized = Vec::with_capacity(tokens.len());
+        for token in tokens {
+            let after_te_form = normalized.last().is_some_and(is_te_form_connector_token);
+            if after_te_form && is_iru_existential_token(&token) {
+                normalized.push(te_iru_auxiliary_token());
+            } else {
+                normalized.push(token);
+            }
+        }
+        normalized
+    }
+}
+
+fn is_suru_capable_nominal_token(token: &Token) -> bool {
+    token.entries.iter().any(|entry| {
+        entry.senses.iter().any(|sense| {
+            sense
+                .part_of_speech
+                .iter()
+                .any(|pos| pos == "vs" || pos.starts_with("vs-"))
+        })
+    })
+}
+
+fn is_shite_particle_homograph(token: &Token) -> bool {
+    token.surface == "して" && token.dictionary_form == "して"
+}
+
+fn is_suru_renyou_token(token: &Token) -> bool {
+    token.surface == "し" && token.dictionary_form == "する"
+}
+
+fn is_te_particle_token(token: &Token) -> bool {
+    token.surface == "て"
+}
+
+fn suru_light_verb_entries(mut entries: Vec<Entry>) -> Vec<Entry> {
+    if let Some(entry) = entries.first_mut() {
+        entry.popup_override = Some(PopupOverride {
+            ruby: vec![RubySegment {
+                text: "する".to_string(),
+                furigana: None,
+            }],
+            glosses: vec!["to do; to carry out; to perform  (vs-i)".to_string()],
+        });
+    }
+    entries
+}
+
+fn is_shita_noun_homograph(token: &Token) -> bool {
+    token.surface == "した"
+        && token.dictionary_form == "した"
+        && token.entries.iter().any(|entry| {
+            entry
+                .senses
+                .iter()
+                .any(|sense| sense.part_of_speech.iter().any(|pos| pos == "n"))
+        })
+}
+
+fn is_te_form_connector_token(token: &Token) -> bool {
+    token.surface == "して"
+        || token.surface == "て"
+        || (token.surface == "で"
+            && token
+                .source_pos
+                .is_some_and(|source_pos| source_pos == LinderaPos::Verb))
+}
+
+fn is_iru_existential_token(token: &Token) -> bool {
+    token.surface == "いる" && token.dictionary_form == "いる"
+}
+
+fn te_iru_auxiliary_token() -> Token {
+    Token {
+        surface: "いる".to_string(),
+        dictionary_form: "居る".to_string(),
+        reasons: vec!["補助動詞".to_string()],
+        entries: vec![Entry {
+            kanji: vec!["居る".to_string()],
+            kana: vec!["いる".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["aux-v".to_string(), "v1".to_string()],
+                glosses: vec!["to be ...-ing".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![
+                    RubySegment {
+                        text: "居".to_string(),
+                        furigana: Some("い".to_string()),
+                    },
+                    RubySegment {
+                        text: "る".to_string(),
+                        furigana: None,
+                    },
+                ],
+                glosses: vec!["to be ...-ing  (aux-v, v1)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::AuxVerb),
+        note_override: None,
+    }
+}
+
+fn normalize_dekiru_stem_tokens(tokens: Vec<Token>) -> Vec<Token> {
+    tokens
+        .into_iter()
+        .map(|token| {
+            if is_dekiru_stem_homograph(&token) {
+                dekiru_stem_token(&token)
+            } else {
+                token
+            }
+        })
+        .collect()
+}
+
+fn is_dekiru_stem_homograph(token: &Token) -> bool {
+    token.surface == "でき"
+        && token.dictionary_form == "できる"
+        && token.entries.iter().any(|entry| {
+            entry.senses.iter().any(|sense| {
+                sense
+                    .part_of_speech
+                    .iter()
+                    .any(|pos| pos == "v5r" || pos == "vt")
+            })
+        })
+}
+
+fn dekiru_stem_token(token: &Token) -> Token {
+    Token {
+        surface: token.surface.clone(),
+        dictionary_form: "できる".to_string(),
+        reasons: token.reasons.clone(),
+        entries: vec![Entry {
+            kanji: vec!["出来る".to_string()],
+            kana: vec!["できる".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["v1".to_string(), "vi".to_string()],
+                glosses: vec!["to be able to; can".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "できる".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["to be able to; can  (v1, vi)".to_string()],
+            }),
+        }],
+        source_pos: token.source_pos,
+        note_override: token.note_override.clone(),
+    }
+}
+
+fn merge_honorific_prefix_tokens(tokens: Vec<Token>) -> Vec<Token> {
+    let mut merged = Vec::with_capacity(tokens.len());
+    let mut index = 0;
+    while index < tokens.len() {
+        if index + 1 < tokens.len()
+            && is_honorific_prefix_token(&tokens[index])
+            && let Some(token) = honorific_prefixed_token(&tokens[index], &tokens[index + 1])
+        {
+            merged.push(token);
+            index += 2;
+        } else {
+            merged.push(tokens[index].clone());
+            index += 1;
+        }
+    }
+    merged
+}
+
+fn is_honorific_prefix_token(token: &Token) -> bool {
+    matches!(token.surface.as_str(), "ご" | "お")
+}
+
+fn honorific_prefixed_token(prefix: &Token, base: &Token) -> Option<Token> {
+    if !base.is_known() {
+        return None;
+    }
+    let mut entries = base.entries.clone();
+    let entry = entries.first_mut()?;
+    let base_ruby = entry
+        .kana
+        .first()
+        .and_then(|reading| (reading != &base.dictionary_form).then(|| reading.clone()));
+    entry.popup_override = Some(PopupOverride {
+        ruby: vec![
+            RubySegment {
+                text: prefix.surface.clone(),
+                furigana: None,
+            },
+            RubySegment {
+                text: base.dictionary_form.clone(),
+                furigana: base_ruby,
+            },
+        ],
+        glosses: entry
+            .senses
+            .iter()
+            .take(3)
+            .map(format_sense_gloss)
+            .collect(),
+    });
+
+    Some(Token {
+        surface: format!("{}{}", prefix.surface, base.surface),
+        dictionary_form: base.dictionary_form.clone(),
+        reasons: base.reasons.clone(),
+        entries,
+        source_pos: base.source_pos,
+        note_override: Some(format!(
+            "Honorific {} prefix on {}.",
+            prefix.surface, base.dictionary_form
+        )),
+    })
+}
+
+fn format_sense_gloss(sense: &Sense) -> String {
+    let text = sense.glosses.join("; ");
+    if sense.part_of_speech.is_empty() {
+        text
+    } else {
+        format!("{text}  ({})", sense.part_of_speech.join(", "))
+    }
+}
+
+fn merge_unknown_katakana_runs(tokens: Vec<Token>) -> Vec<Token> {
+    let mut merged = Vec::with_capacity(tokens.len());
+    let mut index = 0usize;
+    while index < tokens.len() {
+        if let Some(end) = unknown_katakana_run_end(&tokens, index) {
+            let surface = tokens[index..end]
+                .iter()
+                .map(|token| token.surface.as_str())
+                .collect::<String>();
+            merged.push(unknown_surface_token(surface));
+            index = end;
+        } else {
+            merged.push(tokens[index].clone());
+            index += 1;
+        }
+    }
+    merged
+}
+
+fn unknown_katakana_run_end(tokens: &[Token], start: usize) -> Option<usize> {
+    if !is_katakana_surface_token(&tokens[start]) {
+        return None;
+    }
+
+    let mut end = start + 1;
+    let mut known_count = usize::from(tokens[start].is_known());
+    let mut has_unknown = !tokens[start].is_known();
+    while end < tokens.len() && is_katakana_surface_token(&tokens[end]) {
+        known_count += usize::from(tokens[end].is_known());
+        has_unknown |= !tokens[end].is_known();
+        end += 1;
+    }
+
+    let run = &tokens[start..end];
+    let surface_chars = run
+        .iter()
+        .map(|token| token.surface.chars().count())
+        .sum::<usize>();
+    let known_token_is_incidental = known_count == 0
+        || (known_count == 1
+            && run.first().is_some_and(|token| !token.is_known())
+            && run.last().is_some_and(|token| !token.is_known()));
+    (end > start + 1
+        && has_unknown
+        && known_token_is_incidental
+        && surface_chars >= 2
+        && !run.iter().any(|token| token.surface == "・"))
+    .then_some(end)
+}
+
+fn is_katakana_surface_token(token: &Token) -> bool {
+    !token.surface.is_empty() && token.surface.chars().all(is_katakana)
+}
+
+fn merge_japanese_month_day_tokens(tokens: Vec<Token>) -> Vec<Token> {
+    let mut merged = Vec::with_capacity(tokens.len());
+    let mut index = 0usize;
+    while index < tokens.len() {
+        if index + 3 < tokens.len()
+            && is_ascii_digit_surface(&tokens[index].surface)
+            && tokens[index + 1].surface == "月"
+            && is_ascii_digit_surface(&tokens[index + 2].surface)
+            && tokens[index + 3].surface == "日"
+        {
+            let surface = tokens[index..index + 4]
+                .iter()
+                .map(|token| token.surface.as_str())
+                .collect::<String>();
+            merged.push(unknown_surface_token(surface));
+            index += 4;
+        } else {
+            merged.push(tokens[index].clone());
+            index += 1;
+        }
+    }
+    merged
+}
+
+fn split_contextual_slash_numeric_unknowns(tokens: Vec<Token>) -> Vec<Token> {
+    let mut split = Vec::with_capacity(tokens.len());
+    for token in tokens {
+        if should_split_slash_numeric_unknown(&token) && !is_purchase_count_ratio_context(&split) {
+            push_slash_numeric_parts(&token.surface, &mut split);
+        } else {
+            split.push(token);
+        }
+    }
+    split
+}
+
+fn is_purchase_count_ratio_context(previous: &[Token]) -> bool {
+    previous.last().is_some_and(|token| token.surface == "：")
+        && previous
+            .get(previous.len().saturating_sub(2))
+            .is_some_and(|token| token.surface == "購入可能数")
+}
+
+fn should_split_slash_numeric_unknown(token: &Token) -> bool {
+    !token.is_known()
+        && token.surface.contains('/')
+        && !is_slash_date_surface(&token.surface)
+        && token
+            .surface
+            .split('/')
+            .all(|part| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit()))
+}
+
+fn is_slash_date_surface(surface: &str) -> bool {
+    let parts = surface.split('/').collect::<Vec<_>>();
+    matches!(parts.as_slice(), [year, month, day]
+        if year.len() == 4
+            && month.len() == 2
+            && day.len() == 2
+            && year.chars().all(|ch| ch.is_ascii_digit())
+            && month.chars().all(|ch| ch.is_ascii_digit())
+            && day.chars().all(|ch| ch.is_ascii_digit()))
+}
+
+fn is_ascii_digit_surface(surface: &str) -> bool {
+    !surface.is_empty() && surface.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn push_slash_numeric_parts(surface: &str, out: &mut Vec<Token>) {
+    let mut part = String::new();
+    for ch in surface.chars() {
+        if ch == '/' {
+            if !part.is_empty() {
+                out.push(unknown_surface_token(std::mem::take(&mut part)));
+            }
+            out.push(unknown_surface_token("/".to_string()));
+        } else {
+            part.push(ch);
+        }
+    }
+    if !part.is_empty() {
+        out.push(unknown_surface_token(part));
+    }
+}
+
+fn cover_missing_unknown_tokens(line: &str, tokens: Vec<Token>) -> Vec<Token> {
+    let chars = line.chars().collect::<Vec<_>>();
+    if chars.is_empty() {
+        return tokens;
+    }
+    if tokens.is_empty() {
+        let mut covered = Vec::new();
+        push_missing_unknowns(&chars, &mut covered);
+        return covered;
+    }
+
+    let mut covered = Vec::with_capacity(tokens.len() * 2);
+    let mut pos = 0usize;
+    for token in tokens {
+        let surface = token.surface.chars().collect::<Vec<_>>();
+        if surface.is_empty() {
+            continue;
+        }
+        let start = find_surface_from(&chars, &surface, pos).unwrap_or(pos.min(chars.len()));
+        push_missing_unknowns(
+            &chars[pos.min(chars.len())..start.min(chars.len())],
+            &mut covered,
+        );
+        covered.push(token);
+        pos = start.saturating_add(surface.len()).min(chars.len());
+    }
+    push_missing_unknowns(&chars[pos.min(chars.len())..], &mut covered);
+    covered
+}
+
+fn find_surface_from(chars: &[char], surface: &[char], start: usize) -> Option<usize> {
+    if surface.is_empty() || surface.len() > chars.len() {
+        return None;
+    }
+    (start.min(chars.len())..=chars.len() - surface.len())
+        .find(|&index| chars[index..index + surface.len()] == *surface)
+}
+
+fn push_missing_unknowns(chars: &[char], out: &mut Vec<Token>) {
+    let mut index = 0usize;
+    while index < chars.len() {
+        if chars[index].is_whitespace() {
+            index += 1;
+            continue;
+        }
+        let end = missing_unknown_run_end(chars, index);
+        let surface = chars[index..end].iter().collect::<String>();
+        out.push(unknown_surface_token(surface));
+        index = end;
+    }
+}
+
+fn missing_unknown_run_end(chars: &[char], start: usize) -> usize {
+    if matches!(chars[start], '.' | '…') {
+        let mut end = start + 1;
+        while end < chars.len() && chars[end] == chars[start] {
+            end += 1;
+        }
+        return end;
+    }
+
+    if chars[start].is_ascii_alphanumeric() {
+        let mut end = start + 1;
+        while end < chars.len() && chars[end].is_ascii_alphanumeric() {
+            end += 1;
+        }
+        return end;
+    }
+
+    start + 1
+}
+
+fn merge_domain_terms(tokens: Vec<Token>) -> Vec<Token> {
+    let mut merged = Vec::with_capacity(tokens.len());
+    let mut index = 0;
+    while index < tokens.len() {
+        if let Some((end, token)) = domain_term_at(&tokens, index) {
+            merged.push(token);
+            index = end;
+        } else {
+            merged.push(tokens[index].clone());
+            index += 1;
+        }
+    }
+    merged
+}
+
+fn domain_term_at(tokens: &[Token], start: usize) -> Option<(usize, Token)> {
+    let mut best: Option<(usize, Token)> = None;
+
+    for spec in DOMAIN_KNOWN_TERMS {
+        if let Some(end) = token_span_matches_surface(tokens, start, spec.surface) {
+            update_domain_match(&mut best, end, domain_known_token(spec));
+        }
+    }
+
+    for &surface in DOMAIN_UNKNOWN_TERMS {
+        if let Some(end) = token_span_matches_surface(tokens, start, surface) {
+            update_domain_match(&mut best, end, unknown_surface_token(surface.to_string()));
+        }
+    }
+
+    best
+}
+
+fn domain_token_for_surface(surface: &str) -> Option<Token> {
+    DOMAIN_KNOWN_TERMS
+        .iter()
+        .find(|spec| spec.surface == surface)
+        .map(domain_known_token)
+        .or_else(|| {
+            is_domain_unknown_surface(surface).then(|| unknown_surface_token(surface.to_string()))
+        })
+}
+
+fn is_domain_unknown_surface(surface: &str) -> bool {
+    DOMAIN_UNKNOWN_TERMS.contains(&surface)
+}
+
+fn update_domain_match(best: &mut Option<(usize, Token)>, end: usize, token: Token) {
+    let replace = best.as_ref().is_none_or(|(best_end, _)| end > *best_end);
+    if replace {
+        *best = Some((end, token));
+    }
+}
+
+fn token_span_matches_surface(tokens: &[Token], start: usize, surface: &str) -> Option<usize> {
+    let mut combined = String::new();
+    for (offset, token) in tokens[start..].iter().enumerate() {
+        combined.push_str(&token.surface);
+        if combined == surface {
+            return Some(start + offset + 1);
+        }
+        if !surface.starts_with(&combined) {
+            return None;
+        }
+    }
+    None
+}
+
+fn domain_known_token(spec: &KnownTermSpec) -> Token {
+    Token {
+        surface: spec.surface.to_string(),
+        dictionary_form: spec.dictionary_form.to_string(),
+        reasons: Vec::new(),
+        entries: vec![domain_entry(spec)],
+        source_pos: None,
+        note_override: None,
+    }
+}
+
+fn domain_entry(spec: &KnownTermSpec) -> Entry {
+    Entry {
+        kanji: vec![spec.dictionary_form.to_string()],
+        kana: Vec::new(),
+        senses: vec![Sense {
+            part_of_speech: spec
+                .part_of_speech
+                .iter()
+                .map(|pos| (*pos).to_string())
+                .collect(),
+            glosses: spec
+                .glosses
+                .iter()
+                .map(|gloss| (*gloss).to_string())
+                .collect(),
+            misc: Vec::new(),
+        }],
+        common: true,
+        popup_override: Some(PopupOverride {
+            ruby: spec
+                .ruby
+                .iter()
+                .map(|segment| RubySegment {
+                    text: segment.text.to_string(),
+                    furigana: segment.furigana.map(str::to_string),
+                })
+                .collect(),
+            glosses: spec
+                .glosses
+                .iter()
+                .map(|gloss| (*gloss).to_string())
+                .collect(),
+        }),
+    }
+}
+
+fn merge_compact_numeric_unknowns(tokens: Vec<Token>) -> Vec<Token> {
+    let mut merged = Vec::with_capacity(tokens.len());
+    let mut index = 0;
+    while index < tokens.len() {
+        if let Some(end) = compact_numeric_run_end(&tokens, index) {
+            let surface = tokens[index..end]
+                .iter()
+                .map(|token| token.surface.as_str())
+                .collect::<String>();
+            merged.push(unknown_surface_token(surface));
+            index = end;
+        } else {
+            merged.push(tokens[index].clone());
+            index += 1;
+        }
+    }
+    merged
+}
+
+fn merge_numeric_unit_unknowns(tokens: Vec<Token>) -> Vec<Token> {
+    let mut merged = Vec::with_capacity(tokens.len());
+    let mut index = 0;
+    while index < tokens.len() {
+        if index + 1 < tokens.len()
+            && is_numeric_value_unknown(&tokens[index])
+            && is_numeric_unit_unknown(&tokens[index + 1])
+            && should_merge_numeric_unit(&tokens, index)
+        {
+            let surface = format!("{}{}", tokens[index].surface, tokens[index + 1].surface);
+            merged.push(unknown_surface_token(surface));
+            index += 2;
+        } else {
+            merged.push(tokens[index].clone());
+            index += 1;
+        }
+    }
+    merged
+}
+
+fn should_merge_numeric_unit(tokens: &[Token], index: usize) -> bool {
+    let unit = tokens[index + 1].surface.as_str();
+    if unit == "％"
+        && tokens
+            .get(index + 2)
+            .is_some_and(|token| token.surface == "分")
+    {
+        return false;
+    }
+    if unit == "Pt" {
+        if tokens
+            .get(index + 2)
+            .is_some_and(|token| token.surface == "につき")
+        {
+            return false;
+        }
+        if tokens
+            .get(index + 2)
+            .is_some_and(|token| token.surface == "に")
+            && tokens
+                .get(index + 3)
+                .is_some_and(|token| token.surface == "つき")
+        {
+            return false;
+        }
+        if tokens.get(index + 2).is_none() && index > 0 && tokens[index - 1].surface == "を" {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_numeric_value_unknown(token: &Token) -> bool {
+    !token.is_known() && is_numeric_value_surface(&token.surface)
+}
+
+fn is_numeric_value_surface(surface: &str) -> bool {
+    if surface.chars().all(|ch| ch.is_ascii_digit()) {
+        return true;
+    }
+    let mut parts = surface.split('.');
+    let first = parts.next().unwrap_or_default();
+    let second = parts.next().unwrap_or_default();
+    parts.next().is_none()
+        && !first.is_empty()
+        && !second.is_empty()
+        && first.chars().all(|ch| ch.is_ascii_digit())
+        && second.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn is_numeric_unit_unknown(token: &Token) -> bool {
+    !token.is_known() && matches!(token.surface.as_str(), "Pt" | "％")
+}
+
+fn compact_numeric_run_end(tokens: &[Token], start: usize) -> Option<usize> {
+    if tokens[start].is_known() {
+        return None;
+    }
+    let mut text = String::new();
+    let mut best = None;
+    for (offset, token) in tokens[start..].iter().enumerate() {
+        if token.is_known() || !token.surface.chars().all(is_numeric_run_char) {
+            break;
+        }
+        text.push_str(&token.surface);
+        if !is_numeric_run_prefix(&text) {
+            break;
+        }
+        if is_compact_numeric_unknown(&text) {
+            best = Some(start + offset + 1);
+        }
+    }
+    best.filter(|&end| end > start + 1)
+}
+
+fn is_numeric_run_char(ch: char) -> bool {
+    ch.is_ascii_digit() || matches!(ch, '.' | '/' | 'x' | 'X' | '*')
+}
+
+fn is_numeric_run_prefix(text: &str) -> bool {
+    text.chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_digit() || matches!(ch, 'x' | 'X' | '*'))
+}
+
+fn is_compact_numeric_unknown(text: &str) -> bool {
+    if matches!(text.chars().next(), Some('x' | 'X' | '*')) {
+        let rest = &text[1..];
+        return !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit());
+    }
+    if text.contains('/') {
+        return text
+            .split('/')
+            .all(|part| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit()));
+    }
+    if text.contains('.') {
+        let mut parts = text.split('.');
+        let first = parts.next().unwrap_or_default();
+        let second = parts.next().unwrap_or_default();
+        return parts.next().is_none()
+            && !first.is_empty()
+            && !second.is_empty()
+            && first.chars().all(|ch| ch.is_ascii_digit())
+            && second.chars().all(|ch| ch.is_ascii_digit());
+    }
+    false
+}
+
+fn merge_repeated_punctuation_unknowns(tokens: Vec<Token>) -> Vec<Token> {
+    let mut merged = Vec::with_capacity(tokens.len());
+    let mut index = 0;
+    while index < tokens.len() {
+        if let Some(end) = repeated_punctuation_run_end(&tokens, index) {
+            let surface = tokens[index..end]
+                .iter()
+                .map(|token| token.surface.as_str())
+                .collect::<String>();
+            merged.push(unknown_surface_token(surface));
+            index = end;
+        } else {
+            merged.push(tokens[index].clone());
+            index += 1;
+        }
+    }
+    merged
+}
+
+fn repeated_punctuation_run_end(tokens: &[Token], start: usize) -> Option<usize> {
+    if tokens[start].is_known() || !matches!(tokens[start].surface.as_str(), "." | "…") {
+        return None;
+    }
+    let punct = tokens[start].surface.as_str();
+    let mut end = start + 1;
+    while end < tokens.len() && !tokens[end].is_known() && tokens[end].surface == punct {
+        end += 1;
+    }
+    (end > start + 1).then_some(end)
+}
+
+fn split_unknown_boundary_separator_tokens(tokens: Vec<Token>) -> Vec<Token> {
+    let mut split = Vec::with_capacity(tokens.len());
+    for token in tokens {
+        if token.is_known() || !has_boundary_separator(&token.surface) {
+            split.push(token);
+            continue;
+        }
+        split_boundary_separator_surface(&token.surface, &mut split);
+    }
+    split
+}
+
+fn has_boundary_separator(surface: &str) -> bool {
+    surface
+        .chars()
+        .next()
+        .is_some_and(is_resegment_separator_char)
+        || surface
+            .chars()
+            .next_back()
+            .is_some_and(is_resegment_separator_char)
+}
+
+fn split_boundary_separator_surface(surface: &str, out: &mut Vec<Token>) {
+    let mut text = String::new();
+    for ch in surface.chars() {
+        if is_resegment_separator_char(ch) {
+            if !text.is_empty() {
+                out.push(unknown_surface_token(std::mem::take(&mut text)));
+            }
+            out.push(unknown_surface_token(ch.to_string()));
+        } else {
+            text.push(ch);
+        }
+    }
+    if !text.is_empty() {
+        out.push(unknown_surface_token(text));
+    }
+}
+
+fn unknown_surface_token(surface: String) -> Token {
+    Token {
+        surface: surface.clone(),
+        dictionary_form: surface,
+        reasons: Vec::new(),
+        entries: Vec::new(),
+        source_pos: None,
+        note_override: None,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ResegmentPath {
+    cost: f32,
+    known_chars: usize,
+    step: Option<ResegmentStep>,
+}
+
+#[derive(Debug, Clone)]
+struct ResegmentStep {
+    previous: usize,
+    token: Token,
+}
+
+impl ResegmentPath {
+    fn start() -> Self {
+        Self {
+            cost: 0.0,
+            known_chars: 0,
+            step: None,
+        }
+    }
+
+    fn extend(&self, previous: usize, token: Token, cost: f32, known_chars: usize) -> Self {
+        Self {
+            cost: self.cost + cost,
+            known_chars: self.known_chars + known_chars,
+            step: Some(ResegmentStep { previous, token }),
+        }
+    }
+}
+
+fn update_resegment_path(slot: &mut Option<ResegmentPath>, candidate: ResegmentPath) {
+    let replace = slot.as_ref().is_none_or(|current| {
+        candidate.cost < current.cost
+            || (candidate.cost == current.cost && candidate.known_chars > current.known_chars)
+    });
+    if replace {
+        *slot = Some(candidate);
+    }
+}
+
+fn should_resegment_unknown_surface(surface: &str) -> bool {
+    surface.chars().any(is_resegment_separator_char)
+        || (surface.chars().count() >= 4 && surface.chars().any(is_katakana))
+}
+
+fn should_accept_resegmented_unknown(surface: &str, tokens: &[Token]) -> bool {
+    if tokens.len() <= 1 {
+        return false;
+    }
+    if surface.contains('・')
+        && !tokens
+            .iter()
+            .any(|token| is_domain_unknown_surface(&token.surface))
+        && !has_boundary_separator_split(surface, tokens)
+    {
+        return false;
+    }
+    if has_boundary_separator_split(surface, tokens) {
+        return true;
+    }
+    let resolved_count = tokens
+        .iter()
+        .filter(|token| is_resolved_resegment_token(token))
+        .count();
+    let resolved_chars = tokens
+        .iter()
+        .filter(|token| is_resolved_resegment_token(token))
+        .map(|token| token.surface.chars().count())
+        .sum::<usize>();
+    let has_separator = tokens
+        .iter()
+        .any(|token| is_resegment_separator_surface(&token.surface));
+    (resolved_count >= 2 || (resolved_count >= 1 && has_separator))
+        && resolved_chars * 2 >= surface.chars().count()
+}
+
+fn has_boundary_separator_split(surface: &str, tokens: &[Token]) -> bool {
+    let starts_with_separator = surface
+        .chars()
+        .next()
+        .is_some_and(is_resegment_separator_char);
+    let ends_with_separator = surface
+        .chars()
+        .next_back()
+        .is_some_and(is_resegment_separator_char);
+    (starts_with_separator
+        && tokens
+            .first()
+            .is_some_and(|token| is_resegment_separator_surface(&token.surface)))
+        || (ends_with_separator
+            && tokens
+                .last()
+                .is_some_and(|token| is_resegment_separator_surface(&token.surface)))
+}
+
+fn is_resolved_resegment_token(token: &Token) -> bool {
+    token.is_known() || is_domain_unknown_surface(&token.surface)
+}
+
+fn is_resegment_separator_surface(surface: &str) -> bool {
+    let mut chars = surface.chars();
+    matches!(chars.next(), Some(ch) if chars.next().is_none() && is_resegment_separator_char(ch))
+}
+
+fn is_resegment_separator_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '・' | '：' | ':' | '【' | '】' | '「' | '」' | '（' | '）' | '(' | ')'
+    )
+}
+
+fn unknown_group_end(chars: &[char], start: usize) -> usize {
+    if !is_unknown_group_char(chars[start]) {
+        return start;
+    }
+    let mut end = start + 1;
+    while end < chars.len() && is_unknown_group_char(chars[end]) {
+        end += 1;
+    }
+    end
+}
+
+fn is_unknown_group_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric()
+        || matches!(
+            ch,
+            '.' | '/' | '%' | '％' | '-' | '+' | '*' | '×' | '[' | ']'
+        )
 }
 
 /// A span resolved against JMdict: the headword form that matched, its entries,
@@ -357,8 +2013,10 @@ fn unknown_token(morpheme: &Morpheme) -> Token {
     Token {
         surface: morpheme.surface.clone(),
         dictionary_form: morpheme.base_form.clone(),
-        reasons: Vec::new(),
+        reasons: inflection_reasons(morpheme),
         entries: Vec::new(),
+        source_pos: None,
+        note_override: None,
     }
 }
 
@@ -412,6 +2070,10 @@ pub struct Token {
     pub reasons: Vec<String>,
     /// Matching dictionary entries (empty for unknown tokens).
     pub entries: Vec<Entry>,
+    #[serde(skip)]
+    pub source_pos: Option<LinderaPos>,
+    #[serde(skip)]
+    pub note_override: Option<String>,
 }
 
 impl Token {
@@ -444,6 +2106,7 @@ mod tests {
                 misc: Vec::new(),
             }],
             common,
+            popup_override: None,
         }
     }
 
@@ -463,6 +2126,13 @@ mod tests {
             .into_iter()
             .filter(Token::is_known)
             .map(|token| token.dictionary_form)
+            .collect()
+    }
+
+    fn surfaces(dict: &Dictionary, line: &str) -> Vec<String> {
+        dict.analyze_line(line)
+            .into_iter()
+            .map(|token| token.surface)
             .collect()
     }
 
@@ -491,6 +2161,395 @@ mod tests {
     }
 
     #[test]
+    fn resegments_long_unknown_katakana_compound_into_known_terms() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["クリティカル"], &[], "adj-na", &["critical"]),
+            entry(&["ダメージ"], &[], "n", &["damage"]),
+            entry(&["アップ"], &[], "n", &["increase"]),
+            entry(&["フラク"], &[], "n", &["frac"]),
+            entry(&["トシ"], &[], "n", &["toshi"]),
+            entry(&["デ"], &[], "n", &["de"]),
+            entry(&["ス"], &[], "n", &["su"]),
+        ]);
+
+        assert_eq!(
+            surfaces(&dict, "クリティカルダメージアップ"),
+            vec!["クリティカル", "ダメージ", "アップ"]
+        );
+    }
+
+    #[test]
+    fn keeps_unresolved_katakana_name_as_one_unknown() {
+        let dict = Dictionary::from_entries(vec![entry(&["ダメージ"], &[], "n", &["damage"])]);
+        let tokens = dict.analyze_line("ラハイロイ");
+
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].surface, "ラハイロイ");
+        assert!(!tokens[0].is_known());
+    }
+
+    #[test]
+    fn merges_unresolved_katakana_name_around_incidental_known_token() {
+        let dict = Dictionary::from_entries(vec![entry(&["スター"], &[], "n", &["star"])]);
+        let tokens = dict.analyze_line("ナスターシャ");
+
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].surface, "ナスターシャ");
+        assert!(!tokens[0].is_known());
+    }
+
+    #[test]
+    fn keeps_mostly_known_katakana_compound_split_with_ocr_tail() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["クリティカル"], &[], "adj-na", &["critical"]),
+            entry(&["ダメージ"], &[], "n", &["damage"]),
+        ]);
+
+        assert_eq!(
+            surfaces(&dict, "クリティカルダメージアツプ"),
+            vec!["クリティカル", "ダメージ", "アツプ"]
+        );
+    }
+
+    #[test]
+    fn resegments_domain_unknown_with_leading_separator() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["ソラ"], &[], "n", &["sky"]),
+            entry(&["大地"], &["だいち"], "n", &["earth"]),
+        ]);
+
+        assert_eq!(
+            surfaces(&dict, "ソラの大地・ラハイロイ"),
+            vec!["ソラ", "の", "大地", "・", "ラハイロイ"]
+        );
+    }
+
+    #[test]
+    fn resegments_domain_unknown_with_known_tail() {
+        let dict = Dictionary::from_entries(vec![entry(&["エンド"], &[], "n", &["end"])]);
+
+        assert_eq!(
+            surfaces(&dict, "ラハイロイ・エンドボ"),
+            vec!["ラハイロイ", "・", "エンド", "ボ"]
+        );
+    }
+
+    #[test]
+    fn keeps_middle_dot_proper_name_without_domain_anchor() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["ディ"], &[], "n", &["D"]),
+            entry(&["マ"], &[], "n", &["ma"]),
+            entry(&["プレーン"], &[], "n", &["plane"]),
+            entry(&["ズ"], &[], "n", &["z"]),
+        ]);
+
+        assert_eq!(
+            surfaces(&dict, "ディマー・プレーンズ"),
+            vec!["ディマー・プレーンズ"]
+        );
+    }
+
+    #[test]
+    fn splits_boundary_separators_out_of_unknown_runs() {
+        let dict = Dictionary::from_entries(vec![entry(&["マトリクス"], &[], "n", &["matrix"])]);
+
+        assert_eq!(surfaces(&dict, "CV：伊藤美来")[..2], ["CV", "："]);
+        assert_eq!(surfaces(&dict, "マトリクス・"), vec!["マトリクス", "・"]);
+    }
+
+    #[test]
+    fn merges_domain_unknown_terms() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["音"], &["おと"], "n", &["sound"]),
+            entry(&["骸"], &["むくろ"], "n", &["corpse"]),
+            entry(&["スキル"], &[], "n", &["skill"]),
+        ]);
+        let tokens = dict.analyze_line("音骸スキル");
+
+        assert_eq!(surfaces(&dict, "音骸スキル"), vec!["音骸", "スキル"]);
+        assert!(!tokens[0].is_known());
+        assert!(tokens[1].is_known());
+    }
+
+    #[test]
+    fn merges_wuthering_domain_proper_nouns() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["リンク"], &[], "n", &["link"]),
+            entry(&["ドス"], &[], "n", &["DOS"]),
+            entry(&["パイン"], &[], "n", &["pine"]),
+            entry(&["ダメージ"], &[], "n", &["damage"]),
+            entry(&["アップ"], &[], "n", &["increase"]),
+            entry(&["スター"], &[], "n", &["star"]),
+            entry(&["シ"], &[], "n", &["si"]),
+            entry(&["グリフ"], &[], "n", &["glyph"]),
+            entry(&["ェ"], &[], "prt", &["to"]),
+            entry(&["クス"], &[], "n", &["camphor tree"]),
+            entry(&["拾"], &["じゅう"], "num", &["ten"]),
+            entry(&["方"], &["かた"], "n", &["direction"]),
+            entry(&["薬局"], &["やっきょく"], "n", &["pharmacy"]),
+            entry(&["で"], &[], "prt", &["at"]),
+            entry(&["購入"], &["こうにゅう"], "n,vs,vt", &["purchase"]),
+            entry(&["マウント"], &[], "n", &["mount"]),
+            entry(&["ギャラ"], &[], "n", &["appearance fee"]),
+            entry(&["無音"], &["むおん"], "n", &["silence"]),
+            entry(&["連星"], &["れんせい"], "n", &["binary star"]),
+            entry(&["任務"], &["にんむ"], "n", &["mission"]),
+            entry(&["ブラ"], &[], "n", &["bra"]),
+            entry(&["ン"], &[], "n-pref", &["some"]),
+            entry(&["ト"], &[], "n", &["G"]),
+            entry(&["焦熱"], &["しょうねつ"], "n", &["scorching heat"]),
+            entry(&["レジ"], &[], "n", &["cash register"]),
+            entry(&["イン"], &[], "pref", &["in"]),
+            entry(&["イド"], &[], "n", &["id"]),
+            entry(&["マター"], &[], "n", &["matter"]),
+            entry(&["スペース"], &[], "n", &["space"]),
+        ]);
+
+        let linked_spine = dict.analyze_line("リンクドスパイン");
+        assert_eq!(linked_spine.len(), 1);
+        assert_eq!(linked_spine[0].surface, "リンクドスパイン");
+        assert!(!linked_spine[0].is_known());
+
+        assert_eq!(
+            surfaces(&dict, "クールタイム：20秒"),
+            vec!["クールタイム", "：", "20", "秒"]
+        );
+        assert_eq!(
+            surfaces(&dict, "【共形エネルギー】"),
+            vec!["【", "共形エネルギー", "】"]
+        );
+        assert_eq!(
+            surfaces(&dict, "気動ダメージアップ"),
+            vec!["気動", "ダメージ", "アップ"]
+        );
+        assert_eq!(
+            surfaces(&dict, "ロスト・ドリーム"),
+            vec!["ロスト・ドリーム"]
+        );
+        assert_eq!(surfaces(&dict, "イレーナ"), vec!["イレーナ"]);
+        assert_eq!(surfaces(&dict, "ダーニャ"), vec!["ダーニャ"]);
+        assert_eq!(surfaces(&dict, "フラクトシデス"), vec!["フラクトシデス"]);
+        assert_eq!(surfaces(&dict, "ナスターシャ"), vec!["ナスターシャ"]);
+        assert_eq!(surfaces(&dict, "グリフェックス"), vec!["グリフェックス"]);
+        assert_eq!(
+            surfaces(&dict, "拾方薬局で購入"),
+            vec!["拾方薬局", "で", "購入"]
+        );
+        assert_eq!(
+            surfaces(&dict, "マウントギャラルの無音"),
+            vec!["マウントギャラル", "の", "無音"]
+        );
+        assert_eq!(
+            surfaces(&dict, "連星任務・ブラント"),
+            vec!["連星", "任務", "・", "ブラント"]
+        );
+        assert_eq!(surfaces(&dict, "焦熱レジ..."), vec!["焦熱", "レジ..."]);
+        assert_eq!(surfaces(&dict, "気動イン..."), vec!["気動", "イン..."]);
+        assert_eq!(
+            surfaces(&dict, "ヴォイドマター粒"),
+            vec!["ヴォイドマター粒"]
+        );
+        assert_eq!(surfaces(&dict, "オイドマター"), vec!["オイドマター"]);
+        assert_eq!(
+            surfaces(&dict, "ヴォイドスペースへ"),
+            vec!["ヴォイドスペース", "へ"]
+        );
+    }
+
+    #[test]
+    fn keeps_ui_dates_as_single_value_tokens() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["月"], &["つき"], "n", &["moon"]),
+            entry(&["日"], &["ひ"], "n", &["day"]),
+        ]);
+
+        assert_eq!(surfaces(&dict, "2月2日"), vec!["2月2日"]);
+        assert_eq!(surfaces(&dict, "2026/05/22"), vec!["2026/05/22"]);
+    }
+
+    #[test]
+    fn keeps_clipped_material_fragments_as_unknown_terms() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["声"], &["こえ"], "n", &["voice"]),
+            entry(&["律"], &["りつ"], "n", &["law"]),
+            entry(&["中音"], &["ちゅうおん"], "n", &["medium tone"]),
+            entry(&["叫"], &["きょう"], "n", &["shout"]),
+        ]);
+
+        let tokens = dict.analyze_line("声律の苗 中音・叫...");
+
+        assert_eq!(
+            tokens
+                .iter()
+                .map(|token| token.surface.as_str())
+                .collect::<Vec<_>>(),
+            vec!["声律", "の", "苗", "中音", "・", "叫..."]
+        );
+        assert!(!tokens[0].is_known());
+        assert!(!tokens[5].is_known());
+    }
+
+    #[test]
+    fn merges_domain_known_terms() {
+        let dict = sample_dict();
+        let tokens = dict.analyze_line("購入可能数");
+
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].dictionary_form, "購入可能数");
+        assert!(tokens[0].is_known());
+        assert_eq!(
+            tokens[0].entries[0]
+                .popup_override
+                .as_ref()
+                .unwrap()
+                .glosses,
+            vec!["available purchase count; purchasable quantity  (n)"]
+        );
+    }
+
+    #[test]
+    fn splits_ui_count_label_compounds() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["所持"], &["しょじ"], "n,vs,vt", &["possession"]),
+            entry(&["購入"], &["こうにゅう"], "n,vs,vt", &["purchase"]),
+            entry(&["可能"], &["かのう"], "adj-na,n", &["possible"]),
+            entry(&["合成"], &["ごうせい"], "n,vs,vt,adj-no", &["composition"]),
+            entry(&["数"], &["すう"], "n", &["number"]),
+            entry(&["武器"], &["ぶき"], "n", &["weapon"]),
+            entry(&["素材"], &["そざい"], "n", &["material"]),
+            entry(
+                &["購入可能数"],
+                &["こうにゅうかのうすう"],
+                "n",
+                &["available purchase count"],
+            ),
+            entry(&["合成数"], &["ごうせいすう"], "n", &["synthetic number"]),
+        ]);
+
+        assert_eq!(
+            surfaces(&dict, "所持数：15"),
+            vec!["所持", "数", "：", "15"]
+        );
+        assert_eq!(
+            surfaces(&dict, "購入可能数：1/1"),
+            vec!["購入可能数", "：", "1/1"]
+        );
+        assert_eq!(surfaces(&dict, "合成数 1"), vec!["合成", "数", "1"]);
+        assert_eq!(surfaces(&dict, "武器EXP素材"), vec!["武器", "EXP", "素材"]);
+        assert_eq!(surfaces(&dict, "武器EXP"), vec!["武器EXP"]);
+    }
+
+    #[test]
+    fn resolves_domain_game_terms_to_preferred_popup_metadata() {
+        let dict = sample_dict();
+        let tokens = dict.analyze_line("売り切れショップ共鳴者秒間セットドロップ特級装備");
+
+        assert_eq!(tokens.len(), 8);
+        assert_eq!(tokens[0].surface, "売り切れ");
+        assert_eq!(tokens[0].dictionary_form, "売り切れる");
+        assert_eq!(
+            tokens[0].entries[0].senses[0].part_of_speech,
+            vec!["v1", "vi"]
+        );
+        assert_eq!(
+            tokens[1].entries[0]
+                .popup_override
+                .as_ref()
+                .unwrap()
+                .glosses,
+            vec!["shop; store  (n)"]
+        );
+        assert_eq!(
+            tokens[2].entries[0]
+                .popup_override
+                .as_ref()
+                .unwrap()
+                .glosses,
+            vec!["resonator (Wuthering Waves term)"]
+        );
+        assert_eq!(tokens[3].entries[0].senses[0].part_of_speech, vec!["n-suf"]);
+        assert_eq!(
+            tokens[3].entries[0]
+                .popup_override
+                .as_ref()
+                .unwrap()
+                .glosses,
+            vec!["for ... seconds; interval measured in seconds  (n-suf)"]
+        );
+        assert_eq!(
+            tokens[4].entries[0]
+                .popup_override
+                .as_ref()
+                .unwrap()
+                .glosses,
+            vec!["set  (n)"]
+        );
+        assert_eq!(
+            tokens[5].entries[0]
+                .popup_override
+                .as_ref()
+                .unwrap()
+                .glosses,
+            vec!["drop; loot drop  (game UI noun)"]
+        );
+        assert_eq!(
+            tokens[6].entries[0].senses[0].part_of_speech,
+            vec!["n", "adj-no"]
+        );
+        assert_eq!(
+            tokens[7].entries[0]
+                .popup_override
+                .as_ref()
+                .unwrap()
+                .glosses,
+            vec!["equipment; outfit; to equip  (n, vs, vt)"]
+        );
+    }
+
+    #[test]
+    fn keeps_domain_currency_as_unknown_name() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["星"], &["ほし"], "n", &["star"]),
+            entry(&["声"], &["こえ"], "n", &["voice"]),
+        ]);
+
+        let tokens = dict.analyze_line("星声");
+
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].surface, "星声");
+        assert!(!tokens[0].is_known());
+    }
+
+    #[test]
+    fn merges_compact_numeric_unknown_runs() {
+        let dict = sample_dict();
+
+        assert_eq!(surfaces(&dict, "0/20"), vec!["0", "/", "20"]);
+        assert_eq!(
+            surfaces(&dict, "進捗：1/1"),
+            vec!["進捗", "：", "1", "/", "1"]
+        );
+        assert_eq!(surfaces(&dict, "2.40"), vec!["2.40"]);
+        assert_eq!(surfaces(&dict, "100Pt"), vec!["100Pt"]);
+        assert_eq!(surfaces(&dict, "7.2％"), vec!["7.2％"]);
+        assert_eq!(surfaces(&dict, "400％分"), vec!["400", "％", "分"]);
+        assert_eq!(surfaces(&dict, "1Ptにつき"), vec!["1", "Pt", "につき"]);
+        assert_eq!(surfaces(&dict, "を10Pt"), vec!["を", "10", "Pt"]);
+    }
+
+    #[test]
+    fn keeps_unknown_punctuation_tokens_covering_the_line() {
+        let dict = Dictionary::from_entries(vec![entry(&["斉爆効果"], &[], "n", &["effect"])]);
+
+        assert_eq!(
+            surfaces(&dict, "【斉爆効果】"),
+            vec!["【", "斉爆効果", "】"]
+        );
+        assert_eq!(surfaces(&dict, "◆"), vec!["◆"]);
+        assert_eq!(surfaces(&dict, "……"), vec!["……"]);
+    }
+
+    #[test]
     fn inflected_form_carries_a_reason_note() {
         let dict = sample_dict();
         let verb = dict
@@ -516,6 +2575,177 @@ mod tests {
         assert!(
             forms.iter().any(|f| f == "する" || f == "為る"),
             "forms: {forms:?}"
+        );
+    }
+
+    #[test]
+    fn suru_nominal_te_form_beats_shite_particle_homograph() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["入力"], &["にゅうりょく"], "vs", &["input"]),
+            entry(&["する"], &["する"], "vs-i", &["to do"]),
+            entry_with_common(&[], &["して"], "prt", &["by means of"], true),
+            entry(
+                &["下さる"],
+                &["くださる"],
+                "v5aru",
+                &["to kindly do for one"],
+            ),
+        ]);
+        let tokens = dict.analyze_line("入力してください");
+        let token = tokens
+            .iter()
+            .find(|token| token.surface == "して")
+            .unwrap_or_else(|| panic!("して token in {tokens:?}"))
+            .clone();
+        assert_eq!(token.dictionary_form, "する");
+        assert_eq!(token.reasons, vec!["連用形".to_string()]);
+        let pos = &token
+            .entries
+            .first()
+            .expect("entry")
+            .senses
+            .first()
+            .expect("sense")
+            .part_of_speech;
+        assert_eq!(pos, &vec!["vs-i".to_string()]);
+    }
+
+    #[test]
+    fn suru_nominal_past_form_beats_shita_noun_homograph() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["発動"], &["はつどう"], "vs", &["activation"]),
+            entry(&["する"], &["する"], "vs-i", &["to do"]),
+            entry(&["下"], &["した"], "n", &["below"]),
+        ]);
+        let tokens = dict.analyze_line("発動した");
+        let token = tokens
+            .iter()
+            .find(|token| token.surface == "した")
+            .unwrap_or_else(|| panic!("した token in {tokens:?}"));
+        assert_eq!(token.dictionary_form, "する");
+        assert_eq!(token.reasons, vec!["過去".to_string()]);
+        let pos = &token
+            .entries
+            .first()
+            .expect("entry")
+            .senses
+            .first()
+            .expect("sense")
+            .part_of_speech;
+        assert_eq!(pos, &vec!["vs-i".to_string()]);
+    }
+
+    #[test]
+    fn te_iru_becomes_progressive_auxiliary() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["見る"], &["みる"], "v1", &["to see"]),
+            entry_with_common(&[], &["て"], "prt", &["connective te-form particle"], true),
+            entry(&["いる"], &["いる"], "v1", &["to be"]),
+        ]);
+        let tokens = dict.analyze_line("見ている");
+        let token = tokens
+            .iter()
+            .find(|token| token.surface == "いる")
+            .unwrap_or_else(|| panic!("いる token in {tokens:?}"));
+        assert_eq!(token.dictionary_form, "居る");
+        assert_eq!(token.reasons, vec!["補助動詞".to_string()]);
+        assert_eq!(token.source_pos, Some(LinderaPos::AuxVerb));
+        let popup = token.entries[0].popup_override.as_ref().expect("popup");
+        assert_eq!(
+            popup.glosses,
+            vec!["to be ...-ing  (aux-v, v1)".to_string()]
+        );
+    }
+
+    #[test]
+    fn dekiru_stem_prefers_ability_over_out_of_stock_homograph() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["できる"], &["できる"], "v5r", &["to be out of"]),
+            entry(&["無い"], &["ない"], "aux-adj", &["not"]),
+        ]);
+        let tokens = dict.analyze_line("できない");
+        let token = tokens
+            .iter()
+            .find(|token| token.surface == "でき")
+            .unwrap_or_else(|| panic!("でき token in {tokens:?}"));
+        assert_eq!(token.dictionary_form, "できる");
+        assert_eq!(token.reasons, vec!["未然形".to_string()]);
+        assert_eq!(
+            token.entries[0].senses[0].part_of_speech,
+            vec!["v1".to_string(), "vi".to_string()]
+        );
+        assert_eq!(
+            token.entries[0]
+                .popup_override
+                .as_ref()
+                .expect("popup")
+                .glosses,
+            vec!["to be able to; can  (v1, vi)".to_string()]
+        );
+    }
+
+    #[test]
+    fn suru_te_iru_becomes_progressive_auxiliary() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["入力"], &["にゅうりょく"], "vs", &["input"]),
+            entry(&["する"], &["する"], "vs-i", &["to do"]),
+            entry_with_common(&[], &["して"], "prt", &["by means of"], true),
+            entry(&["いる"], &["いる"], "v1", &["to be"]),
+        ]);
+        let tokens = dict.analyze_line("入力している");
+        let shite = tokens
+            .iter()
+            .find(|token| token.surface == "して")
+            .unwrap_or_else(|| panic!("して token in {tokens:?}"));
+        assert_eq!(shite.dictionary_form, "する");
+
+        let iru = tokens
+            .iter()
+            .find(|token| token.surface == "いる")
+            .unwrap_or_else(|| panic!("いる token in {tokens:?}"));
+        assert_eq!(iru.dictionary_form, "居る");
+        assert_eq!(iru.source_pos, Some(LinderaPos::AuxVerb));
+    }
+
+    #[test]
+    fn merges_honorific_prefix_with_known_base_word() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["御"], &["ご"], "pref", &["honorific prefix"]),
+            entry(
+                &["利用"],
+                &["りよう"],
+                "n",
+                &["use; utilization; utilisation; application"],
+            ),
+        ]);
+        let token = dict
+            .analyze_line("ご利用")
+            .into_iter()
+            .next()
+            .expect("token");
+        assert_eq!(token.surface, "ご利用");
+        assert_eq!(token.dictionary_form, "利用");
+        assert_eq!(
+            token.note_override.as_deref(),
+            Some("Honorific ご prefix on 利用.")
+        );
+        let popup = token.entries[0].popup_override.as_ref().expect("popup");
+        assert_eq!(
+            popup.ruby,
+            vec![
+                RubySegment {
+                    text: "ご".to_string(),
+                    furigana: None,
+                },
+                RubySegment {
+                    text: "利用".to_string(),
+                    furigana: Some("りよう".to_string()),
+                },
+            ]
+        );
+        assert_eq!(
+            popup.glosses,
+            vec!["use; utilization; utilisation; application  (n)".to_string()]
         );
     }
 
@@ -591,6 +2821,27 @@ mod tests {
             .expect("sense")
             .part_of_speech;
         assert_eq!(pos, &vec!["aux-v".to_string()]);
+    }
+
+    #[test]
+    fn polite_past_auxiliary_chain_beats_surface_noun_homograph() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["飲む"], &["のむ"], "v5m", &["to drink"]),
+            entry(&["真下", "ました"], &["ました"], "n", &["directly below"]),
+        ]);
+        let token = dict
+            .analyze_line("飲みました")
+            .into_iter()
+            .find(|token| token.surface == "ました")
+            .expect("polite-past auxiliary token");
+        assert_eq!(token.dictionary_form, "ます");
+        assert!(!token.is_known());
+        assert_eq!(token.source_pos, Some(LinderaPos::AuxVerb));
+        assert_eq!(token.reasons, vec!["丁寧".to_string(), "過去".to_string()]);
+        assert_eq!(
+            token.note_override.as_deref(),
+            Some("Polite past auxiliary.")
+        );
     }
 
     #[test]

@@ -113,6 +113,31 @@ enum Command {
         #[arg(long)]
         allow_failures: bool,
     },
+    /// Score every eval.json under a corpus root with one shared OCR engine.
+    EvalCorpus {
+        #[arg(long, default_value = "eval")]
+        root: PathBuf,
+        #[arg(long, default_value = "models/jmdict-eng.json")]
+        lexicon: PathBuf,
+        /// Write the corpus summary report to this path.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Directory for per-image eval reports.
+        #[arg(long, default_value = "target/eval/corpus")]
+        out_dir: PathBuf,
+        /// Minimum IoU for strict matching; tolerant bounds jitter can also match.
+        #[arg(long, default_value_t = 0.50)]
+        min_iou: f32,
+        /// Number of lowest-scoring image summaries to print.
+        #[arg(long, default_value_t = 20)]
+        worst: usize,
+        /// Required aggregate score for a successful exit.
+        #[arg(long, default_value_t = 1.0)]
+        min_aggregate: f32,
+        /// Print/write reports but exit 0 even when the aggregate is below threshold.
+        #[arg(long)]
+        allow_failures: bool,
+    },
     /// Delete image files under `%LOCALAPPDATA%\mite`.
     CleanImages {
         /// Print the images that would be deleted without removing them.
@@ -145,6 +170,26 @@ fn main() -> Result<()> {
             &lexicon,
             out,
             min_iou,
+            allow_failures,
+        ),
+        Command::EvalCorpus {
+            root,
+            lexicon,
+            out,
+            out_dir,
+            min_iou,
+            worst,
+            min_aggregate,
+            allow_failures,
+        } => cmd_eval_corpus(
+            &cli.config,
+            &root,
+            &lexicon,
+            out,
+            out_dir,
+            min_iou,
+            worst,
+            min_aggregate,
             allow_failures,
         ),
         Command::CleanImages { dry_run } => cmd_clean_images(dry_run),
@@ -233,6 +278,50 @@ fn cmd_eval(
         bail!(
             "eval score is imperfect: aggregate {:.1}%",
             report.aggregate_score * 100.0
+        );
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_eval_corpus(
+    config_path: &Path,
+    root: &Path,
+    lexicon: &Path,
+    out: Option<PathBuf>,
+    out_dir: PathBuf,
+    min_iou: f32,
+    worst: usize,
+    min_aggregate: f32,
+    allow_failures: bool,
+) -> Result<()> {
+    if !(0.0..=1.0).contains(&min_iou) {
+        bail!("--min-iou must be in [0, 1], got {min_iou}");
+    }
+    if !(0.0..=1.0).contains(&min_aggregate) {
+        bail!("--min-aggregate must be in [0, 1], got {min_aggregate}");
+    }
+    let config = load_or_default(config_path)?;
+    let report = eval::run_eval_corpus(
+        &config,
+        root,
+        lexicon,
+        eval::EvalCorpusOptions {
+            min_iou,
+            out_dir: Some(out_dir),
+            progress: true,
+        },
+    )?;
+    eval::render_eval_corpus_report(&report, worst);
+    if let Some(out) = out {
+        artifact::write_json_pretty(&out, &report)?;
+        println!("wrote {}", out.display());
+    }
+    if report.aggregate_score + 0.0001 < min_aggregate && !allow_failures {
+        bail!(
+            "eval corpus aggregate {:.2}% is below required {:.2}%",
+            report.aggregate_score * 100.0,
+            min_aggregate * 100.0
         );
     }
     Ok(())

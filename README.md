@@ -89,6 +89,7 @@ cargo run -- doctor
 cargo run -- list-windows
 cargo run -- watch [--title T | --window-id N | --pid P] [--auto] [--hud]
 cargo run -- eval --image path\to\underlying.png --labels path\to\eval.json
+cargo run -- eval-corpus --root eval --out target\eval\corpus-summary.json --allow-failures
 cargo run --bin eval-ui
 cargo run -- clean-images [--dry-run]
 ```
@@ -126,6 +127,7 @@ or popup metadata behavior changes:
 
 ```powershell
 .\scripts\bootstrap-dev.ps1 -EvalDataOnly
+cargo run -- eval-corpus --root eval --out target\eval\corpus-summary.json --allow-failures
 .\scripts\precommit.ps1 -IncludeEval
 ```
 

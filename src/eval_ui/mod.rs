@@ -809,6 +809,7 @@ mod tests {
                 misc: Vec::new(),
             }],
             common: true,
+            popup_override: None,
         }]);
         let detection = eval::draft_expected_detection(
             &dict,
