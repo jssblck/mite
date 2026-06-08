@@ -19,6 +19,7 @@ const SAME_BLOCK_MIN_GAP_RATIO: f32 = -0.35;
 const SAME_BLOCK_LEFT_ALIGN_RATIO: f32 = 1.4;
 const SAME_BLOCK_MIN_OVERLAP_RATIO: f32 = 0.45;
 const SAME_BLOCK_MAX_HEIGHT_RATIO: f32 = 1.75;
+const SAME_BLOCK_RESET_MAX_GAP_RATIO: f32 = 2.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct TextSpan {
@@ -136,8 +137,9 @@ fn group_text_blocks(dict: &Dictionary, items: &[RecognizedText]) -> Vec<Vec<usi
             .rev()
             .find(|(_, block)| {
                 block.lines.last().copied().is_some_and(|previous| {
-                    same_text_block(&items[previous], item)
-                        && lexically_continues_block(dict, &block.text, &item.text)
+                    lexically_continues_block(dict, &block.text, &item.text)
+                        && (same_text_block(&items[previous], item)
+                            || line_wrap_reset_candidate(&items[previous], item))
                 })
             })
             .map(|(block_index, _)| block_index);
@@ -155,6 +157,14 @@ fn group_text_blocks(dict: &Dictionary, items: &[RecognizedText]) -> Vec<Vec<usi
 }
 
 fn same_text_block(previous: &RecognizedText, next: &RecognizedText) -> bool {
+    same_text_block_with_max_gap(previous, next, SAME_BLOCK_MAX_GAP_RATIO)
+}
+
+fn same_text_block_with_max_gap(
+    previous: &RecognizedText,
+    next: &RecognizedText,
+    max_gap_ratio: f32,
+) -> bool {
     if previous.text.trim().is_empty()
         || next.text.trim().is_empty()
         || is_hard_block_end(&previous.text)
@@ -175,13 +185,47 @@ fn same_text_block(previous: &RecognizedText, next: &RecognizedText) -> bool {
     }
 
     let gap = b.y - a.bottom();
-    if gap < avg_height * SAME_BLOCK_MIN_GAP_RATIO || gap > avg_height * SAME_BLOCK_MAX_GAP_RATIO {
+    if gap < avg_height * SAME_BLOCK_MIN_GAP_RATIO || gap > avg_height * max_gap_ratio {
         return false;
     }
 
     let left_aligned = (a.x - b.x).abs() <= avg_height * SAME_BLOCK_LEFT_ALIGN_RATIO;
     let overlap = horizontal_overlap_ratio(a, b) >= SAME_BLOCK_MIN_OVERLAP_RATIO;
     left_aligned || overlap
+}
+
+fn line_wrap_reset_candidate(previous: &RecognizedText, next: &RecognizedText) -> bool {
+    if previous.text.trim().is_empty()
+        || next.text.trim().is_empty()
+        || is_hard_block_end(&previous.text)
+    {
+        return false;
+    }
+
+    let a = previous.text_box.rect;
+    let b = next.text_box.rect;
+    if b.y < a.y {
+        return false;
+    }
+
+    let avg_height = ((a.height + b.height) / 2.0).max(1.0);
+    let height_ratio = a.height.max(b.height) / a.height.min(b.height).max(1.0);
+    if height_ratio > SAME_BLOCK_MAX_HEIGHT_RATIO {
+        return false;
+    }
+
+    let gap = b.y - a.bottom();
+    if gap < avg_height * SAME_BLOCK_MIN_GAP_RATIO
+        || gap > avg_height * SAME_BLOCK_RESET_MAX_GAP_RATIO
+    {
+        return false;
+    }
+
+    // Some game UI wraps a line by resetting to the paragraph's left edge while
+    // OCR only captures a right-edge tail on the previous visual line. The
+    // lexical gate in group_text_blocks still has to prove a full known token
+    // crosses this reset before lines are joined.
+    b.x < a.x
 }
 
 fn horizontal_overlap_ratio(a: Rect, b: Rect) -> f32 {
@@ -232,6 +276,7 @@ fn is_preferred_cross_boundary_token(token: &Token) -> bool {
             | "効果"
             | "持続"
             | "強化"
+            | "不協和値"
             | "彼女"
             | "人体"
             | "それとも"
@@ -272,6 +317,11 @@ fn is_preferred_cross_boundary_token(token: &Token) -> bool {
             | "真実"
             | "未来"
             | "残酷さ"
+            | "持つ"
+            | "皮肉"
+            | "変身"
+            | "ある"
+            | "ない"
     )
 }
 
@@ -406,6 +456,9 @@ mod tests {
             entry("効", "efficacy"),
             entry("果", "result"),
             entry("効果", "effect"),
+            entry("不協和", "discord"),
+            entry("値", "value"),
+            entry("不協和値", "discord value"),
             entry("彼", "he"),
             entry("女", "woman"),
             entry("彼女", "she"),
@@ -458,6 +511,19 @@ mod tests {
             entry("残", "remainder"),
             entry("酷さ", "cruelness"),
             entry("残酷さ", "cruelty"),
+            entry("持", "draw"),
+            entry("持つ", "hold"),
+            entry("皮", "skin"),
+            entry("肉", "meat"),
+            entry("皮肉", "irony"),
+            entry("変", "strange"),
+            entry("身", "body"),
+            entry("変身", "transformation"),
+            entry("あ", "muteness"),
+            entry("ある", "exist"),
+            entry("な", "particle"),
+            entry("い", "greatness"),
+            entry("ない", "not"),
             entry("人", "person"),
             entry("人物", "person"),
             entry("物", "thing"),
@@ -518,6 +584,38 @@ mod tests {
         ];
 
         assert_eq!(group_text_blocks(&dict, &items), vec![vec![0, 1]]);
+    }
+
+    #[test]
+    fn groups_lexical_wraps_across_left_margin_reset() {
+        let dict = block_test_dict();
+        let items = vec![
+            recognized(1, Rect::new(725.0, 725.0, 396.0, 24.0), "以下の効"),
+            recognized(2, Rect::new(117.0, 792.0, 204.0, 24.0), "果を得る"),
+        ];
+        let lines = analyze_recognized_lines(&dict, &items);
+
+        let left = lines[0]
+            .tokens
+            .iter()
+            .find(|token| token.visible_surface == "効")
+            .expect("wrapped 効");
+        assert_eq!(left.token.dictionary_form, "効果");
+        assert!(left.wraps_after);
+        assert_eq!(lines[1].tokens[0].visible_surface, "果");
+        assert_eq!(lines[1].tokens[0].token.dictionary_form, "効果");
+        assert!(lines[1].tokens[0].wraps_before);
+    }
+
+    #[test]
+    fn does_not_join_margin_reset_without_lexical_completion() {
+        let dict = block_test_dict();
+        let items = vec![
+            recognized(1, Rect::new(725.0, 725.0, 396.0, 24.0), "以下の効"),
+            recognized(2, Rect::new(117.0, 792.0, 204.0, 24.0), "値を得る"),
+        ];
+
+        assert_eq!(group_text_blocks(&dict, &items), vec![vec![0], vec![1]]);
     }
 
     #[test]
@@ -695,6 +793,13 @@ mod tests {
             ("真", "実", "真実"),
             ("未", "来", "未来"),
             ("残", "酷さ", "残酷さ"),
+            ("不協和", "値", "不協和値"),
+            ("持", "つ", "持つ"),
+            ("皮", "肉", "皮肉"),
+            ("変", "身", "変身"),
+            ("あ", "る", "ある"),
+            ("あ", "り", "ある"),
+            ("な", "い", "ない"),
             ("人", "物", "人物"),
             ("物", "資", "物資"),
             ("物", "理", "物理"),

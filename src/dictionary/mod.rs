@@ -133,6 +133,13 @@ const DOMAIN_KNOWN_TERMS: &[KnownTermSpec] = &[
         glosses: &["link state  (n)"],
     },
     KnownTermSpec {
+        surface: "不協和値",
+        dictionary_form: "不協和値",
+        part_of_speech: &["n"],
+        ruby: &[ruby("不協和", Some("ふきょうわ")), ruby("値", Some("ち"))],
+        glosses: &["discord value  (n)"],
+    },
+    KnownTermSpec {
         surface: "お荷物",
         dictionary_form: "荷物",
         part_of_speech: &["n"],
@@ -4124,6 +4131,27 @@ mod tests {
                 .unwrap()
                 .glosses,
             vec!["available purchase count; purchasable quantity  (n)"]
+        );
+
+        let discord_value = dict.analyze_line("不協和値蓄積効率");
+        assert_eq!(discord_value[0].surface, "不協和値");
+        assert_eq!(discord_value[0].dictionary_form, "不協和値");
+        assert_eq!(
+            discord_value[0].entries[0]
+                .popup_override
+                .as_ref()
+                .unwrap()
+                .ruby,
+            vec![
+                crate::dictionary::RubySegment {
+                    text: "不協和".to_string(),
+                    furigana: Some("ふきょうわ".to_string()),
+                },
+                crate::dictionary::RubySegment {
+                    text: "値".to_string(),
+                    furigana: Some("ち".to_string()),
+                }
+            ]
         );
     }
 
