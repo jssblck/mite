@@ -257,6 +257,12 @@ fn is_preferred_cross_boundary_token(token: &Token) -> bool {
             | "パック"
             | "あった"
             | "グラディエーター"
+            | "ダメージ"
+            | "オーバークロック"
+            | "学部"
+            | "曲線"
+            | "引き裂く"
+            | "別れ際"
     )
 }
 
@@ -382,6 +388,7 @@ mod tests {
         Dictionary::from_entries(vec![
             entry("クリティカル", "critical"),
             entry("ダメージ", "damage"),
+            entry("オーバークロック", "overclock"),
             entry("アップ", "up"),
             entry("攻撃力", "attack"),
             entry("発", "departure"),
@@ -412,6 +419,18 @@ mod tests {
             entry("パック", "pack"),
             entry("あった", "existed"),
             entry("グラディエーター", "gladiator"),
+            entry("学", "study"),
+            entry("部", "department"),
+            entry("学部", "faculty"),
+            entry("曲", "song"),
+            entry("線", "line"),
+            entry("曲線", "curve"),
+            entry("引き", "pull"),
+            entry("裂く", "split"),
+            entry("引き裂く", "tear apart"),
+            entry("別れ", "farewell"),
+            entry("際", "edge"),
+            entry("別れ際", "parting moment"),
             entry("HP", "health points"),
             entry("左", "left"),
             entry("右", "right"),
@@ -625,6 +644,12 @@ mod tests {
             ("パ", "ック", "パック"),
             ("あ", "った", "あった"),
             ("グラディエー", "ター", "グラディエーター"),
+            ("ダ", "メージ", "ダメージ"),
+            ("オーバー", "クロック", "オーバークロック"),
+            ("学", "部", "学部"),
+            ("曲", "線", "曲線"),
+            ("引き", "裂く", "引き裂く"),
+            ("別れ", "際", "別れ際"),
         ] {
             let items = vec![
                 recognized(1, Rect::new(100.0, 100.0, 180.0, 24.0), left),
