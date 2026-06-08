@@ -1818,6 +1818,9 @@ fn normalize_policy_homographs(tokens: Vec<Token>) -> Vec<Token> {
             "切替" => kirikae_token(),
             "ください" => kudasai_request_auxiliary_token(),
             "こと" => koto_nominalizer_token(),
+            "により" => niyori_cause_means_token(),
+            "ありがとう" => arigatou_thanks_token(),
+            "あなた" => anata_pronoun_token(),
             "する" => suru_primary_token(),
             "です" => desu_copula_token(),
             "ません" => masen_polite_negative_token(),
@@ -2165,6 +2168,33 @@ fn koto_nominalizer_token() -> Token {
     }
 }
 
+fn niyori_cause_means_token() -> Token {
+    Token {
+        surface: "により".to_string(),
+        dictionary_form: "により".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: Vec::new(),
+            kana: vec!["により".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["exp".to_string()],
+                glosses: vec!["by means of; due to; owing to".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "により".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["by means of; due to; owing to  (exp)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Other),
+        note_override: Some("Cause/means expression; not the similarity noun.".to_string()),
+    }
+}
+
 fn suru_primary_token() -> Token {
     Token {
         surface: "する".to_string(),
@@ -2188,6 +2218,60 @@ fn suru_primary_token() -> Token {
             }),
         }],
         source_pos: Some(LinderaPos::Verb),
+        note_override: None,
+    }
+}
+
+fn arigatou_thanks_token() -> Token {
+    Token {
+        surface: "ありがとう".to_string(),
+        dictionary_form: "ありがとう".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: vec!["有り難う".to_string()],
+            kana: vec!["ありがとう".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["int".to_string()],
+                glosses: vec!["thank you; thanks".to_string()],
+                misc: vec!["uk".to_string()],
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "ありがとう".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["thank you; thanks  (int)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Interjection),
+        note_override: None,
+    }
+}
+
+fn anata_pronoun_token() -> Token {
+    Token {
+        surface: "あなた".to_string(),
+        dictionary_form: "あなた".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: vec!["貴方".to_string()],
+            kana: vec!["あなた".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["pn".to_string()],
+                glosses: vec!["you".to_string()],
+                misc: vec!["uk".to_string()],
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "あなた".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["you  (pn)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Noun),
         note_override: None,
     }
 }
@@ -4753,6 +4837,9 @@ mod tests {
             token("いた", "いた", "n"),
             token("なし", "ない", "adj-i"),
             token("なき", "無き", "adj-i"),
+            token("により", "により", "n"),
+            token("ありがとう", "有り難う", "int"),
+            token("あなた", "貴方", "pn"),
         ]);
 
         assert_eq!(normalized[0].dictionary_form, "ください");
@@ -4802,6 +4889,25 @@ mod tests {
         assert_eq!(
             normalized[7].entries[0].senses[0].part_of_speech,
             vec!["adj-i".to_string()]
+        );
+        assert_eq!(normalized[8].dictionary_form, "により");
+        assert_eq!(
+            normalized[8].entries[0].senses[0].part_of_speech,
+            vec!["exp".to_string()]
+        );
+        assert_eq!(
+            normalized[8].note_override.as_deref(),
+            Some("Cause/means expression; not the similarity noun.")
+        );
+        assert_eq!(normalized[9].dictionary_form, "ありがとう");
+        assert_eq!(
+            normalized[9].entries[0].senses[0].part_of_speech,
+            vec!["int".to_string()]
+        );
+        assert_eq!(normalized[10].dictionary_form, "あなた");
+        assert_eq!(
+            normalized[10].entries[0].senses[0].part_of_speech,
+            vec!["pn".to_string()]
         );
     }
 
