@@ -126,6 +126,13 @@ const DOMAIN_KNOWN_TERMS: &[KnownTermSpec] = &[
         glosses: &["list  (n)"],
     },
     KnownTermSpec {
+        surface: "ベイト",
+        dictionary_form: "ベイト",
+        part_of_speech: &["n"],
+        ruby: &[ruby("ベイト", None)],
+        glosses: &["bait  (n)"],
+    },
+    KnownTermSpec {
         surface: "リンク状態",
         dictionary_form: "リンク状態",
         part_of_speech: &["n"],
@@ -1358,6 +1365,7 @@ impl Dictionary {
         let tokens = self.normalize_suru_passive_form_tokens(tokens);
         let tokens = self.normalize_te_iru_auxiliary_tokens(tokens);
         let tokens = self.normalize_te_shimau_auxiliary_tokens(tokens);
+        let tokens = self.normalize_te_benefactive_auxiliary_tokens(tokens);
         let tokens = normalize_policy_homographs(tokens);
         let tokens = normalize_dekiru_stem_tokens(tokens);
         let tokens = split_contextual_slash_numeric_unknowns(tokens);
@@ -1551,6 +1559,24 @@ impl Dictionary {
         }
         normalized
     }
+
+    fn normalize_te_benefactive_auxiliary_tokens(&self, tokens: Vec<Token>) -> Vec<Token> {
+        // See docs/eval-metadata.md: after a te-form, benefactive verbs such as
+        // 貰える act as request/favor auxiliaries. Keep this gated on the
+        // immediately preceding te connector so ordinary receipt verbs remain
+        // content verbs.
+        let mut normalized = Vec::with_capacity(tokens.len());
+        for token in tokens {
+            if normalized.last().is_some_and(is_te_form_connector_token)
+                && is_benefactive_after_te_token(&token)
+            {
+                normalized.push(te_benefactive_auxiliary_token(&token));
+            } else {
+                normalized.push(token);
+            }
+        }
+        normalized
+    }
 }
 
 fn is_suru_capable_nominal_token(token: &Token) -> bool {
@@ -1674,6 +1700,13 @@ fn is_shimatta_interjection_homograph(token: &Token) -> bool {
     token.surface == "しまった" && token.dictionary_form == "しまった"
 }
 
+fn is_benefactive_after_te_token(token: &Token) -> bool {
+    matches!(
+        token.dictionary_form.as_str(),
+        "もらう" | "もらえる" | "貰う" | "貰える" | "くれる" | "呉れる" | "あげる" | "上げる"
+    )
+}
+
 fn has_verb_pos(entry: &Entry) -> bool {
     entry.senses.iter().any(|sense| {
         sense
@@ -1681,6 +1714,38 @@ fn has_verb_pos(entry: &Entry) -> bool {
             .iter()
             .any(|pos| PosClass::of(pos) == PosClass::Verb)
     })
+}
+
+fn te_benefactive_auxiliary_token(token: &Token) -> Token {
+    let gloss = match token.dictionary_form.as_str() {
+        "くれる" | "呉れる" => "to do ... for someone; to give the favor of ...ing",
+        "あげる" | "上げる" => "to do ... for someone; to give the favor of ...ing",
+        _ => "to receive the favor of ...ing; could you ...",
+    };
+    Token {
+        surface: token.surface.clone(),
+        dictionary_form: token.dictionary_form.clone(),
+        reasons: token.reasons.clone(),
+        entries: vec![Entry {
+            kanji: Vec::new(),
+            kana: vec![token.dictionary_form.clone()],
+            senses: vec![Sense {
+                part_of_speech: vec!["aux-v".to_string(), "v1".to_string()],
+                glosses: vec![gloss.to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: token.dictionary_form.clone(),
+                    furigana: None,
+                }],
+                glosses: vec![format!("{gloss}  (aux-v, v1)")],
+            }),
+        }],
+        source_pos: Some(LinderaPos::AuxVerb),
+        note_override: None,
+    }
 }
 
 fn suru_passive_auxiliary_token() -> Token {
@@ -1898,6 +1963,8 @@ fn normalize_policy_homographs(tokens: Vec<Token>) -> Vec<Token> {
             "その" => demonstrative_token("その", "that; the"),
             "あの" => demonstrative_token("あの", "that (over there)"),
             "ただ" => tada_adverb_token(),
+            "また" => mata_again_token(),
+            "または" => matawa_or_token(),
             "ない" => nai_negative_token(),
             "なく" if token.dictionary_form == "ない" => nai_continuative_token(),
             "くる" => kuru_come_token("くる", Vec::new(), None),
@@ -2422,6 +2489,60 @@ fn tada_adverb_token() -> Token {
             }),
         }],
         source_pos: Some(LinderaPos::Adverb),
+        note_override: None,
+    }
+}
+
+fn mata_again_token() -> Token {
+    Token {
+        surface: "また".to_string(),
+        dictionary_form: "また".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: vec!["又".to_string()],
+            kana: vec!["また".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["adv".to_string()],
+                glosses: vec!["again; once more; also; too".to_string()],
+                misc: vec!["uk".to_string()],
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "また".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["again; once more; also; too  (adv)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Adverb),
+        note_override: None,
+    }
+}
+
+fn matawa_or_token() -> Token {
+    Token {
+        surface: "または".to_string(),
+        dictionary_form: "または".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: vec!["又は".to_string()],
+            kana: vec!["または".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["conj".to_string()],
+                glosses: vec!["or; either ... or ...".to_string()],
+                misc: vec!["uk".to_string()],
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "または".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["or; either ... or ...  (conj)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Conjunction),
         note_override: None,
     }
 }
@@ -4031,8 +4152,43 @@ fn is_false_particle_merge(slice: &[Morpheme], entries: &[&Entry]) -> bool {
 /// topic marker; う 助動詞 → volitional) rather than a frequent noun homograph.
 fn ranked_entries(entries: Vec<&Entry>, major: LinderaPos) -> Vec<Entry> {
     let mut entries: Vec<Entry> = entries.into_iter().cloned().collect();
+    for entry in &mut entries {
+        prefer_lindera_matching_sense(entry, major);
+    }
     entries.sort_by_key(|entry| !entry_matches_lindera_pos(entry, major));
     entries
+}
+
+fn prefer_lindera_matching_sense(entry: &mut Entry, major: LinderaPos) {
+    if major == LinderaPos::Other
+        || entry
+            .senses
+            .first()
+            .is_none_or(|sense| sense_matches_lindera_pos(sense, major))
+    {
+        return;
+    }
+    let Some(index) = entry
+        .senses
+        .iter()
+        .position(|sense| sense_matches_lindera_pos(sense, major))
+    else {
+        return;
+    };
+
+    // See docs/eval-metadata.md: this is the general learner-facing matrix
+    // hook for common contextual POS homographs. JMdict entry order remains
+    // authoritative unless Lindera chose a grammatical role that the first
+    // sense does not cover and a later sense does.
+    let sense = entry.senses.remove(index);
+    entry.senses.insert(0, sense);
+}
+
+fn sense_matches_lindera_pos(sense: &Sense, major: LinderaPos) -> bool {
+    sense
+        .part_of_speech
+        .iter()
+        .any(|pos| major.agrees_with_jmdict(pos))
 }
 
 /// Load the frequency table from a `jpdb-freq/` directory beside the lexicon.
@@ -4167,6 +4323,23 @@ mod tests {
                 misc: Vec::new(),
             }],
             common,
+            popup_override: None,
+        }
+    }
+
+    fn entry_with_senses(kanji: &[&str], kana: &[&str], senses: &[(&[&str], &[&str])]) -> Entry {
+        Entry {
+            kanji: kanji.iter().map(|s| s.to_string()).collect(),
+            kana: kana.iter().map(|s| s.to_string()).collect(),
+            senses: senses
+                .iter()
+                .map(|(pos, glosses)| Sense {
+                    part_of_speech: pos.iter().map(|s| s.to_string()).collect(),
+                    glosses: glosses.iter().map(|s| s.to_string()).collect(),
+                    misc: Vec::new(),
+                })
+                .collect(),
+            common: true,
             popup_override: None,
         }
     }
@@ -4857,6 +5030,39 @@ mod tests {
     }
 
     #[test]
+    fn te_moraeru_becomes_benefactive_auxiliary() {
+        let dict = Dictionary::from_entries(vec![
+            entry(
+                &["言わす"],
+                &["いわす"],
+                "v5s,vt",
+                &["to get someone to say"],
+            ),
+            entry_with_senses(
+                &["貰える"],
+                &["もらえる"],
+                &[
+                    (&["v1"], &["to be able to receive"]),
+                    (&["v1", "aux-v"], &["could you; would you"]),
+                ],
+            ),
+        ]);
+        let token = dict
+            .analyze_line("言わせて貰えれば")
+            .into_iter()
+            .find(|token| token.surface == "貰えれ")
+            .expect("benefactive auxiliary token");
+
+        assert_eq!(token.dictionary_form, "貰える");
+        assert_eq!(token.reasons, vec!["仮定形".to_string()]);
+        assert_eq!(
+            token.entries[0].senses[0].part_of_speech,
+            vec!["aux-v".to_string(), "v1".to_string()]
+        );
+        assert_eq!(token.source_pos, Some(LinderaPos::AuxVerb));
+    }
+
+    #[test]
     fn inflectional_auxiliary_selects_verb_stem_over_deverbal_noun() {
         let dict = Dictionary::from_entries(vec![
             entry(&["調べ"], &["しらべ"], "n", &["investigation"]),
@@ -5081,6 +5287,28 @@ mod tests {
     }
 
     #[test]
+    fn ranked_entries_promote_lindera_matching_sense_within_entry() {
+        let entry = entry_with_senses(
+            &["程"],
+            &["ほど"],
+            &[
+                (&["n", "adv"], &["extent; degree"]),
+                (&["prt", "n"], &["the more ...; to the extent that"]),
+            ],
+        );
+        let ranked = ranked_entries(vec![&entry], LinderaPos::Particle);
+
+        assert_eq!(
+            ranked[0].senses[0].part_of_speech,
+            vec!["prt".to_string(), "n".to_string()]
+        );
+        assert_eq!(
+            ranked[0].senses[0].glosses,
+            vec!["the more ...; to the extent that".to_string()]
+        );
+    }
+
+    #[test]
     fn policy_te_particle_uses_connective_sense() {
         let normalized = normalize_policy_homographs(vec![token("て", "て", "prt")]);
         let token = &normalized[0];
@@ -5104,6 +5332,8 @@ mod tests {
             token("です", "です", "cop"),
             token("この", "この", "adj-pn"),
             token("ただ", "ただ", "adv"),
+            token("また", "又", "conj"),
+            token("または", "又は", "conj"),
             token("ない", "ない", "adj-i"),
             token("ません", "ません", "suf"),
             token("だろう", "だろう", "exp"),
@@ -5148,21 +5378,31 @@ mod tests {
             normalized[4].entries[0].senses[0].part_of_speech,
             vec!["adv"]
         );
+        assert_eq!(normalized[5].dictionary_form, "また");
         assert_eq!(
             normalized[5].entries[0].senses[0].part_of_speech,
-            vec!["adj-i"]
+            vec!["adv"]
         );
-        assert_eq!(normalized[6].dictionary_form, "ません");
+        assert_eq!(normalized[6].dictionary_form, "または");
         assert_eq!(
             normalized[6].entries[0].senses[0].part_of_speech,
-            vec!["aux-v"]
+            vec!["conj"]
         );
-        assert_eq!(normalized[7].dictionary_form, "だ");
         assert_eq!(
             normalized[7].entries[0].senses[0].part_of_speech,
+            vec!["adj-i"]
+        );
+        assert_eq!(normalized[8].dictionary_form, "ません");
+        assert_eq!(
+            normalized[8].entries[0].senses[0].part_of_speech,
+            vec!["aux-v"]
+        );
+        assert_eq!(normalized[9].dictionary_form, "だ");
+        assert_eq!(
+            normalized[9].entries[0].senses[0].part_of_speech,
             vec!["aux"]
         );
-        assert_eq!(normalized[8].dictionary_form, "でしょう");
+        assert_eq!(normalized[10].dictionary_form, "でしょう");
     }
 
     #[test]
@@ -5181,6 +5421,7 @@ mod tests {
             token("リンク状態", "リンク状態", "unc"),
             token("お荷物", "お荷物", "n"),
             token("ホロ", "ホロ", "n"),
+            token("ベイト", "ベイト", "unc"),
         ]);
 
         let attack = &normalized[0];
@@ -5308,6 +5549,15 @@ mod tests {
         );
         assert!(!normalized[12].is_known());
         assert_eq!(normalized[12].surface, "ホロ");
+        assert!(normalized[13].is_known());
+        assert_eq!(
+            normalized[13].entries[0]
+                .popup_override
+                .as_ref()
+                .unwrap()
+                .glosses,
+            vec!["bait  (n)".to_string()]
+        );
     }
 
     #[test]
