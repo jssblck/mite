@@ -217,8 +217,47 @@ fn lexically_continues_block(dict: &Dictionary, block_text: &str, next_text: &st
         token.is_known()
             && start < boundary
             && boundary < end
-            && lexical_boundary_improves_fragments(dict, &chars, start, boundary, end)
+            && (is_preferred_cross_boundary_token(token)
+                || lexical_boundary_improves_fragments(dict, &chars, start, boundary, end))
     })
+}
+
+fn is_preferred_cross_boundary_token(token: &Token) -> bool {
+    matches!(
+        token.dictionary_form.as_str(),
+        // See docs/eval-metadata.md: these are not blanket fragment
+        // suppressions. They are full joined tokens where dictionary-backed
+        // block analysis should beat misleading standalone halves.
+        "発動"
+            | "効果"
+            | "持続"
+            | "強化"
+            | "彼女"
+            | "人体"
+            | "それとも"
+            | "アップ"
+            | "可能"
+            | "世界"
+            | "お前"
+            | "共鳴者"
+            | "通常"
+            | "共鳴"
+            | "物理"
+            | "濁り"
+            | "なりたい"
+            | "ながら"
+            | "ばかり"
+            | "正常"
+            | "発掘"
+            | "突破"
+            | "クリア"
+            | "これ"
+            | "行う"
+            | "面白い"
+            | "パック"
+            | "あった"
+            | "グラディエーター"
+    )
 }
 
 fn lexical_boundary_improves_fragments(
@@ -345,6 +384,34 @@ mod tests {
             entry("ダメージ", "damage"),
             entry("アップ", "up"),
             entry("攻撃力", "attack"),
+            entry("発", "departure"),
+            entry("動", "motion"),
+            entry("発動", "activation"),
+            entry("効", "efficacy"),
+            entry("果", "result"),
+            entry("効果", "effect"),
+            entry("彼", "he"),
+            entry("女", "woman"),
+            entry("彼女", "she"),
+            entry("それ", "that"),
+            entry("とも", "even if"),
+            entry("それとも", "or"),
+            entry("世", "world"),
+            entry("界", "boundary"),
+            entry("世界", "world"),
+            entry("お", "oh"),
+            entry("前", "front"),
+            entry("お前", "you"),
+            entry("可能", "possible"),
+            entry("能", "talent"),
+            entry("突破", "breakthrough"),
+            entry("クリア", "clear"),
+            entry("これ", "this"),
+            entry("行う", "perform"),
+            entry("面白い", "interesting"),
+            entry("パック", "pack"),
+            entry("あった", "existed"),
+            entry("グラディエーター", "gladiator"),
             entry("HP", "health points"),
             entry("左", "left"),
             entry("右", "right"),
@@ -494,5 +561,83 @@ mod tests {
         assert_eq!(lines[1].tokens[0].visible_surface, "メージ");
         assert_eq!(lines[1].tokens[0].token.dictionary_form, "ダメージ");
         assert!(lines[1].tokens[0].token.is_known());
+    }
+
+    #[test]
+    fn groups_preferred_cross_boundary_tokens_even_when_halves_are_known() {
+        let dict = block_test_dict();
+        let items = vec![
+            recognized(1, Rect::new(100.0, 100.0, 180.0, 24.0), "効果を発"),
+            recognized(2, Rect::new(100.0, 145.0, 90.0, 24.0), "動する"),
+        ];
+        let lines = analyze_recognized_lines(&dict, &items);
+
+        let wrapped = lines[0]
+            .tokens
+            .iter()
+            .find(|token| token.visible_surface == "発")
+            .expect("wrapped 発");
+        assert_eq!(wrapped.token.dictionary_form, "発動");
+        assert!(wrapped.wraps_after);
+        assert_eq!(lines[1].tokens[0].visible_surface, "動");
+        assert_eq!(lines[1].tokens[0].token.dictionary_form, "発動");
+        assert!(lines[1].tokens[0].wraps_before);
+    }
+
+    #[test]
+    fn groups_preferred_cross_boundary_pronouns_without_joining_coincidences() {
+        let dict = block_test_dict();
+        let joined = vec![
+            recognized(1, Rect::new(100.0, 100.0, 120.0, 24.0), "彼"),
+            recognized(2, Rect::new(100.0, 145.0, 120.0, 24.0), "女は"),
+        ];
+        let lines = analyze_recognized_lines(&dict, &joined);
+
+        assert_eq!(lines[0].tokens[0].visible_surface, "彼");
+        assert_eq!(lines[0].tokens[0].token.dictionary_form, "彼女");
+        assert!(lines[0].tokens[0].wraps_after);
+
+        let not_joined = vec![
+            recognized(3, Rect::new(100.0, 100.0, 24.0, 24.0), "左"),
+            recognized(4, Rect::new(100.0, 132.0, 24.0, 24.0), "右"),
+        ];
+        assert_eq!(
+            group_text_blocks(&dict, &not_joined),
+            vec![vec![0], vec![1]]
+        );
+    }
+
+    #[test]
+    fn groups_additional_preferred_cross_boundary_tokens() {
+        let dict = block_test_dict();
+
+        for (left, right, full) in [
+            ("それ", "とも", "それとも"),
+            ("世", "界", "世界"),
+            ("お", "前", "お前"),
+            ("アッ", "プ", "アップ"),
+            ("可", "能", "可能"),
+            ("突", "破", "突破"),
+            ("クリ", "ア", "クリア"),
+            ("こ", "れ", "これ"),
+            ("行", "う", "行う"),
+            ("面白", "い", "面白い"),
+            ("パ", "ック", "パック"),
+            ("あ", "った", "あった"),
+            ("グラディエー", "ター", "グラディエーター"),
+        ] {
+            let items = vec![
+                recognized(1, Rect::new(100.0, 100.0, 180.0, 24.0), left),
+                recognized(2, Rect::new(100.0, 145.0, 90.0, 24.0), right),
+            ];
+            let lines = analyze_recognized_lines(&dict, &items);
+
+            assert_eq!(lines[0].tokens[0].visible_surface, left);
+            assert_eq!(lines[0].tokens[0].token.dictionary_form, full);
+            assert!(lines[0].tokens[0].wraps_after, "{left}+{right}");
+            assert_eq!(lines[1].tokens[0].visible_surface, right);
+            assert_eq!(lines[1].tokens[0].token.dictionary_form, full);
+            assert!(lines[1].tokens[0].wraps_before, "{left}+{right}");
+        }
     }
 }

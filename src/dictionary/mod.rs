@@ -163,6 +163,27 @@ const DOMAIN_KNOWN_TERMS: &[KnownTermSpec] = &[
         glosses: &["effect; effectiveness; result  (n, adj-no)"],
     },
     KnownTermSpec {
+        surface: "数",
+        dictionary_form: "数",
+        part_of_speech: &["n"],
+        ruby: &[ruby("数", Some("かず"))],
+        glosses: &["number; amount  (n)"],
+    },
+    KnownTermSpec {
+        surface: "必要",
+        dictionary_form: "必要",
+        part_of_speech: &["n", "adj-na"],
+        ruby: &[ruby("必要", Some("ひつよう"))],
+        glosses: &["necessity; need; requirement  (n, adj-na)"],
+    },
+    KnownTermSpec {
+        surface: "特定",
+        dictionary_form: "特定",
+        part_of_speech: &["n", "vs", "vt", "adj-no"],
+        ruby: &[ruby("特定", Some("とくてい"))],
+        glosses: &["specifying; identifying; pinpointing  (n, vs, vt, adj-no)"],
+    },
+    KnownTermSpec {
         surface: "発動",
         dictionary_form: "発動",
         part_of_speech: &["n", "vs", "vt", "vi"],
@@ -252,6 +273,13 @@ const DOMAIN_KNOWN_TERMS: &[KnownTermSpec] = &[
         part_of_speech: &["n", "vs"],
         ruby: &[ruby("変奏", Some("へんそう"))],
         glosses: &["variation; playing a variation  (n, vs)"],
+    },
+    KnownTermSpec {
+        surface: "終奏",
+        dictionary_form: "終奏",
+        part_of_speech: &["n"],
+        ruby: &[ruby("終奏", Some("しゅうそう"))],
+        glosses: &["postlude; ending performance  (n)"],
     },
     KnownTermSpec {
         surface: "共鳴",
@@ -1145,6 +1173,9 @@ impl Dictionary {
     }
 
     fn exact_known_token(&self, surface: &str) -> Option<Token> {
+        if let Some(token) = domain_token_for_surface(surface) {
+            return Some(token);
+        }
         let entries = self.entries_for(surface)?;
         Some(Token {
             surface: surface.to_string(),
@@ -1440,6 +1471,24 @@ fn normalize_policy_homographs(tokens: Vec<Token>) -> Vec<Token> {
                 status_chuu_suffix_token()
             }
             "日" if is_day_counter_context(previous_token(&tokens, index)) => day_counter_token(),
+            "人" if is_person_counter_context(previous_token(&tokens, index)) => {
+                person_counter_token()
+            }
+            "名" if is_person_counter_context(previous_token(&tokens, index)) => {
+                mei_person_counter_token()
+            }
+            "数" | "必要" | "特定" | "終奏" => {
+                domain_token_for_surface(&token.surface).unwrap_or_else(|| token.clone())
+            }
+            "〜" => nonlexical_symbol_token("〜"),
+            "さん" if is_honorific_suffix_context(previous_token(&tokens, index)) => {
+                honorific_suffix_token("さん", "Mr.; Mrs.; Miss; Ms.; -san")
+            }
+            "ちゃん" if is_honorific_suffix_context(previous_token(&tokens, index)) => {
+                honorific_suffix_token("ちゃん", "suffix for familiar names, children, pets, etc.")
+            }
+            "んだ" => nda_explanatory_token(),
+            "切替" => kirikae_token(),
             "ください" => kudasai_request_auxiliary_token(),
             "こと" => koto_nominalizer_token(),
             "する" => suru_primary_token(),
@@ -1449,6 +1498,15 @@ fn normalize_policy_homographs(tokens: Vec<Token>) -> Vec<Token> {
             "あの" => demonstrative_token("あの", "that (over there)"),
             "ただ" => tada_adverb_token(),
             "ない" => nai_negative_token(),
+            "なく" if token.dictionary_form == "ない" => nai_continuative_token(),
+            "くる" => kuru_come_token("くる", Vec::new(), None),
+            "きた" if is_kita_come_context(previous_token(&tokens, index), token) => {
+                kuru_come_token(
+                    "きた",
+                    vec!["過去".to_string()],
+                    Some("Past form of 来る in a て/でくる chain.".to_string()),
+                )
+            }
             "済" => status_sumi_token("済"),
             "済み" => status_sumi_token("済み"),
             "ねぇ" => elongated_particle_token("ねぇ", "ね"),
@@ -1635,6 +1693,16 @@ fn is_day_counter_context(previous: Option<&Token>) -> bool {
     })
 }
 
+fn is_person_counter_context(previous: Option<&Token>) -> bool {
+    previous.is_some_and(|previous| {
+        previous
+            .surface
+            .chars()
+            .next_back()
+            .is_some_and(is_japanese_or_ascii_numeral)
+    })
+}
+
 fn is_japanese_or_ascii_numeral(ch: char) -> bool {
     ch.is_ascii_digit()
         || matches!(
@@ -1654,6 +1722,60 @@ fn is_japanese_or_ascii_numeral(ch: char) -> bool {
                 | '千'
                 | '万'
         )
+}
+
+fn person_counter_token() -> Token {
+    Token {
+        surface: "人".to_string(),
+        dictionary_form: "人".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: vec!["人".to_string()],
+            kana: vec!["にん".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["ctr".to_string()],
+                glosses: vec!["counter for people".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "人".to_string(),
+                    furigana: Some("にん".to_string()),
+                }],
+                glosses: vec!["counter for people  (ctr)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Other),
+        note_override: None,
+    }
+}
+
+fn mei_person_counter_token() -> Token {
+    Token {
+        surface: "名".to_string(),
+        dictionary_form: "名".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: vec!["名".to_string()],
+            kana: vec!["めい".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["ctr".to_string()],
+                glosses: vec!["counter for people".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "名".to_string(),
+                    furigana: Some("めい".to_string()),
+                }],
+                glosses: vec!["counter for people  (ctr)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Other),
+        note_override: None,
+    }
 }
 
 fn day_counter_token() -> Token {
@@ -1842,6 +1964,212 @@ fn nai_negative_token() -> Token {
         }],
         source_pos: Some(LinderaPos::Adjective),
         note_override: None,
+    }
+}
+
+fn nai_continuative_token() -> Token {
+    Token {
+        surface: "なく".to_string(),
+        dictionary_form: "ない".to_string(),
+        reasons: vec!["連用テ接続".to_string()],
+        entries: vec![Entry {
+            kanji: vec!["無い".to_string()],
+            kana: vec!["ない".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["aux-adj".to_string()],
+                glosses: vec!["not; non-; un-".to_string()],
+                misc: vec!["uk".to_string()],
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "ない".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["not; non-; un-  (aux-adj)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::AuxVerb),
+        note_override: Some("なく · 連用テ接続".to_string()),
+    }
+}
+
+fn nonlexical_symbol_token(surface: &str) -> Token {
+    Token {
+        surface: surface.to_string(),
+        dictionary_form: surface.to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: Vec::new(),
+            kana: vec![surface.to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["unc".to_string()],
+                glosses: Vec::new(),
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: Vec::new(),
+                glosses: Vec::new(),
+            }),
+        }],
+        source_pos: Some(LinderaPos::Other),
+        note_override: None,
+    }
+}
+
+fn is_honorific_suffix_context(previous: Option<&Token>) -> bool {
+    previous.is_some_and(|previous| {
+        previous
+            .surface
+            .chars()
+            .any(|ch| is_kana(ch) || !ch.is_ascii())
+            && !previous.surface.chars().all(is_quiet_lookup_separator)
+    })
+}
+
+fn is_quiet_lookup_separator(ch: char) -> bool {
+    matches!(
+        ch,
+        '、' | '。'
+            | '・'
+            | '：'
+            | ':'
+            | ','
+            | '.'
+            | '!'
+            | '?'
+            | '！'
+            | '？'
+            | '「'
+            | '」'
+            | '『'
+            | '』'
+            | '（'
+            | '）'
+            | '('
+            | ')'
+    )
+}
+
+fn honorific_suffix_token(surface: &str, gloss: &str) -> Token {
+    Token {
+        surface: surface.to_string(),
+        dictionary_form: surface.to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: Vec::new(),
+            kana: vec![surface.to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["suf".to_string()],
+                glosses: vec![gloss.to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: surface.to_string(),
+                    furigana: None,
+                }],
+                glosses: vec![format!("{gloss}  (suf)")],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Other),
+        note_override: None,
+    }
+}
+
+fn nda_explanatory_token() -> Token {
+    Token {
+        surface: "んだ".to_string(),
+        dictionary_form: "んだ".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: Vec::new(),
+            kana: vec!["んだ".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["exp".to_string()],
+                glosses: vec!["the fact is; it is that ...".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "んだ".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["the fact is; it is that ...  (exp)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Other),
+        note_override: None,
+    }
+}
+
+fn kirikae_token() -> Token {
+    Token {
+        surface: "切替".to_string(),
+        dictionary_form: "切り替え".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: vec!["切り替え".to_string(), "切替".to_string()],
+            kana: vec!["きりかえ".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["n".to_string()],
+                glosses: vec!["switching; exchange; changeover".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![
+                    RubySegment {
+                        text: "切".to_string(),
+                        furigana: Some("き".to_string()),
+                    },
+                    RubySegment {
+                        text: "替".to_string(),
+                        furigana: Some("かえ".to_string()),
+                    },
+                ],
+                glosses: vec!["switching; exchange; changeover  (n)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Noun),
+        note_override: None,
+    }
+}
+
+fn is_kita_come_context(previous: Option<&Token>, token: &Token) -> bool {
+    token.dictionary_form == "きた"
+        && previous.is_some_and(|previous| {
+            previous.surface.ends_with('て') || previous.surface.ends_with('で')
+        })
+}
+
+fn kuru_come_token(surface: &str, reasons: Vec<String>, note: Option<String>) -> Token {
+    Token {
+        surface: surface.to_string(),
+        dictionary_form: "来る".to_string(),
+        reasons,
+        entries: vec![Entry {
+            kanji: vec!["来る".to_string()],
+            kana: vec!["くる".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["vk".to_string(), "vi".to_string()],
+                glosses: vec!["to come; to arrive; to come along".to_string()],
+                misc: vec!["uk".to_string()],
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: surface.to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["to come; to arrive; to come along  (vk, vi)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Verb),
+        note_override: note,
     }
 }
 
@@ -4014,6 +4342,10 @@ mod tests {
             token("攻撃", "攻撃", "n"),
             token("時間", "時間", "n"),
             token("敵", "敵", "n"),
+            token("数", "数", "adv"),
+            token("必要", "必要", "adj-na"),
+            token("特定", "特定", "adj-no"),
+            token("終奏", "終奏", "n"),
         ]);
 
         let attack = &normalized[0];
@@ -4046,6 +4378,31 @@ mod tests {
                 .glosses,
             vec!["enemy; opponent; adversary  (n)".to_string()]
         );
+        assert_eq!(
+            normalized[3].entries[0]
+                .popup_override
+                .as_ref()
+                .unwrap()
+                .ruby,
+            vec![RubySegment {
+                text: "数".to_string(),
+                furigana: Some("かず".to_string())
+            }]
+        );
+        assert_eq!(
+            normalized[4].entries[0].senses[0].part_of_speech,
+            vec!["n".to_string(), "adj-na".to_string()]
+        );
+        assert_eq!(
+            normalized[5].entries[0]
+                .popup_override
+                .as_ref()
+                .unwrap()
+                .glosses,
+            vec!["specifying; identifying; pinpointing  (n, vs, vt, adj-no)".to_string()]
+        );
+        assert_eq!(normalized[6].dictionary_form, "終奏");
+        assert!(normalized[6].is_known());
     }
 
     #[test]
@@ -4114,6 +4471,186 @@ mod tests {
                 text: "日".to_string(),
                 furigana: Some("にち".to_string())
             }]
+        );
+    }
+
+    #[test]
+    fn person_after_numeral_prefers_counter_reading() {
+        let normalized = normalize_policy_homographs(vec![
+            unknown_surface_token("3".to_string()),
+            token("人", "人", "n"),
+            token("敵", "敵", "n"),
+        ]);
+        let counter = &normalized[1];
+
+        assert_eq!(counter.entries[0].senses[0].part_of_speech, vec!["ctr"]);
+        assert_eq!(
+            counter.entries[0]
+                .popup_override
+                .as_ref()
+                .expect("popup")
+                .ruby,
+            vec![RubySegment {
+                text: "人".to_string(),
+                furigana: Some("にん".to_string())
+            }]
+        );
+
+        let standalone = normalize_policy_homographs(vec![token("人", "人", "n")]);
+        assert_eq!(standalone[0].entries[0].senses[0].part_of_speech, vec!["n"]);
+    }
+
+    #[test]
+    fn mei_after_numeral_prefers_people_counter_reading() {
+        let normalized = normalize_policy_homographs(vec![
+            unknown_surface_token("10".to_string()),
+            token("名", "名", "n"),
+        ]);
+        let counter = &normalized[1];
+
+        assert_eq!(counter.entries[0].senses[0].part_of_speech, vec!["ctr"]);
+        assert_eq!(
+            counter.entries[0]
+                .popup_override
+                .as_ref()
+                .expect("popup")
+                .ruby,
+            vec![RubySegment {
+                text: "名".to_string(),
+                furigana: Some("めい".to_string())
+            }]
+        );
+
+        let standalone = normalize_policy_homographs(vec![token("名", "名", "n")]);
+        assert_eq!(standalone[0].entries[0].senses[0].part_of_speech, vec!["n"]);
+    }
+
+    #[test]
+    fn nonlexical_wave_dash_keeps_symbol_without_dictionary_gloss() {
+        let normalized = normalize_policy_homographs(vec![token("〜", "〜", "unc")]);
+        let token = &normalized[0];
+
+        assert!(token.is_known());
+        assert_eq!(token.entries[0].senses[0].part_of_speech, vec!["unc"]);
+        let popup = token.entries[0].popup_override.as_ref().expect("popup");
+        assert!(popup.ruby.is_empty());
+        assert!(popup.glosses.is_empty());
+    }
+
+    #[test]
+    fn honorific_suffixes_suppress_common_noun_homographs_after_names() {
+        let normalized = normalize_policy_homographs(vec![
+            unknown_surface_token("ダーニャ".to_string()),
+            token("さん", "さん", "n"),
+            token("団子", "団子", "n"),
+            token("ちゃん", "ちゃん", "n"),
+        ]);
+
+        assert_eq!(
+            normalized[1].entries[0].senses[0].part_of_speech,
+            vec!["suf"]
+        );
+        assert_eq!(
+            normalized[1].entries[0]
+                .popup_override
+                .as_ref()
+                .expect("popup")
+                .glosses,
+            vec!["Mr.; Mrs.; Miss; Ms.; -san  (suf)".to_string()]
+        );
+        assert_eq!(
+            normalized[3].entries[0].senses[0].part_of_speech,
+            vec!["suf"]
+        );
+
+        let standalone = normalize_policy_homographs(vec![token("さん", "さん", "n")]);
+        assert_eq!(standalone[0].entries[0].senses[0].part_of_speech, vec!["n"]);
+    }
+
+    #[test]
+    fn nda_prefers_explanatory_expression_over_interjection() {
+        let normalized = normalize_policy_homographs(vec![token("んだ", "んだ", "int")]);
+        let token = &normalized[0];
+
+        assert_eq!(token.entries[0].senses[0].part_of_speech, vec!["exp"]);
+        assert_eq!(
+            token.entries[0]
+                .popup_override
+                .as_ref()
+                .expect("popup")
+                .glosses,
+            vec!["the fact is; it is that ...  (exp)".to_string()]
+        );
+    }
+
+    #[test]
+    fn clipped_kirikae_uses_learner_dictionary_form() {
+        let normalized = normalize_policy_homographs(vec![token("切替", "切替", "n")]);
+        let token = &normalized[0];
+
+        assert_eq!(token.dictionary_form, "切り替え");
+        assert_eq!(
+            token.entries[0]
+                .popup_override
+                .as_ref()
+                .expect("popup")
+                .glosses,
+            vec!["switching; exchange; changeover  (n)".to_string()]
+        );
+    }
+
+    #[test]
+    fn kuru_kana_prefers_come_over_rare_homograph() {
+        let normalized = normalize_policy_homographs(vec![token("くる", "くる", "v5r")]);
+        let token = &normalized[0];
+
+        assert_eq!(token.dictionary_form, "来る");
+        assert_eq!(
+            token.entries[0]
+                .popup_override
+                .as_ref()
+                .expect("popup")
+                .glosses,
+            vec!["to come; to arrive; to come along  (vk, vi)".to_string()]
+        );
+    }
+
+    #[test]
+    fn kita_after_te_de_prefers_come_helper_over_north() {
+        let normalized = normalize_policy_homographs(vec![
+            token("歩んで", "歩む", "v5m"),
+            token("きた", "きた", "n"),
+        ]);
+        let come = &normalized[1];
+
+        assert_eq!(come.dictionary_form, "来る");
+        assert_eq!(come.reasons, vec!["過去".to_string()]);
+        assert_eq!(
+            come.note_override.as_deref(),
+            Some("Past form of 来る in a て/でくる chain.")
+        );
+
+        let standalone = normalize_policy_homographs(vec![token("きた", "きた", "n")]);
+        assert_eq!(standalone[0].dictionary_form, "きた");
+    }
+
+    #[test]
+    fn naku_prefers_negative_auxiliary_over_dead_homograph() {
+        let normalized = normalize_policy_homographs(vec![token("なく", "ない", "adj-i")]);
+        let token = &normalized[0];
+
+        assert_eq!(token.dictionary_form, "ない");
+        assert_eq!(
+            token.entries[0].senses[0].part_of_speech,
+            vec!["aux-adj".to_string()]
+        );
+        assert_eq!(
+            token.entries[0]
+                .popup_override
+                .as_ref()
+                .expect("popup")
+                .glosses,
+            vec!["not; non-; un-  (aux-adj)".to_string()]
         );
     }
 
