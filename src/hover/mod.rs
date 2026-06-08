@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::dictionary::{RubySegment, Token};
 use crate::geometry::{Rect, ScreenRect};
 use crate::pos::{LinderaPos, PosClass};
+use crate::script::{is_cjk, is_kana};
 use crate::text_blocks::LineToken;
 
 mod furigana;
@@ -230,7 +231,9 @@ pub fn popup_content(
                 .and_then(|entry| entry.kana.first())
                 .filter(|reading| has_kanji(&word) && reading.as_str() != word)
                 .cloned();
-            if entry.is_none()
+            if entry.is_none() && is_quiet_unknown_surface(&token.surface) {
+                Vec::new()
+            } else if entry.is_none()
                 && token.source_pos == Some(crate::pos::LinderaPos::AuxVerb)
                 && token.surface != token.dictionary_form
             {
@@ -294,6 +297,22 @@ pub fn popup_content(
         glosses,
         category: categorize(token),
     }
+}
+
+fn is_quiet_unknown_surface(surface: &str) -> bool {
+    !surface.is_empty()
+        && surface.chars().all(|ch| {
+            is_quiet_symbol_char(ch)
+                || ch.is_ascii_alphanumeric()
+                || !is_cjk(ch) && !is_kana(ch) && !ch.is_ascii_alphabetic()
+        })
+}
+
+fn is_quiet_symbol_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '、' | '。' | '・' | '：' | ':' | ',' | '.' | '!' | '?' | '！' | '？'
+    )
 }
 
 /// A drawable highlight: a word's frame-local rect, its category (for colour),
@@ -634,6 +653,40 @@ mod tests {
         );
         assert_eq!(content.note.as_deref(), Some("Polite past auxiliary."));
         assert_eq!(content.category, WordCategory::Auxiliary);
+    }
+
+    #[test]
+    fn popup_content_has_no_ruby_for_unknown_punctuation_or_numbers() {
+        for surface in ["、", "。", "・", "：", "9"] {
+            let content = popup_content(&tok(surface), SenseHint::default(), 3, 4);
+            assert_eq!(content.ruby, Vec::<FuriSegment>::new());
+            assert_eq!(content.category, WordCategory::Unknown);
+        }
+    }
+
+    #[test]
+    fn popup_content_keeps_surface_ruby_for_unknown_text_fragments() {
+        let surface = "ダーニャ";
+        let content = popup_content(&tok(surface), SenseHint::default(), 3, 4);
+        assert_eq!(
+            content.ruby,
+            vec![FuriSegment {
+                text: surface.to_string(),
+                furigana: None,
+            }]
+        );
+        assert_eq!(content.category, WordCategory::Unknown);
+    }
+
+    #[test]
+    fn popup_content_quiets_ascii_abbreviation_unknowns() {
+        let mut token = tok("EXP");
+        token.source_pos = Some(LinderaPos::Other);
+
+        let content = popup_content(&token, SenseHint::default(), 3, 4);
+
+        assert_eq!(content.ruby, Vec::<FuriSegment>::new());
+        assert_eq!(content.category, WordCategory::Other);
     }
 
     #[test]
