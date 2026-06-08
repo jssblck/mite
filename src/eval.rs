@@ -1181,10 +1181,9 @@ fn score_eval(
         1.0 - (character_error_units as f32 / character_denominator as f32)
     };
 
-    let expected_tokens: usize = spec
-        .detections
+    let expected_tokens: usize = detections
         .iter()
-        .map(|detection| detection.tokens.len())
+        .map(|detection| detection.token_scores.len())
         .sum();
     let unexpected_tokens = unexpected_actual
         .iter()
@@ -1196,8 +1195,7 @@ fn score_eval(
     } else {
         detections
             .iter()
-            .zip(&spec.detections)
-            .map(|(score, detection)| score.metadata_score * detection.tokens.len() as f32)
+            .map(|score| score.metadata_score * score.token_scores.len() as f32)
             .sum::<f32>()
             / metadata_denominator as f32
     };
@@ -1437,6 +1435,7 @@ fn score_detection(
     let token_scores = expected
         .tokens
         .iter()
+        .filter(|token| !is_layout_metadata_token(token))
         .map(|token| score_token(token, &actual_tokens))
         .collect::<Vec<_>>();
     let metadata_score = if token_scores.is_empty() {
@@ -1469,6 +1468,10 @@ fn score_detection(
         metadata_score,
         score,
     }
+}
+
+fn is_layout_metadata_token(token: &ExpectedToken) -> bool {
+    token.surface.chars().all(char::is_whitespace) || matches!(token.surface.as_str(), ":" | "：")
 }
 
 fn score_token(expected: &ExpectedToken, actual_tokens: &[ActualTokenSummary]) -> TokenScore {
@@ -2029,6 +2032,75 @@ mod tests {
                 .any(|field| field.field == "note" && !field.passed)
         );
         assert!(score.metadata_score < 1.0);
+    }
+
+    #[test]
+    fn layout_separator_tokens_do_not_affect_metadata_score() {
+        let mut spec = water_spec();
+        let detection = &mut spec.detections[0];
+        detection.text = "水 水".to_string();
+        detection.bounds = rect(10.0, 20.0, 90.0, 40.0);
+        detection.characters = vec![
+            ExpectedCharacter {
+                text: "水".to_string(),
+                bounds: rect(10.0, 20.0, 30.0, 40.0),
+                token_id: "water_left".to_string(),
+                notes: None,
+            },
+            ExpectedCharacter {
+                text: " ".to_string(),
+                bounds: rect(40.0, 20.0, 30.0, 40.0),
+                token_id: "space".to_string(),
+                notes: None,
+            },
+            ExpectedCharacter {
+                text: "水".to_string(),
+                bounds: rect(70.0, 20.0, 30.0, 40.0),
+                token_id: "water_right".to_string(),
+                notes: None,
+            },
+        ];
+        let mut left = detection.tokens[0].clone();
+        left.id = "water_left".to_string();
+        left.span = CharSpan { start: 0, end: 1 };
+        let space = expected_unknown_token("space", " ", 1, 2);
+        let mut right = left.clone();
+        right.id = "water_right".to_string();
+        right.span = CharSpan { start: 2, end: 3 };
+        detection.tokens = vec![left, space, right];
+
+        let water = token("水", "水", entry(&["水"], &["みず"], "n", &["water"]));
+        let result = OcrLookupResult {
+            image: "image.png".to_string(),
+            recognized_text: "水 水".to_string(),
+            lines: vec![LineLookup {
+                text_box: text_box(detection.bounds),
+                text: "水 水".to_string(),
+                confidence: 0.99,
+                reused: false,
+                char_centers: vec![25.0, 85.0],
+                block_id: 0,
+                block_text: "水 水".to_string(),
+                block_span: TextSpan { start: 0, end: 3 },
+                block_tokens: vec![water.clone(), water.clone()],
+                tokens: vec![
+                    line_token("水", water.clone(), 0, 1),
+                    line_token("水", water, 2, 3),
+                ],
+            }],
+        };
+
+        let report = score_ocr_lookup(
+            Path::new("image.png"),
+            Path::new("eval.json"),
+            &spec,
+            &result,
+            0.50,
+        );
+
+        assert_eq!(report.detections[0].token_scores.len(), 2);
+        assert_eq!(report.detections[0].metadata_score, 1.0);
+        assert_eq!(report.metadata_score, 1.0);
     }
 
     #[test]
