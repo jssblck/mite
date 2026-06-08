@@ -88,6 +88,15 @@ produce a misleading popup. Domain terms should stay narrow, exact, and
 documented in code. The eval should reward domain popups only when they help the
 learner understand the visible game text better than a generic dictionary split.
 
+Suppressing a generic dictionary lookup is safest when the visible text contains
+a curated lexical gate. For example, a clipped title continuation after a known
+domain event name can remain unknown because the in-line event name explains why
+the ordinary dictionary sense would mislead. Do not suppress a common word only
+because the eval region or UI slot implies a proper name; that signal is not
+available to the runtime lookup. Bare one-character names such as `角` should
+therefore stay as known generic words unless a visible domain antecedent or a
+future game dictionary provides a safer rule.
+
 ## Eval Authoring
 
 Use the eval UI or `draft_expected_detection` path to rebuild metadata whenever

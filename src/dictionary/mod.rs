@@ -623,6 +623,7 @@ const DOMAIN_UNKNOWN_TERMS: &[&str] = &[
     "ヴォイドマター粒",
     "オイドマター",
     "ヴォイドスペース",
+    "ブブ急便",
     "気動",
     "騒光",
     "騒光効果",
@@ -1354,6 +1355,7 @@ impl Dictionary {
     }
     fn post_process_tokens(&self, tokens: Vec<Token>) -> Vec<Token> {
         let tokens = merge_domain_terms(tokens);
+        let tokens = suppress_domain_title_continuation_fragments(tokens);
         let tokens = merge_unknown_katakana_runs(tokens);
         let tokens = merge_japanese_month_day_tokens(tokens);
         let tokens = merge_compact_numeric_unknowns(tokens);
@@ -1929,6 +1931,12 @@ fn normalize_policy_homographs(tokens: Vec<Token>) -> Vec<Token> {
             "名" if is_person_counter_context(previous_token(&tokens, index)) => {
                 mei_person_counter_token()
             }
+            "個" if is_numeric_counter_context(previous_token(&tokens, index)) => {
+                ko_counter_token()
+            }
+            "回" if is_numeric_counter_context(previous_token(&tokens, index)) => {
+                kai_counter_token()
+            }
             "数" | "必要" | "特定" | "終奏" => {
                 domain_token_for_surface(&token.surface).unwrap_or_else(|| token.clone())
             }
@@ -1965,6 +1973,15 @@ fn normalize_policy_homographs(tokens: Vec<Token>) -> Vec<Token> {
             "ただ" => tada_adverb_token(),
             "また" => mata_again_token(),
             "または" => matawa_or_token(),
+            "一番" if next_token(&tokens, index).is_some_and(is_adjective_like_token) => {
+                ichiban_adverb_token()
+            }
+            "絶対" if next_token(&tokens, index).is_some_and(|next| next.surface == "の") => {
+                zettai_adnominal_token()
+            }
+            "もっとも" if next_token(&tokens, index).is_some_and(is_copular_attachment_token) => {
+                mottomo_reasonable_token()
+            }
             "ない" => nai_negative_token(),
             "なく" if token.dictionary_form == "ない" => nai_continuative_token(),
             "くる" => kuru_come_token("くる", Vec::new(), None),
@@ -2166,6 +2183,10 @@ fn is_day_counter_context(previous: Option<&Token>) -> bool {
 }
 
 fn is_person_counter_context(previous: Option<&Token>) -> bool {
+    is_numeric_counter_context(previous)
+}
+
+fn is_numeric_counter_context(previous: Option<&Token>) -> bool {
     previous.is_some_and(|previous| {
         previous
             .surface
@@ -2243,6 +2264,68 @@ fn mei_person_counter_token() -> Token {
                     furigana: Some("めい".to_string()),
                 }],
                 glosses: vec!["counter for people  (ctr)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Other),
+        note_override: None,
+    }
+}
+
+fn ko_counter_token() -> Token {
+    Token {
+        surface: "個".to_string(),
+        dictionary_form: "個".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: vec!["個".to_string()],
+            kana: vec!["こ".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["ctr".to_string()],
+                glosses: vec!["counter for (small) things or pieces".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "個".to_string(),
+                    furigana: Some("こ".to_string()),
+                }],
+                glosses: vec![
+                    "counter for (small) things or pieces  (ctr)".to_string(),
+                    "counter for military units  (ctr)".to_string(),
+                    "(an) individual; one person  (n)".to_string(),
+                ],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Other),
+        note_override: None,
+    }
+}
+
+fn kai_counter_token() -> Token {
+    Token {
+        surface: "回".to_string(),
+        dictionary_form: "回".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: vec!["回".to_string()],
+            kana: vec!["かい".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["ctr".to_string()],
+                glosses: vec!["counter for occurrences".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "回".to_string(),
+                    furigana: Some("かい".to_string()),
+                }],
+                glosses: vec![
+                    "counter for occurrences  (ctr)".to_string(),
+                    "a time; an instance  (n)".to_string(),
+                    "inning (baseball); round; game  (n)".to_string(),
+                ],
             }),
         }],
         source_pos: Some(LinderaPos::Other),
@@ -2545,6 +2628,106 @@ fn matawa_or_token() -> Token {
         source_pos: Some(LinderaPos::Conjunction),
         note_override: None,
     }
+}
+
+fn ichiban_adverb_token() -> Token {
+    Token {
+        surface: "一番".to_string(),
+        dictionary_form: "一番".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: vec!["一番".to_string()],
+            kana: vec!["いちばん".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["adv".to_string(), "n".to_string(), "adj-no".to_string()],
+                glosses: vec!["most; best; number one".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "一番".to_string(),
+                    furigana: Some("いちばん".to_string()),
+                }],
+                glosses: vec!["most; best; number one  (adv, n, adj-no)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Adverb),
+        note_override: None,
+    }
+}
+
+fn zettai_adnominal_token() -> Token {
+    Token {
+        surface: "絶対".to_string(),
+        dictionary_form: "絶対".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: vec!["絶対".to_string()],
+            kana: vec!["ぜったい".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["adj-no".to_string(), "n".to_string(), "adv".to_string()],
+                glosses: vec!["absolute; unconditional; unmistakable".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "絶対".to_string(),
+                    furigana: Some("ぜったい".to_string()),
+                }],
+                glosses: vec![
+                    "absolute; unconditional; unmistakable  (adj-no)".to_string(),
+                    "absoluteness  (n)".to_string(),
+                    "absolutely; definitely  (adv)".to_string(),
+                ],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Adjective),
+        note_override: None,
+    }
+}
+
+fn mottomo_reasonable_token() -> Token {
+    Token {
+        surface: "もっとも".to_string(),
+        dictionary_form: "尤も".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: vec!["尤も".to_string()],
+            kana: vec!["もっとも".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["adj-na".to_string(), "adv".to_string()],
+                glosses: vec!["reasonable; natural; proper; just".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "もっとも".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["reasonable; natural; proper; just  (adj-na, adv)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Adjective),
+        note_override: None,
+    }
+}
+
+fn is_adjective_like_token(token: &Token) -> bool {
+    token.entries.iter().any(|entry| {
+        entry.senses.iter().any(|sense| {
+            sense
+                .part_of_speech
+                .iter()
+                .any(|pos| matches!(PosClass::of(pos), PosClass::Adjective))
+        })
+    })
+}
+
+fn is_copular_attachment_token(token: &Token) -> bool {
+    matches!(token.surface.as_str(), "である" | "だ")
 }
 
 fn nai_negative_token() -> Token {
@@ -3508,6 +3691,31 @@ fn merge_domain_terms(tokens: Vec<Token>) -> Vec<Token> {
     merged
 }
 
+fn suppress_domain_title_continuation_fragments(tokens: Vec<Token>) -> Vec<Token> {
+    tokens
+        .iter()
+        .enumerate()
+        .map(|(index, token)| {
+            // See docs/eval-metadata.md: exact domain suppression is allowed
+            // when a visible curated antecedent gates the ambiguity. In
+            // ブブ急便・届け..., 届け is a clipped event-title continuation, not
+            // the generic notification/report noun.
+            if token.surface == "届け"
+                && previous_token(&tokens, index).is_some_and(|token| token.surface == "・")
+                && index
+                    .checked_sub(2)
+                    .and_then(|index| tokens.get(index))
+                    .is_some_and(|token| token.surface == "ブブ急便")
+                && next_token(&tokens, index).is_some_and(|token| token.surface == "...")
+            {
+                unknown_surface_token(token.surface.clone())
+            } else {
+                token.clone()
+            }
+        })
+        .collect()
+}
+
 fn domain_term_at(tokens: &[Token], start: usize) -> Option<(usize, Token)> {
     let mut best: Option<(usize, Token)> = None;
 
@@ -4164,14 +4372,14 @@ fn prefer_lindera_matching_sense(entry: &mut Entry, major: LinderaPos) {
         || entry
             .senses
             .first()
-            .is_none_or(|sense| sense_matches_lindera_pos(sense, major))
+            .is_none_or(|sense| sense_matches_lindera_pos_for_reorder(sense, major))
     {
         return;
     }
     let Some(index) = entry
         .senses
         .iter()
-        .position(|sense| sense_matches_lindera_pos(sense, major))
+        .position(|sense| sense_matches_lindera_pos_for_reorder(sense, major))
     else {
         return;
     };
@@ -4184,11 +4392,11 @@ fn prefer_lindera_matching_sense(entry: &mut Entry, major: LinderaPos) {
     entry.senses.insert(0, sense);
 }
 
-fn sense_matches_lindera_pos(sense: &Sense, major: LinderaPos) -> bool {
-    sense
-        .part_of_speech
-        .iter()
-        .any(|pos| major.agrees_with_jmdict(pos))
+fn sense_matches_lindera_pos_for_reorder(sense: &Sense, major: LinderaPos) -> bool {
+    sense.part_of_speech.iter().any(|pos| {
+        major.agrees_with_jmdict(pos)
+            || (major == LinderaPos::Noun && matches!(pos.as_str(), "adj-na" | "adj-no"))
+    })
 }
 
 /// Load the frequency table from a `jpdb-freq/` directory beside the lexicon.
@@ -4530,6 +4738,29 @@ mod tests {
         let wing_comet = dict.analyze_line("ウィングコメット");
         assert_eq!(wing_comet[0].surface, "ウィングコメット");
         assert!(!wing_comet[0].is_known());
+    }
+
+    #[test]
+    fn suppresses_domain_title_continuation_after_curated_antecedent() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["急便"], &["きゅうびん"], "n", &["express dispatch"]),
+            entry(&["届け"], &["とどけ"], "n,n-suf", &["report"]),
+        ]);
+        let tokens = dict.analyze_line("ブブ急便・届け...");
+
+        assert_eq!(
+            tokens
+                .iter()
+                .map(|token| token.surface.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ブブ急便", "・", "届け", "..."]
+        );
+        assert!(!tokens[0].is_known());
+        assert!(!tokens[2].is_known());
+
+        let standalone = dict.analyze_line("届け");
+        assert_eq!(standalone[0].surface, "届け");
+        assert!(standalone[0].is_known());
     }
 
     #[test]
@@ -5309,6 +5540,28 @@ mod tests {
     }
 
     #[test]
+    fn ranked_entries_keep_adjectival_noun_primary_for_lindera_noun() {
+        let entry = entry_with_senses(
+            &["普通"],
+            &["ふつう"],
+            &[
+                (&["adj-no", "adj-na"], &["normal; ordinary; regular; usual"]),
+                (&["n"], &["local train; train that stops at every station"]),
+            ],
+        );
+        let ranked = ranked_entries(vec![&entry], LinderaPos::Noun);
+
+        assert_eq!(
+            ranked[0].senses[0].part_of_speech,
+            vec!["adj-no".to_string(), "adj-na".to_string()]
+        );
+        assert_eq!(
+            ranked[0].senses[0].glosses,
+            vec!["normal; ordinary; regular; usual".to_string()]
+        );
+    }
+
+    #[test]
     fn policy_te_particle_uses_connective_sense() {
         let normalized = normalize_policy_homographs(vec![token("て", "て", "prt")]);
         let token = &normalized[0];
@@ -5698,6 +5951,75 @@ mod tests {
 
         let standalone = normalize_policy_homographs(vec![token("名", "名", "n")]);
         assert_eq!(standalone[0].entries[0].senses[0].part_of_speech, vec!["n"]);
+    }
+
+    #[test]
+    fn object_and_occurrence_counters_after_numerals_prefer_counter_reading() {
+        let normalized = normalize_policy_homographs(vec![
+            unknown_surface_token("30".to_string()),
+            token("個", "個", "n"),
+            token("3", "3", "unc"),
+            token("回", "回", "n"),
+        ]);
+
+        let object_counter = &normalized[1];
+        assert_eq!(
+            object_counter.entries[0].senses[0].part_of_speech,
+            vec!["ctr"]
+        );
+        assert_eq!(
+            object_counter.entries[0]
+                .popup_override
+                .as_ref()
+                .expect("popup")
+                .glosses[0],
+            "counter for (small) things or pieces  (ctr)"
+        );
+
+        let occurrence_counter = &normalized[3];
+        assert_eq!(
+            occurrence_counter.entries[0].senses[0].part_of_speech,
+            vec!["ctr"]
+        );
+        assert_eq!(
+            occurrence_counter.entries[0]
+                .popup_override
+                .as_ref()
+                .expect("popup")
+                .glosses[0],
+            "counter for occurrences  (ctr)"
+        );
+
+        let standalone = normalize_policy_homographs(vec![token("個", "個", "n")]);
+        assert_eq!(standalone[0].entries[0].senses[0].part_of_speech, vec!["n"]);
+    }
+
+    #[test]
+    fn attachment_contexts_prefer_learner_primary_adjectival_readings() {
+        let normalized = normalize_policy_homographs(vec![
+            token("一番", "一番", "n"),
+            token("楽", "楽", "adj-na"),
+            token("絶対", "絶対", "n"),
+            token("の", "の", "prt"),
+            token("もっとも", "もっとも", "adv"),
+            token("である", "である", "cop"),
+        ]);
+
+        assert_eq!(normalized[0].dictionary_form, "一番");
+        assert_eq!(
+            normalized[0].entries[0].senses[0].part_of_speech,
+            vec!["adv", "n", "adj-no"]
+        );
+        assert_eq!(normalized[2].dictionary_form, "絶対");
+        assert_eq!(
+            normalized[2].entries[0].senses[0].part_of_speech,
+            vec!["adj-no", "n", "adv"]
+        );
+        assert_eq!(normalized[4].dictionary_form, "尤も");
+        assert_eq!(
+            normalized[4].entries[0].senses[0].part_of_speech,
+            vec!["adj-na", "adv"]
+        );
     }
 
     #[test]
