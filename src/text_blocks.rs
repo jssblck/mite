@@ -3,9 +3,9 @@
 //! The detector and recognizer operate on individual text-line boxes, but game
 //! UI often wraps one sentence or lexical item across several boxes. This module
 //! uses geometry to nominate adjacent line pairs, requires dictionary evidence
-//! that a known token crosses the boundary, runs Japanese dictionary analysis on
-//! the joined block text, then projects each block token back onto the line
-//! segment where it is visible.
+//! that a known or curated domain token crosses the boundary, runs Japanese
+//! dictionary analysis on the joined block text, then projects each block token
+//! back onto the line segment where it is visible.
 
 use serde::Serialize;
 
@@ -223,7 +223,7 @@ fn line_wrap_reset_candidate(previous: &RecognizedText, next: &RecognizedText) -
 
     // Some game UI wraps a line by resetting to the paragraph's left edge while
     // OCR only captures a right-edge tail on the previous visual line. The
-    // lexical gate in group_text_blocks still has to prove a full known token
+    // lexical gate in group_text_blocks still has to prove a full lexical token
     // crosses this reset before lines are joined.
     b.x < a.x
 }
@@ -258,10 +258,11 @@ fn lexically_continues_block(dict: &Dictionary, block_text: &str, next_text: &st
     let chars = joined.chars().collect::<Vec<_>>();
 
     tokens.iter().zip(spans).any(|(token, (start, end))| {
-        token.is_known()
+        (token.is_known() || dict.is_domain_unknown_term(&token.surface))
             && start < boundary
             && boundary < end
-            && (is_preferred_cross_boundary_token(token)
+            && (dict.is_domain_unknown_term(&token.surface)
+                || is_preferred_cross_boundary_token(token)
                 || lexical_boundary_improves_fragments(dict, &chars, start, boundary, end))
     })
 }
@@ -290,6 +291,10 @@ fn is_preferred_cross_boundary_token(token: &Token) -> bool {
             | "物理"
             | "人物"
             | "物資"
+            | "自身"
+            | "現在"
+            | "名前"
+            | "こと"
             | "濁り"
             | "限り"
             | "なりたい"
@@ -517,8 +522,18 @@ mod tests {
             entry("肉", "meat"),
             entry("皮肉", "irony"),
             entry("変", "strange"),
+            entry("自", "self prefix"),
             entry("身", "body"),
+            entry("自身", "oneself"),
             entry("変身", "transformation"),
+            entry("現", "present prefix"),
+            entry("在", "presence"),
+            entry("現在", "now"),
+            entry("名", "name prefix"),
+            entry("名前", "name"),
+            entry("こと", "nominalizer"),
+            entry("こ", "sea cucumber"),
+            entry("と", "and"),
             entry("あ", "muteness"),
             entry("ある", "exist"),
             entry("な", "particle"),
@@ -645,6 +660,50 @@ mod tests {
         assert!(left.wraps_after);
         assert_eq!(lines[1].tokens[0].visible_surface, "る");
         assert_eq!(lines[1].tokens[0].token.dictionary_form, "する");
+        assert!(lines[1].tokens[0].wraps_before);
+    }
+
+    #[test]
+    fn groups_domain_unknown_terms_across_line_wrap() {
+        let dict = block_test_dict();
+        let items = vec![
+            recognized(1, Rect::new(100.0, 100.0, 180.0, 24.0), "「ダー"),
+            recognized(2, Rect::new(100.0, 145.0, 90.0, 24.0), "ニャ」"),
+        ];
+        let lines = analyze_recognized_lines(&dict, &items);
+
+        let left = lines[0]
+            .tokens
+            .iter()
+            .find(|token| token.visible_surface == "ダー")
+            .expect("wrapped domain name");
+        assert_eq!(left.token.dictionary_form, "ダーニャ");
+        assert!(!left.token.is_known());
+        assert!(left.wraps_after);
+        assert_eq!(lines[1].tokens[0].visible_surface, "ニャ");
+        assert_eq!(lines[1].tokens[0].token.dictionary_form, "ダーニャ");
+        assert!(lines[1].tokens[0].wraps_before);
+    }
+
+    #[test]
+    fn domain_unknown_wrap_prefers_long_curated_term_over_embedded_known_term() {
+        let dict = block_test_dict();
+        let items = vec![
+            recognized(1, Rect::new(100.0, 100.0, 180.0, 24.0), "【斉爆効"),
+            recognized(2, Rect::new(100.0, 145.0, 90.0, 24.0), "果】"),
+        ];
+        let lines = analyze_recognized_lines(&dict, &items);
+
+        let left = lines[0]
+            .tokens
+            .iter()
+            .find(|token| token.visible_surface == "斉爆効")
+            .expect("wrapped domain effect");
+        assert_eq!(left.token.dictionary_form, "斉爆効果");
+        assert!(!left.token.is_known());
+        assert!(left.wraps_after);
+        assert_eq!(lines[1].tokens[0].visible_surface, "果");
+        assert_eq!(lines[1].tokens[0].token.dictionary_form, "斉爆効果");
         assert!(lines[1].tokens[0].wraps_before);
     }
 
@@ -835,6 +894,10 @@ mod tests {
             ("人", "物", "人物"),
             ("物", "資", "物資"),
             ("物", "理", "物理"),
+            ("自", "身", "自身"),
+            ("現", "在", "現在"),
+            ("名", "前", "名前"),
+            ("こ", "と", "こと"),
             ("濁", "り", "濁り"),
             ("限", "り", "限り"),
         ] {

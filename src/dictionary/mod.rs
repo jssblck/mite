@@ -1283,14 +1283,70 @@ impl Dictionary {
         let tokens = merge_compact_numeric_unknowns(tokens);
         let tokens = merge_numeric_unit_unknowns(tokens);
         let tokens = merge_honorific_prefix_tokens(tokens);
+        let tokens = self.normalize_inflected_stem_tokens(tokens);
         let tokens = self.normalize_suru_te_form_tokens(tokens);
         let tokens = self.normalize_suru_past_form_tokens(tokens);
         let tokens = self.normalize_suru_passive_form_tokens(tokens);
         let tokens = self.normalize_te_iru_auxiliary_tokens(tokens);
+        let tokens = self.normalize_te_shimau_auxiliary_tokens(tokens);
         let tokens = normalize_policy_homographs(tokens);
         let tokens = normalize_dekiru_stem_tokens(tokens);
         let tokens = split_contextual_slash_numeric_unknowns(tokens);
         merge_repeated_punctuation_unknowns(tokens)
+    }
+
+    fn normalize_inflected_stem_tokens(&self, tokens: Vec<Token>) -> Vec<Token> {
+        // See docs/eval-metadata.md: lexicalized deverbal nouns are good
+        // learner primaries when standalone, but an immediately following
+        // inflectional auxiliary selects the verb stem instead.
+        tokens
+            .iter()
+            .enumerate()
+            .map(|(index, token)| {
+                let next = tokens.get(index + 1);
+                self.inflected_stem_token(token, next)
+                    .unwrap_or_else(|| token.clone())
+            })
+            .collect()
+    }
+
+    fn inflected_stem_token(&self, token: &Token, next: Option<&Token>) -> Option<Token> {
+        let next = next?;
+        if token.source_pos == Some(LinderaPos::Verb)
+            || token.reasons.iter().any(|reason| reason == "連用形")
+            || !matches!(next.surface.as_str(), "た" | "て")
+            || !is_auxiliary_or_connective_token(next)
+        {
+            return None;
+        }
+
+        let combined = format!("{}{}", token.surface, next.surface);
+        for candidate in deinflect(&combined) {
+            if !candidate
+                .reasons
+                .iter()
+                .any(|reason| reason == "過去" || reason == "て形")
+            {
+                continue;
+            }
+            let entries = self.entries_for(&candidate.form)?;
+            let entries = entries
+                .into_iter()
+                .filter(|entry| entry_matches_type(entry, candidate.word_type))
+                .collect::<Vec<_>>();
+            if entries.is_empty() || !entries.iter().any(|entry| has_verb_pos(entry)) {
+                continue;
+            }
+            return Some(Token {
+                surface: token.surface.clone(),
+                dictionary_form: candidate.form,
+                reasons: vec!["連用形".to_string()],
+                entries: ranked_entries(entries, LinderaPos::Verb),
+                source_pos: Some(LinderaPos::Verb),
+                note_override: None,
+            });
+        }
+        None
     }
 
     fn normalize_suru_te_form_tokens(&self, tokens: Vec<Token>) -> Vec<Token> {
@@ -1412,6 +1468,20 @@ impl Dictionary {
         }
         normalized
     }
+
+    fn normalize_te_shimau_auxiliary_tokens(&self, tokens: Vec<Token>) -> Vec<Token> {
+        let mut normalized = Vec::with_capacity(tokens.len());
+        for token in tokens {
+            if normalized.last().is_some_and(is_te_form_connector_token)
+                && is_shimatta_interjection_homograph(&token)
+            {
+                normalized.push(te_shimau_past_auxiliary_token());
+            } else {
+                normalized.push(token);
+            }
+        }
+        normalized
+    }
 }
 
 fn is_suru_capable_nominal_token(token: &Token) -> bool {
@@ -1448,6 +1518,10 @@ fn is_sareru_passive_token(token: &Token) -> bool {
 
 fn is_te_particle_token(token: &Token) -> bool {
     token.surface == "て"
+}
+
+fn is_auxiliary_or_connective_token(token: &Token) -> bool {
+    is_auxiliary_token(token) || token.surface == "て"
 }
 
 fn suru_light_verb_entries(mut entries: Vec<Entry>) -> Vec<Entry> {
@@ -1525,6 +1599,19 @@ fn is_iku_noun_homograph(token: &Token) -> bool {
                 .iter()
                 .any(|sense| sense.part_of_speech.iter().any(|pos| pos == "n"))
         })
+}
+
+fn is_shimatta_interjection_homograph(token: &Token) -> bool {
+    token.surface == "しまった" && token.dictionary_form == "しまった"
+}
+
+fn has_verb_pos(entry: &Entry) -> bool {
+    entry.senses.iter().any(|sense| {
+        sense
+            .part_of_speech
+            .iter()
+            .any(|pos| PosClass::of(pos) == PosClass::Verb)
+    })
 }
 
 fn suru_passive_auxiliary_token() -> Token {
@@ -1640,6 +1727,48 @@ fn te_iku_auxiliary_token() -> Token {
         }],
         source_pos: Some(LinderaPos::Verb),
         note_override: Some("Auxiliary in a ていく chain, indicating progression.".to_string()),
+    }
+}
+
+fn te_shimau_past_auxiliary_token() -> Token {
+    Token {
+        surface: "しまった".to_string(),
+        dictionary_form: "しまう".to_string(),
+        reasons: vec!["タ形".to_string()],
+        entries: vec![Entry {
+            kanji: vec!["仕舞う".to_string()],
+            kana: vec!["しまう".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec![
+                    "aux-v".to_string(),
+                    "v5u".to_string(),
+                    "vt".to_string(),
+                ],
+                glosses: vec![
+                    "to end up doing; to do completely; unfortunately did ...".to_string(),
+                ],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![
+                    RubySegment {
+                        text: "しま".to_string(),
+                        furigana: None,
+                    },
+                    RubySegment {
+                        text: "った".to_string(),
+                        furigana: None,
+                    },
+                ],
+                glosses: vec![
+                    "to end up doing; to do completely; unfortunately did ...  (auxiliary after te-form)"
+                        .to_string(),
+                ],
+            }),
+        }],
+        source_pos: Some(LinderaPos::AuxVerb),
+        note_override: Some("Completive/regret auxiliary after a te-form.".to_string()),
     }
 }
 
@@ -4505,6 +4634,61 @@ mod tests {
         assert_eq!(
             token.entries[0].senses[0].part_of_speech,
             vec!["v5k-s".to_string(), "vi".to_string()]
+        );
+    }
+
+    #[test]
+    fn inflectional_auxiliary_selects_verb_stem_over_deverbal_noun() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["調べ"], &["しらべ"], "n", &["investigation"]),
+            entry(&["調べる"], &["しらべる"], "v1,vt", &["to investigate"]),
+        ]);
+        let analyzed = dict
+            .analyze_line("記録を調べた")
+            .into_iter()
+            .find(|token| token.surface == "調べ")
+            .expect("調べ token");
+
+        assert_eq!(analyzed.dictionary_form, "調べる");
+        assert_eq!(analyzed.reasons, vec!["連用形".to_string()]);
+
+        let normalized = dict.normalize_inflected_stem_tokens(vec![
+            token("調べ", "調べ", "n"),
+            token("た", "た", "aux-v"),
+        ]);
+        assert_eq!(normalized[0].dictionary_form, "調べる");
+        assert_eq!(normalized[0].reasons, vec!["連用形".to_string()]);
+        assert_eq!(normalized[0].source_pos, Some(LinderaPos::Verb));
+    }
+
+    #[test]
+    fn shimatta_after_te_form_prefers_shimau_auxiliary() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["起こす"], &["おこす"], "v5s,vt", &["to wake"]),
+            entry(
+                &["仕舞う"],
+                &["しまう"],
+                "v5u,vt,aux-v",
+                &["to end up doing"],
+            ),
+            entry_with_common(&[], &["しまった"], "int", &["oops"], true),
+        ]);
+        let token = dict
+            .analyze_line("起こしてしまった")
+            .into_iter()
+            .find(|token| token.surface == "しまった")
+            .expect("しまった token");
+
+        assert_eq!(token.dictionary_form, "しまう");
+        assert_eq!(token.reasons, vec!["タ形".to_string()]);
+        assert_eq!(token.source_pos, Some(LinderaPos::AuxVerb));
+        assert_eq!(
+            token.note_override.as_deref(),
+            Some("Completive/regret auxiliary after a te-form.")
+        );
+        assert_eq!(
+            token.entries[0].senses[0].part_of_speech,
+            vec!["aux-v".to_string(), "v5u".to_string(), "vt".to_string()]
         );
     }
 
