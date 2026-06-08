@@ -126,6 +126,52 @@ const DOMAIN_KNOWN_TERMS: &[KnownTermSpec] = &[
         glosses: &["list  (n)"],
     },
     KnownTermSpec {
+        surface: "リンク状態",
+        dictionary_form: "リンク状態",
+        part_of_speech: &["n"],
+        ruby: &[ruby("リンク", None), ruby("状態", Some("じょうたい"))],
+        glosses: &["link state  (n)"],
+    },
+    // See docs/eval-metadata.md: these exact lexicalized nouns are clearer
+    // learner primaries than treating the same surface as a verb continuative
+    // stem. Keep this list narrow; broad deverbal-noun promotion mislabels
+    // common verb stems such as し, して, 行い, and 削り.
+    KnownTermSpec {
+        surface: "誓い",
+        dictionary_form: "誓い",
+        part_of_speech: &["n"],
+        ruby: &[ruby("誓い", Some("ちかい"))],
+        glosses: &["oath; vow; pledge  (n)"],
+    },
+    KnownTermSpec {
+        surface: "まどろみ",
+        dictionary_form: "まどろみ",
+        part_of_speech: &["n"],
+        ruby: &[ruby("まどろみ", None)],
+        glosses: &["doze; nap; slumber  (n)"],
+    },
+    KnownTermSpec {
+        surface: "轟き",
+        dictionary_form: "轟き",
+        part_of_speech: &["n"],
+        ruby: &[ruby("轟き", Some("とどろき"))],
+        glosses: &["roar; peal; rumble; booming  (n)"],
+    },
+    KnownTermSpec {
+        surface: "いざない",
+        dictionary_form: "誘い",
+        part_of_speech: &["n"],
+        ruby: &[ruby("いざない", None)],
+        glosses: &["invitation; call; lure  (n)"],
+    },
+    KnownTermSpec {
+        surface: "導き",
+        dictionary_form: "導き",
+        part_of_speech: &["n"],
+        ruby: &[ruby("導き", Some("みちびき"))],
+        glosses: &["guidance; direction; leading  (n)"],
+    },
+    KnownTermSpec {
         surface: "一定",
         dictionary_form: "一定",
         part_of_speech: &["adj-no", "n", "vs"],
@@ -544,7 +590,6 @@ const DOMAIN_UNKNOWN_TERMS: &[&str] = &[
     "ブラント",
     "グリフェックス",
     "マウントギャラル",
-    "リンク状態",
     "異夢",
     "クールタイム",
     "共形エネルギー",
@@ -4585,6 +4630,7 @@ mod tests {
             token("重撃", "重撃", "n"),
             token("ラウンド", "ラウンド", "adj-f"),
             token("エンド", "エンド", "conj"),
+            token("リンク状態", "リンク状態", "unc"),
         ]);
 
         let attack = &normalized[0];
@@ -4685,6 +4731,38 @@ mod tests {
                 .glosses,
             vec!["end  (n)".to_string()]
         );
+        assert_eq!(
+            normalized[10].entries[0].senses[0].part_of_speech,
+            vec!["n".to_string()]
+        );
+        assert_eq!(
+            normalized[10].entries[0]
+                .popup_override
+                .as_ref()
+                .unwrap()
+                .glosses,
+            vec!["link state  (n)".to_string()]
+        );
+    }
+
+    #[test]
+    fn lexicalized_deverbal_nouns_use_noun_headwords() {
+        let normalized = merge_domain_terms(vec![
+            token("誓い", "誓う", "v5u"),
+            token("まどろみ", "まどろむ", "v5m"),
+            token("轟き", "轟く", "v5k"),
+            token("いざない", "いざなう", "v5u"),
+            token("導き", "導く", "v5k"),
+            token("行い", "行う", "v5u"),
+        ]);
+
+        assert_eq!(normalized[0].dictionary_form, "誓い");
+        assert_eq!(normalized[0].entries[0].senses[0].part_of_speech, vec!["n"]);
+        assert_eq!(normalized[1].dictionary_form, "まどろみ");
+        assert_eq!(normalized[2].dictionary_form, "轟き");
+        assert_eq!(normalized[3].dictionary_form, "誘い");
+        assert_eq!(normalized[4].dictionary_form, "導き");
+        assert_eq!(normalized[5].dictionary_form, "行う");
     }
 
     #[test]

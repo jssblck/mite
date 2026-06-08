@@ -263,6 +263,12 @@ fn is_preferred_cross_boundary_token(token: &Token) -> bool {
             | "曲線"
             | "引き裂く"
             | "別れ際"
+            | "同一"
+            | "のみ"
+            | "プレイヤー"
+            | "真実"
+            | "未来"
+            | "残酷さ"
     )
 }
 
@@ -431,6 +437,24 @@ mod tests {
             entry("別れ", "farewell"),
             entry("際", "edge"),
             entry("別れ際", "parting moment"),
+            entry("同", "same prefix"),
+            entry("一", "one"),
+            entry("同一", "identical"),
+            entry("の", "particle"),
+            entry("み", "prefix"),
+            entry("のみ", "only"),
+            entry("プレイ", "play"),
+            entry("ヤー", "yes"),
+            entry("プレイヤー", "player"),
+            entry("真", "truth"),
+            entry("実", "reality"),
+            entry("真実", "truth"),
+            entry("未", "not yet"),
+            entry("来", "coming"),
+            entry("未来", "future"),
+            entry("残", "remainder"),
+            entry("酷さ", "cruelness"),
+            entry("残酷さ", "cruelty"),
             entry("HP", "health points"),
             entry("左", "left"),
             entry("右", "right"),
@@ -650,6 +674,12 @@ mod tests {
             ("曲", "線", "曲線"),
             ("引き", "裂く", "引き裂く"),
             ("別れ", "際", "別れ際"),
+            ("同", "一", "同一"),
+            ("の", "み", "のみ"),
+            ("プレイ", "ヤー", "プレイヤー"),
+            ("真", "実", "真実"),
+            ("未", "来", "未来"),
+            ("残", "酷さ", "残酷さ"),
         ] {
             let items = vec![
                 recognized(1, Rect::new(100.0, 100.0, 180.0, 24.0), left),
