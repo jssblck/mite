@@ -1050,6 +1050,12 @@ impl Dictionary {
             return Some(resolution);
         }
 
+        if let Some(resolution) =
+            self.lindera_pos_preferred_deinflection_resolution(morphemes, end, slice, surface)
+        {
+            return Some(resolution);
+        }
+
         if let Some(entries) = self.entries_for(&lemma) {
             return Some(Resolution {
                 form: lemma,
@@ -1094,6 +1100,57 @@ impl Dictionary {
                     }
                 }
             }
+        }
+
+        None
+    }
+
+    fn lindera_pos_preferred_deinflection_resolution<'a>(
+        &'a self,
+        morphemes: &[Morpheme],
+        end: usize,
+        slice: &[Morpheme],
+        surface: &str,
+    ) -> Option<Resolution<'a>> {
+        let last = slice.last().expect("span is non-empty");
+        let major = last.major_pos();
+        if !matches!(major, LinderaPos::Verb | LinderaPos::Adjective)
+            || span_direct_entries_match_lindera_pos(self, slice, surface, major)
+            || !can_deinflect_span(slice)
+        {
+            return None;
+        }
+
+        for candidate in deinflect(surface) {
+            if is_imperative_candidate(&candidate.reasons)
+                && !should_accept_imperative_candidate(slice, morphemes, end)
+            {
+                continue;
+            }
+            let Some(entries) = self.entries_for(&candidate.form) else {
+                continue;
+            };
+            let entries = entries
+                .into_iter()
+                .filter(|entry| {
+                    entry_matches_type(entry, candidate.word_type)
+                        && entry_matches_lindera_pos(entry, major)
+                })
+                .collect::<Vec<_>>();
+            if entries.is_empty() {
+                continue;
+            }
+
+            // See docs/eval-metadata.md: exact surface entries are still the
+            // default, but a beginner should see the contextual verb/adjective
+            // lemma when Lindera chose that role and the exact entry is only a
+            // noun, interjection, fixed adjective, or other homograph.
+            return Some(Resolution {
+                form: candidate.form,
+                entries,
+                matched_lemma: true,
+                reasons: contextual_deinflection_reasons(&candidate.reasons, morphemes, end),
+            });
         }
 
         None
@@ -1963,7 +2020,9 @@ fn normalize_policy_homographs(tokens: Vec<Token>) -> Vec<Token> {
             "により" => niyori_cause_means_token(),
             "ありがとう" => arigatou_thanks_token(),
             "あなた" => anata_pronoun_token(),
+            "わけがない" => wake_ga_nai_impossibility_token(),
             "する" => suru_primary_token(),
+            "すれば" => suru_conditional_token(),
             "です" => desu_copula_token(),
             "ません" => masen_polite_negative_token(),
             "だろう" => darou_presumptive_token(),
@@ -1983,6 +2042,7 @@ fn normalize_policy_homographs(tokens: Vec<Token>) -> Vec<Token> {
                 mottomo_reasonable_token()
             }
             "ない" => nai_negative_token(),
+            "なければ" => nai_conditional_token(),
             "なく" if token.dictionary_form == "ない" => nai_continuative_token(),
             "くる" => kuru_come_token("くる", Vec::new(), None),
             "きた" if is_kita_come_context(previous_token(&tokens, index), token) => {
@@ -2414,11 +2474,68 @@ fn niyori_cause_means_token() -> Token {
     }
 }
 
+fn wake_ga_nai_impossibility_token() -> Token {
+    Token {
+        surface: "わけがない".to_string(),
+        dictionary_form: "わけがない".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: vec!["訳が無い".to_string()],
+            kana: vec!["わけがない".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["exp".to_string()],
+                glosses: vec!["there is no way that ...".to_string()],
+                misc: vec!["uk".to_string()],
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "わけがない".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec![
+                    "there is no way that ...  (exp)".to_string(),
+                    "easy; simple  (exp, adj-i)".to_string(),
+                ],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Other),
+        note_override: None,
+    }
+}
+
 fn suru_primary_token() -> Token {
     Token {
         surface: "する".to_string(),
         dictionary_form: "する".to_string(),
         reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: vec!["為る".to_string()],
+            kana: vec!["する".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["vs-i".to_string()],
+                glosses: vec!["to do; to carry out; to perform".to_string()],
+                misc: vec!["uk".to_string()],
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "する".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["to do; to carry out; to perform  (vs-i)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Verb),
+        note_override: None,
+    }
+}
+
+fn suru_conditional_token() -> Token {
+    Token {
+        surface: "すれば".to_string(),
+        dictionary_form: "する".to_string(),
+        reasons: vec!["仮定形".to_string()],
         entries: vec![Entry {
             kanji: vec!["為る".to_string()],
             kana: vec!["する".to_string()],
@@ -2753,6 +2870,36 @@ fn nai_negative_token() -> Token {
             }),
         }],
         source_pos: Some(LinderaPos::Adjective),
+        note_override: None,
+    }
+}
+
+fn nai_conditional_token() -> Token {
+    Token {
+        surface: "なければ".to_string(),
+        dictionary_form: "ない".to_string(),
+        reasons: vec!["仮定形".to_string()],
+        entries: vec![Entry {
+            kanji: vec!["無い".to_string()],
+            kana: vec!["ない".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["aux-adj".to_string()],
+                glosses: vec!["if not; unless; conditional negative form".to_string()],
+                misc: vec!["uk".to_string()],
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "なければ".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec![
+                    "if not; unless; conditional negative form  (aux-adj)".to_string(),
+                    "have to; must  (exp)".to_string(),
+                ],
+            }),
+        }],
+        source_pos: Some(LinderaPos::AuxVerb),
         note_override: None,
     }
 }
@@ -4462,6 +4609,22 @@ fn has_compound_worthy_pos(entry: &Entry) -> bool {
         .any(|pos| PosClass::of(pos).is_compound_worthy())
 }
 
+fn span_direct_entries_match_lindera_pos(
+    dictionary: &Dictionary,
+    slice: &[Morpheme],
+    surface: &str,
+    major: LinderaPos,
+) -> bool {
+    let lemma = span_lemma(slice);
+    [lemma.as_str(), surface].into_iter().any(|form| {
+        dictionary.entries_for(form).is_some_and(|entries| {
+            entries
+                .iter()
+                .any(|entry| entry_matches_lindera_pos(entry, major))
+        })
+    })
+}
+
 /// Whether a JMdict entry has any sense whose part of speech agrees with a
 /// Lindera (IPADIC) major part of speech. Used to surface the grammatically
 /// correct sense of a homograph (は as the particle 助詞, not the noun 羽).
@@ -5412,6 +5575,9 @@ mod tests {
             token("により", "により", "n"),
             token("ありがとう", "有り難う", "int"),
             token("あなた", "貴方", "pn"),
+            token("すれば", "すれば", "exp"),
+            token("なければ", "なければ", "exp"),
+            token("わけがない", "わけがない", "exp"),
         ]);
 
         assert_eq!(normalized[0].dictionary_form, "ください");
@@ -5480,6 +5646,30 @@ mod tests {
         assert_eq!(
             normalized[10].entries[0].senses[0].part_of_speech,
             vec!["pn".to_string()]
+        );
+        assert_eq!(normalized[11].dictionary_form, "する");
+        assert_eq!(normalized[11].reasons, vec!["仮定形".to_string()]);
+        assert_eq!(
+            normalized[11].entries[0].senses[0].part_of_speech,
+            vec!["vs-i".to_string()]
+        );
+        assert_eq!(normalized[12].dictionary_form, "ない");
+        assert_eq!(normalized[12].reasons, vec!["仮定形".to_string()]);
+        assert_eq!(
+            normalized[12].entries[0].senses[0].part_of_speech,
+            vec!["aux-adj".to_string()]
+        );
+        assert_eq!(normalized[13].dictionary_form, "わけがない");
+        assert_eq!(
+            normalized[13].entries[0]
+                .popup_override
+                .as_ref()
+                .expect("popup")
+                .glosses,
+            vec![
+                "there is no way that ...  (exp)".to_string(),
+                "easy; simple  (exp, adj-i)".to_string()
+            ]
         );
     }
 
@@ -6572,6 +6762,89 @@ mod tests {
         assert_eq!(token.dictionary_form, "焼ける");
         assert!(token.is_known());
         assert!(token.reasons.is_empty());
+    }
+
+    #[test]
+    fn lindera_verb_tag_prefers_deinflected_lemma_over_nonverb_homograph() {
+        let dict = Dictionary::from_entries(vec![
+            entry(
+                &["砕けた"],
+                &["くだけた"],
+                "adj-f",
+                &["familiar; easy-going"],
+            ),
+            entry(&["砕ける"], &["くだける"], "v1,vi", &["to break"]),
+        ]);
+
+        let morpheme = Morpheme {
+            surface: "砕けた".to_string(),
+            base_form: "砕けた".to_string(),
+            reading: None,
+            pos: vec!["動詞".to_string(), "自立".to_string()],
+            conjugation_form: None,
+        };
+        let (_, token) = dict.node(&[morpheme], 0, 1).expect("verb node");
+
+        assert_eq!(token.dictionary_form, "砕ける");
+        assert!(token.reasons.iter().any(|actual| actual == "過去"));
+        assert!(
+            token.entries[0].senses[0]
+                .part_of_speech
+                .iter()
+                .any(|pos| PosClass::of(pos) == PosClass::Verb)
+        );
+    }
+
+    #[test]
+    fn lindera_adjective_and_verb_conditionals_prefer_learner_lemmas() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["なければ"], &["なければ"], "exp", &["if not"]),
+            entry(&[], &["ない"], "adj-i", &["not"]),
+            entry(&["すれば"], &["すれば"], "exp", &["if so"]),
+            entry(&["為る", "する"], &["する"], "vs-i", &["to do"]),
+        ]);
+
+        let adjective = Morpheme {
+            surface: "なければ".to_string(),
+            base_form: "なければ".to_string(),
+            reading: None,
+            pos: vec!["形容詞".to_string(), "自立".to_string()],
+            conjugation_form: Some("仮定形".to_string()),
+        };
+        let (_, token) = dict.node(&[adjective], 0, 1).expect("adjective node");
+        assert_eq!(token.dictionary_form, "ない");
+        assert_eq!(token.reasons, vec!["仮定".to_string()]);
+
+        let verb = Morpheme {
+            surface: "すれば".to_string(),
+            base_form: "すれば".to_string(),
+            reading: None,
+            pos: vec!["動詞".to_string(), "自立".to_string()],
+            conjugation_form: Some("仮定形".to_string()),
+        };
+        let (_, token) = dict.node(&[verb], 0, 1).expect("verb node");
+        assert_eq!(token.dictionary_form, "する");
+        assert_eq!(token.reasons, vec!["仮定".to_string()]);
+    }
+
+    #[test]
+    fn lindera_noun_tag_keeps_lexicalized_deverbal_noun() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["考え"], &["かんがえ"], "n", &["thought"]),
+            entry(&["考える"], &["かんがえる"], "v1,vt", &["to think"]),
+        ]);
+        let morpheme = Morpheme {
+            surface: "考え".to_string(),
+            base_form: "考え".to_string(),
+            reading: None,
+            pos: vec!["名詞".to_string(), "一般".to_string()],
+            conjugation_form: None,
+        };
+        let (_, token) = dict.node(&[morpheme], 0, 1).expect("noun node");
+
+        assert_eq!(token.dictionary_form, "考え");
+        assert!(token.reasons.is_empty());
+        assert_eq!(token.entries[0].senses[0].part_of_speech, vec!["n"]);
     }
 
     #[test]

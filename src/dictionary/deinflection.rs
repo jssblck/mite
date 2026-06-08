@@ -252,6 +252,13 @@ const RULES: &[Rule] = &[
         &["否定"],
     ),
     rule(
+        "すれば",
+        "する",
+        WordType::INITIAL,
+        WordType::SURU.union(WordType::NOUN_VS),
+        &["仮定"],
+    ),
+    rule(
         "します",
         "する",
         WordType::INITIAL,
@@ -568,6 +575,16 @@ const GODAN_RULES: &[Rule] = &[
         WordType::GODAN,
         &["て形"],
     ),
+    // Conditional godan forms.
+    rule("えば", "う", WordType::INITIAL, WordType::GODAN, &["仮定"]),
+    rule("けば", "く", WordType::INITIAL, WordType::GODAN, &["仮定"]),
+    rule("げば", "ぐ", WordType::INITIAL, WordType::GODAN, &["仮定"]),
+    rule("せば", "す", WordType::INITIAL, WordType::GODAN, &["仮定"]),
+    rule("てば", "つ", WordType::INITIAL, WordType::GODAN, &["仮定"]),
+    rule("ねば", "ぬ", WordType::INITIAL, WordType::GODAN, &["仮定"]),
+    rule("べば", "ぶ", WordType::INITIAL, WordType::GODAN, &["仮定"]),
+    rule("めば", "む", WordType::INITIAL, WordType::GODAN, &["仮定"]),
+    rule("れば", "る", WordType::INITIAL, WordType::GODAN, &["仮定"]),
     // Godan imperatives. These are learner-facing command forms, not ichidan
     // stems; resolving them keeps titles like 走れ団子ちゃん on 走る.
     rule("え", "う", WordType::INITIAL, WordType::GODAN, &["命令"]),
