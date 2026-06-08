@@ -570,6 +570,7 @@ const DOMAIN_UNKNOWN_TERMS: &[&str] = &[
     "インフェルノ・シャドウ",
     "リフレクト・ブレイズ",
     "ダメージブースト",
+    "ウィングコメット",
     "ヴォイドストーム",
     "パティナ・フォーム",
     "ロスト・ドリーム",
@@ -721,6 +722,7 @@ const DOMAIN_UNKNOWN_TERMS: &[&str] = &[
     "星声",
     "シェルコイン",
     "ソラ",
+    "中幅",
     "ブブ",
     "声律",
     "キメ...",
@@ -3985,6 +3987,9 @@ mod tests {
             entry(&["音"], &["おと"], "n", &["sound"]),
             entry(&["骸"], &["むくろ"], "n", &["corpse"]),
             entry(&["潮音"], &["ちょうおん"], "n", &["sound of waves"]),
+            entry(&["中幅"], &["ちゅうはば"], "n", &["medium-width cloth"]),
+            entry(&["ウィング"], &[], "n", &["wing"]),
+            entry(&["コメット"], &[], "n", &["comet"]),
             entry(&["スキル"], &[], "n", &["skill"]),
         ]);
         let tokens = dict.analyze_line("音骸スキル");
@@ -3996,6 +4001,14 @@ mod tests {
         let tide_sound = dict.analyze_line("潮音任務");
         assert_eq!(tide_sound[0].surface, "潮音");
         assert!(!tide_sound[0].is_known());
+
+        let medium_magnitude = dict.analyze_line("中幅にアップ");
+        assert_eq!(medium_magnitude[0].surface, "中幅");
+        assert!(!medium_magnitude[0].is_known());
+
+        let wing_comet = dict.analyze_line("ウィングコメット");
+        assert_eq!(wing_comet[0].surface, "ウィングコメット");
+        assert!(!wing_comet[0].is_known());
     }
 
     #[test]

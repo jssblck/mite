@@ -524,6 +524,15 @@ mod tests {
             entry("な", "particle"),
             entry("い", "greatness"),
             entry("ない", "not"),
+            entry("ば", "if"),
+            entry("かり", "borrow"),
+            entry("ばかり", "only"),
+            entry("正", "correct"),
+            entry("常", "normality"),
+            entry("正常", "normal"),
+            entry("す", "do"),
+            entry("る", "kana ru"),
+            entry("する", "do"),
             entry("人", "person"),
             entry("人物", "person"),
             entry("物", "thing"),
@@ -616,6 +625,27 @@ mod tests {
         ];
 
         assert_eq!(group_text_blocks(&dict, &items), vec![vec![0], vec![1]]);
+    }
+
+    #[test]
+    fn groups_suru_across_line_wrap() {
+        let dict = block_test_dict();
+        let items = vec![
+            recognized(1, Rect::new(100.0, 100.0, 300.0, 24.0), "登場す"),
+            recognized(2, Rect::new(100.0, 145.0, 300.0, 24.0), "るキャラ"),
+        ];
+        let lines = analyze_recognized_lines(&dict, &items);
+
+        let left = lines[0]
+            .tokens
+            .iter()
+            .find(|token| token.visible_surface == "す")
+            .expect("wrapped す");
+        assert_eq!(left.token.dictionary_form, "する");
+        assert!(left.wraps_after);
+        assert_eq!(lines[1].tokens[0].visible_surface, "る");
+        assert_eq!(lines[1].tokens[0].token.dictionary_form, "する");
+        assert!(lines[1].tokens[0].wraps_before);
     }
 
     #[test]
@@ -800,6 +830,8 @@ mod tests {
             ("あ", "る", "ある"),
             ("あ", "り", "ある"),
             ("な", "い", "ない"),
+            ("ば", "かり", "ばかり"),
+            ("正", "常", "正常"),
             ("人", "物", "人物"),
             ("物", "資", "物資"),
             ("物", "理", "物理"),
