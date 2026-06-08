@@ -65,6 +65,12 @@ scored as the te-form of `する`, with a learner note that exposes the connecti
 role. A future richer UI may render a decomposition such as `し + て`, but the
 primary scored label remains one stable token-level interpretation.
 
+High-frequency kana homographs should prefer the interpretation a learner is
+most likely to need in game text. Examples include `もの` as the thing/object
+sense rather than the person sense, `いい` as the ordinary "good/OK" adjective,
+`ください` as a request auxiliary, and kana past forms such as `した`/`いた`
+over incidental noun homographs unless nearby context clearly selects the noun.
+
 ### Wrapped Fragments
 
 Line-wrapped UI text should be analyzed by stitchability. If adjacent visible
