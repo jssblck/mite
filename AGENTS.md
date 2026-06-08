@@ -26,6 +26,9 @@ dictionary segmentation, or overlay presentation.
 - `docs/models.md` documents model provenance and the mobile-vs-server tradeoff.
 - `docs/performance.md` documents the before/after evidence expected for latency
   or throughput changes.
+- `docs/eval-metadata.md` documents the learner-first metadata policy for eval
+  labels, including why the concrete interpretation matrix lives in code and how
+  to handle ambiguous Japanese lookup cases consistently.
 - `docs/future/pure-gpu.md` is exploratory design context, not committed roadmap.
 - `THIRD_PARTY_NOTICES.md` documents third-party software, models, dictionaries,
   and data that need explicit attribution or license awareness.
@@ -151,6 +154,10 @@ auditing captures.
   presentation decisions. Keep Win32 and GPU-specific code at the edges.
 - Do not hand-roll Japanese morphology or deinflection when Lindera/JMdict data
   can express the behavior.
+- For eval metadata, follow `docs/eval-metadata.md`: choose one stable,
+  learner-safe primary interpretation by rule, keep visible text strict, and put
+  ambiguity in notes or alternate-analysis UI rather than drifting labels by
+  capture.
 - Update docs when command behavior, model requirements, config defaults, or
   latency/accuracy expectations change.
 - Use plain ASCII quotes in docs, code comments, and generated text.

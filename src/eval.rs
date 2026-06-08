@@ -870,6 +870,11 @@ pub fn validate_eval_spec(spec: &EvalSpec) -> Result<()> {
 /// from the same dictionary, category, furigana, and popup logic used by `watch`
 /// and `eval`. This is intended for authoring tools where a human draws the
 /// text line box and enters the visible text.
+///
+/// Keep this path aligned with docs/eval-metadata.md. The authored eval metadata
+/// is the executable learner-facing matrix: ambiguous forms should receive the
+/// same primary interpretation here as they do in the overlay, while explanatory
+/// nuance belongs in notes or future alternate-analysis fields.
 pub fn draft_expected_detection(
     dict: &Dictionary,
     id: impl Into<String>,
@@ -969,6 +974,10 @@ struct DraftTokenSpan {
 }
 
 fn complete_token_spans(dict: &Dictionary, text: &str) -> Vec<DraftTokenSpan> {
+    // Wrapped-fragment policy lives in docs/eval-metadata.md: if dictionary
+    // analysis can stitch visible chunks into a real word, the fragment inherits
+    // that full-word metadata; otherwise uncovered text remains an unknown
+    // surface token instead of inventing invisible continuation text.
     let chars = text.chars().map(|ch| ch.to_string()).collect::<Vec<_>>();
     let char_count = chars.len();
     let analyzed = dict.analyze_line(text);

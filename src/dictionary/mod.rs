@@ -60,6 +60,10 @@ struct KnownTermSpec {
 // Wuthering Waves and game-UI terms that are absent from JMdict or need a
 // domain-specific display. These are intentionally small, exact overlays on top
 // of JMdict: the base dictionary still owns ordinary Japanese segmentation.
+//
+// Learner-facing canonical forms follow docs/eval-metadata.md. In particular,
+// usually-kana vocabulary should use the kana spelling as the primary
+// dictionary_form even when a kanji form exists in JMdict.
 const DOMAIN_KNOWN_TERMS: &[KnownTermSpec] = &[
     KnownTermSpec {
         surface: "購入可能数",
@@ -273,7 +277,7 @@ const DOMAIN_KNOWN_TERMS: &[KnownTermSpec] = &[
     },
     KnownTermSpec {
         surface: "できる",
-        dictionary_form: "出来る",
+        dictionary_form: "できる",
         part_of_speech: &["v1", "vi"],
         ruby: &[ruby("できる", None)],
         glosses: &["to be able to; can  (v1, vi)"],
@@ -1013,6 +1017,11 @@ impl Dictionary {
     }
 
     fn normalize_suru_te_form_tokens(&self, tokens: Vec<Token>) -> Vec<Token> {
+        // See docs/eval-metadata.md: under the current token model, して after a
+        // suru-capable nominal gets one stable learner-facing primary analysis
+        // as the te-form of する. The surrounding nominal carries the concrete
+        // lexical meaning; future UI can expose the finer し + て decomposition
+        // as an alternate grammar note.
         let mut normalized = Vec::with_capacity(tokens.len());
         let mut index = 0;
         while index < tokens.len() {
