@@ -966,7 +966,7 @@ impl Dictionary {
         if let Some(token) = self.polite_past_auxiliary_token(slice, &surface) {
             return Some((TOKEN_PENALTY, token));
         }
-        match self.resolve_span(slice, &surface) {
+        match self.resolve_span(morphemes, start, end, slice, &surface) {
             Some(resolution) => {
                 if should_suppress_single_kana_content_lookup(slice, &surface, &resolution) {
                     return Some((TOKEN_PENALTY, unknown_surface_token(surface)));
@@ -1024,9 +1024,21 @@ impl Dictionary {
     /// Resolve a span against JMdict, preferring Lindera's lemma and literal
     /// surface before recursive deinflection. `surface` is the precomputed
     /// literal surface.
-    fn resolve_span(&self, slice: &[Morpheme], surface: &str) -> Option<Resolution<'_>> {
+    fn resolve_span(
+        &self,
+        morphemes: &[Morpheme],
+        start: usize,
+        end: usize,
+        slice: &[Morpheme],
+        surface: &str,
+    ) -> Option<Resolution<'_>> {
         let lemma = span_lemma(slice);
         if let Some(resolution) = self.suru_stem_resolution(surface, &lemma) {
+            return Some(resolution);
+        }
+
+        if let Some(resolution) = self.object_marked_potential_resolution(morphemes, start, surface)
+        {
             return Some(resolution);
         }
 
@@ -1050,6 +1062,11 @@ impl Dictionary {
 
         if can_deinflect_span(slice) {
             for candidate in deinflect(surface) {
+                if is_imperative_candidate(&candidate.reasons)
+                    && !should_accept_imperative_candidate(slice, morphemes, end)
+                {
+                    continue;
+                }
                 if let Some(entries) = self.entries_for(&candidate.form) {
                     let entries = entries
                         .into_iter()
@@ -1060,11 +1077,63 @@ impl Dictionary {
                             form: candidate.form,
                             entries,
                             matched_lemma: true,
-                            reasons: candidate.reasons,
+                            reasons: contextual_deinflection_reasons(
+                                &candidate.reasons,
+                                morphemes,
+                                end,
+                            ),
                         });
                     }
                 }
             }
+        }
+
+        None
+    }
+
+    fn object_marked_potential_resolution<'a>(
+        &'a self,
+        morphemes: &[Morpheme],
+        start: usize,
+        surface: &str,
+    ) -> Option<Resolution<'a>> {
+        if !has_same_clause_object_marker_before(morphemes, start) {
+            return None;
+        }
+        if !surface.ends_with("れる") {
+            return None;
+        }
+        if self
+            .entries_for(surface)
+            .is_some_and(|entries| entries.iter().any(|entry| entry_has_transitive_pos(entry)))
+        {
+            return None;
+        }
+
+        for candidate in deinflect(surface) {
+            if !candidate.reasons.iter().any(|reason| reason == "可能") {
+                continue;
+            }
+            let Some(entries) = self.entries_for(&candidate.form) else {
+                continue;
+            };
+            let entries = entries
+                .into_iter()
+                .filter(|entry| {
+                    entry_matches_type(entry, candidate.word_type)
+                        && entry_has_transitive_pos(entry)
+                })
+                .collect::<Vec<_>>();
+            if entries.is_empty() {
+                continue;
+            }
+
+            return Some(Resolution {
+                form: candidate.form,
+                entries,
+                matched_lemma: true,
+                reasons: candidate.reasons,
+            });
         }
 
         None
@@ -3852,6 +3921,72 @@ fn entry_has_grammar_pos(entry: &Entry) -> bool {
         .any(|pos| matches!(PosClass::of(pos), PosClass::Particle | PosClass::Auxiliary))
 }
 
+fn entry_has_transitive_pos(entry: &Entry) -> bool {
+    entry
+        .senses
+        .iter()
+        .flat_map(|sense| sense.part_of_speech.iter())
+        .any(|pos| pos.split(',').any(|part| part.trim() == "vt"))
+}
+
+fn has_same_clause_object_marker_before(morphemes: &[Morpheme], start: usize) -> bool {
+    for morpheme in morphemes[..start].iter().rev() {
+        if is_clause_boundary_morpheme(morpheme) {
+            break;
+        }
+        if morpheme.surface == "を" && morpheme.major_pos() == LinderaPos::Particle {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_clause_boundary_morpheme(morpheme: &Morpheme) -> bool {
+    matches!(
+        morpheme.major_pos(),
+        LinderaPos::Verb | LinderaPos::AuxVerb | LinderaPos::Conjunction
+    ) || morpheme
+        .surface
+        .chars()
+        .any(|ch| matches!(ch, '。' | '、' | '！' | '？' | '!' | '?' | ';' | '；'))
+}
+
+fn contextual_deinflection_reasons(
+    reasons: &[String],
+    morphemes: &[Morpheme],
+    end: usize,
+) -> Vec<String> {
+    if is_imperative_candidate(reasons) && negative_auxiliary_follows(morphemes, end) {
+        return vec!["可能".to_string(), "未然形".to_string()];
+    }
+    reasons.to_vec()
+}
+
+fn is_imperative_candidate(reasons: &[String]) -> bool {
+    reasons.len() == 1 && reasons[0] == "命令"
+}
+
+fn should_accept_imperative_candidate(
+    slice: &[Morpheme],
+    morphemes: &[Morpheme],
+    end: usize,
+) -> bool {
+    slice
+        .last()
+        .is_some_and(|morpheme| morpheme.major_pos() == LinderaPos::Verb)
+        && morphemes.get(end).is_some()
+}
+
+fn negative_auxiliary_follows(morphemes: &[Morpheme], end: usize) -> bool {
+    morphemes.get(end).is_some_and(|morpheme| {
+        matches!(morpheme.surface.as_str(), "ず" | "ない")
+            && matches!(
+                morpheme.major_pos(),
+                LinderaPos::AuxVerb | LinderaPos::Adjective
+            )
+    })
+}
+
 /// Concatenated literal surfaces of a span.
 fn span_surface(slice: &[Morpheme]) -> String {
     slice.iter().map(|m| m.surface.as_str()).collect()
@@ -5758,6 +5893,99 @@ mod tests {
     }
 
     #[test]
+    fn godan_imperative_resolves_to_command_lemma() {
+        let dict =
+            Dictionary::from_entries(vec![entry(&["走る"], &["はしる"], "v5r", &["to run"])]);
+        let token = dict
+            .analyze_line("走れ団子ちゃん")
+            .into_iter()
+            .find(|token| token.surface == "走れ")
+            .expect("imperative token");
+
+        assert_eq!(token.dictionary_form, "走る");
+        assert!(token.is_known());
+        assert_eq!(token.reasons, vec!["命令".to_string()]);
+    }
+
+    #[test]
+    fn godan_potential_negative_stem_is_not_imperative() {
+        let dict =
+            Dictionary::from_entries(vec![entry(&["動く"], &["うごく"], "v5k,vi", &["to move"])]);
+        let token = dict
+            .analyze_line("動けずにいる")
+            .into_iter()
+            .find(|token| token.surface == "動け")
+            .expect("potential negative stem token");
+
+        assert_eq!(token.dictionary_form, "動く");
+        assert!(token.is_known());
+        assert_eq!(
+            token.reasons,
+            vec!["可能".to_string(), "未然形".to_string()]
+        );
+    }
+
+    #[test]
+    fn nominal_e_row_fragment_is_not_forced_to_imperative() {
+        let dict =
+            Dictionary::from_entries(vec![entry(&["忘る"], &["わする"], "v5r", &["to lose"])]);
+        let token = dict.analyze_line("忘れ").into_iter().next().expect("token");
+
+        assert_eq!(token.surface, "忘れ");
+        assert!(!token.is_known());
+    }
+
+    #[test]
+    fn object_marker_prefers_transitive_potential_over_intransitive_exact_entry() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["削れる"], &["けずれる"], "v1,vi", &["to be shaved"]),
+            entry(&["削る"], &["けずる"], "v5r,vt", &["to reduce"]),
+        ]);
+        let token = dict
+            .analyze_line("敵の共振度を削れる")
+            .into_iter()
+            .find(|token| token.surface == "削れる")
+            .expect("potential token");
+
+        assert_eq!(token.dictionary_form, "削る");
+        assert!(token.is_known());
+        assert_eq!(token.reasons, vec!["可能".to_string()]);
+    }
+
+    #[test]
+    fn object_marker_does_not_override_exact_transitive_surface() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["アップ"], &["アップ"], "n,vs,vt", &["increase"]),
+            entry(&["させる"], &["させる"], "v1,vt", &["to make someone do"]),
+            entry(&["さす"], &["さす"], "v5s,vt", &["to raise"]),
+        ]);
+        let token = dict
+            .analyze_line("ダメージをアップさせる")
+            .into_iter()
+            .find(|token| token.surface == "させる")
+            .expect("causative token");
+
+        assert_eq!(token.dictionary_form, "させる");
+        assert!(token.reasons.is_empty());
+    }
+
+    #[test]
+    fn object_marker_does_not_override_non_r_row_exact_intransitive_surface() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["灼ける"], &["やける"], "v1,vi", &["to burn"]),
+            entry(&["灼く"], &["やく"], "v5k,vt", &["to burn"]),
+        ]);
+        let token = dict
+            .analyze_line("目を灼けるほど")
+            .into_iter()
+            .find(|token| token.surface == "灼ける")
+            .expect("exact intransitive token");
+
+        assert_eq!(token.dictionary_form, "灼ける");
+        assert!(token.reasons.is_empty());
+    }
+
+    #[test]
     fn exact_headword_beats_deinflection_candidate() {
         let dict = Dictionary::from_entries(vec![
             entry(&["焼ける"], &["やける"], "v1", &["to burn"]),
@@ -5771,6 +5999,38 @@ mod tests {
 
         assert_eq!(token.dictionary_form, "焼ける");
         assert!(token.is_known());
+        assert!(token.reasons.is_empty());
+    }
+
+    #[test]
+    fn exact_intransitive_potential_surface_stays_exact_without_object_marker() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["削れる"], &["けずれる"], "v1,vi", &["to be shaved"]),
+            entry(&["削る"], &["けずる"], "v5r,vt", &["to reduce"]),
+        ]);
+        let token = dict
+            .analyze_line("板が削れる")
+            .into_iter()
+            .find(|token| token.surface == "削れる")
+            .expect("exact intransitive token");
+
+        assert_eq!(token.dictionary_form, "削れる");
+        assert!(token.reasons.is_empty());
+    }
+
+    #[test]
+    fn earlier_clause_object_marker_does_not_force_potential_reading() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["削れる"], &["けずれる"], "v1,vi", &["to be shaved"]),
+            entry(&["削る"], &["けずる"], "v5r,vt", &["to reduce"]),
+        ]);
+        let token = dict
+            .analyze_line("敵を見て、板が削れる")
+            .into_iter()
+            .find(|token| token.surface == "削れる")
+            .expect("exact intransitive token");
+
+        assert_eq!(token.dictionary_form, "削れる");
         assert!(token.reasons.is_empty());
     }
 

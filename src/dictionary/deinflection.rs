@@ -568,6 +568,17 @@ const GODAN_RULES: &[Rule] = &[
         WordType::GODAN,
         &["て形"],
     ),
+    // Godan imperatives. These are learner-facing command forms, not ichidan
+    // stems; resolving them keeps titles like 走れ団子ちゃん on 走る.
+    rule("え", "う", WordType::INITIAL, WordType::GODAN, &["命令"]),
+    rule("け", "く", WordType::INITIAL, WordType::GODAN, &["命令"]),
+    rule("げ", "ぐ", WordType::INITIAL, WordType::GODAN, &["命令"]),
+    rule("せ", "す", WordType::INITIAL, WordType::GODAN, &["命令"]),
+    rule("て", "つ", WordType::INITIAL, WordType::GODAN, &["命令"]),
+    rule("ね", "ぬ", WordType::INITIAL, WordType::GODAN, &["命令"]),
+    rule("べ", "ぶ", WordType::INITIAL, WordType::GODAN, &["命令"]),
+    rule("め", "む", WordType::INITIAL, WordType::GODAN, &["命令"]),
+    rule("れ", "る", WordType::INITIAL, WordType::GODAN, &["命令"]),
     // Potential/passive/causative.
     rule(
         "われる",
@@ -845,6 +856,12 @@ mod tests {
             contracted_forms.contains(&"読む".to_string()),
             "{contracted_forms:?}"
         );
+    }
+
+    #[test]
+    fn deinflects_godan_imperatives() {
+        let forms = forms("走れ");
+        assert!(forms.contains(&"走る".to_string()), "{forms:?}");
     }
 
     #[test]
