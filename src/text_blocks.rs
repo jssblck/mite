@@ -243,7 +243,10 @@ fn is_preferred_cross_boundary_token(token: &Token) -> bool {
             | "通常"
             | "共鳴"
             | "物理"
+            | "人物"
+            | "物資"
             | "濁り"
+            | "限り"
             | "なりたい"
             | "ながら"
             | "ばかり"
@@ -455,6 +458,18 @@ mod tests {
             entry("残", "remainder"),
             entry("酷さ", "cruelness"),
             entry("残酷さ", "cruelty"),
+            entry("人", "person"),
+            entry("人物", "person"),
+            entry("物", "thing"),
+            entry("資", "resources"),
+            entry("物資", "materials"),
+            entry("理", "logic"),
+            entry("物理", "physics"),
+            entry("濁", "muddy"),
+            entry("り", "advantage"),
+            entry("濁り", "murkiness"),
+            entry("限", "limit"),
+            entry("限り", "limit"),
             entry("HP", "health points"),
             entry("左", "left"),
             entry("右", "right"),
@@ -680,6 +695,11 @@ mod tests {
             ("真", "実", "真実"),
             ("未", "来", "未来"),
             ("残", "酷さ", "残酷さ"),
+            ("人", "物", "人物"),
+            ("物", "資", "物資"),
+            ("物", "理", "物理"),
+            ("濁", "り", "濁り"),
+            ("限", "り", "限り"),
         ] {
             let items = vec![
                 recognized(1, Rect::new(100.0, 100.0, 180.0, 24.0), left),

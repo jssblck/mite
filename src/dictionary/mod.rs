@@ -132,6 +132,17 @@ const DOMAIN_KNOWN_TERMS: &[KnownTermSpec] = &[
         ruby: &[ruby("リンク", None), ruby("状態", Some("じょうたい"))],
         glosses: &["link state  (n)"],
     },
+    KnownTermSpec {
+        surface: "お荷物",
+        dictionary_form: "荷物",
+        part_of_speech: &["n"],
+        ruby: &[ruby("お", None), ruby("荷物", Some("にもつ"))],
+        glosses: &[
+            "luggage; baggage; package  (n)",
+            "burden  (n)",
+            "payload (of a packet, cell, etc.)  (n)",
+        ],
+    },
     // See docs/eval-metadata.md: these exact lexicalized nouns are clearer
     // learner primaries than treating the same surface as a verb continuative
     // stem. Keep this list narrow; broad deverbal-noun promotion mislabels
@@ -620,6 +631,7 @@ const DOMAIN_UNKNOWN_TERMS: &[&str] = &[
     "ホロタクティクス",
     "ホロタクティク...",
     "ホロタクティクス・ファントムペイ",
+    "ホロ",
     "無音区",
     "金髄",
     "集域",
@@ -1670,6 +1682,8 @@ fn normalize_policy_homographs(tokens: Vec<Token>) -> Vec<Token> {
             "こと" => koto_nominalizer_token(),
             "する" => suru_primary_token(),
             "です" => desu_copula_token(),
+            "ません" => masen_polite_negative_token(),
+            "だろう" => darou_presumptive_token(),
             "この" => demonstrative_token("この", "this"),
             "その" => demonstrative_token("その", "that; the"),
             "あの" => demonstrative_token("あの", "that (over there)"),
@@ -2473,6 +2487,60 @@ fn kudasai_request_auxiliary_token() -> Token {
         }],
         source_pos: Some(LinderaPos::AuxVerb),
         note_override: Some("Polite request auxiliary.".to_string()),
+    }
+}
+
+fn masen_polite_negative_token() -> Token {
+    Token {
+        surface: "ません".to_string(),
+        dictionary_form: "ません".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: Vec::new(),
+            kana: vec!["ません".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["aux-v".to_string()],
+                glosses: vec!["polite negative ending".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "ません".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["polite negative ending  (aux-v)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::AuxVerb),
+        note_override: Some("Polite negative ending.".to_string()),
+    }
+}
+
+fn darou_presumptive_token() -> Token {
+    Token {
+        surface: "だろう".to_string(),
+        dictionary_form: "だ".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: Vec::new(),
+            kana: vec!["だ".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["aux".to_string()],
+                glosses: vec!["seems; I think; probably; right?".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "だろう".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["seems; I think; probably; right?  (aux)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::AuxVerb),
+        note_override: Some("Presumptive auxiliary.".to_string()),
     }
 }
 
@@ -3527,7 +3595,7 @@ fn should_suppress_single_kana_content_lookup(
     if chars.next().is_some() || !is_kana(ch) {
         return false;
     }
-    if surface == "る"
+    if (surface == "る" || surface == "り")
         && !resolution
             .entries
             .iter()
@@ -4571,6 +4639,9 @@ mod tests {
             token("この", "この", "adj-pn"),
             token("ただ", "ただ", "adv"),
             token("ない", "ない", "adj-i"),
+            token("ません", "ません", "suf"),
+            token("だろう", "だろう", "exp"),
+            token("でしょう", "でしょう", "exp"),
         ]);
 
         assert_eq!(normalized[0].dictionary_form, "こと");
@@ -4615,6 +4686,17 @@ mod tests {
             normalized[5].entries[0].senses[0].part_of_speech,
             vec!["adj-i"]
         );
+        assert_eq!(normalized[6].dictionary_form, "ません");
+        assert_eq!(
+            normalized[6].entries[0].senses[0].part_of_speech,
+            vec!["aux-v"]
+        );
+        assert_eq!(normalized[7].dictionary_form, "だ");
+        assert_eq!(
+            normalized[7].entries[0].senses[0].part_of_speech,
+            vec!["aux"]
+        );
+        assert_eq!(normalized[8].dictionary_form, "でしょう");
     }
 
     #[test]
@@ -4631,6 +4713,8 @@ mod tests {
             token("ラウンド", "ラウンド", "adj-f"),
             token("エンド", "エンド", "conj"),
             token("リンク状態", "リンク状態", "unc"),
+            token("お荷物", "お荷物", "n"),
+            token("ホロ", "ホロ", "n"),
         ]);
 
         let attack = &normalized[0];
@@ -4743,6 +4827,21 @@ mod tests {
                 .glosses,
             vec!["link state  (n)".to_string()]
         );
+        assert_eq!(normalized[11].dictionary_form, "荷物");
+        assert_eq!(
+            normalized[11].entries[0]
+                .popup_override
+                .as_ref()
+                .unwrap()
+                .glosses,
+            vec![
+                "luggage; baggage; package  (n)".to_string(),
+                "burden  (n)".to_string(),
+                "payload (of a packet, cell, etc.)  (n)".to_string()
+            ]
+        );
+        assert!(!normalized[12].is_known());
+        assert_eq!(normalized[12].surface, "ホロ");
     }
 
     #[test]
@@ -5140,13 +5239,13 @@ mod tests {
     }
 
     #[test]
-    fn single_kana_auxiliary_fragment_does_not_resolve_to_content_homograph() {
+    fn single_kana_fragments_do_not_resolve_to_rare_content_homographs() {
         let dict = Dictionary::from_entries(vec![entry(&["り"], &["り"], "n", &["li"])]);
-        for major_pos in ["助動詞", "名詞"] {
+        for (surface, major_pos) in [("る", "助動詞"), ("る", "名詞"), ("り", "名詞")] {
             let morpheme = Morpheme {
-                surface: "る".to_string(),
+                surface: surface.to_string(),
                 base_form: "り".to_string(),
-                reading: Some("ル".to_string()),
+                reading: Some(surface.to_string()),
                 pos: vec![major_pos.to_string(), "*".to_string()],
                 conjugation_form: None,
             };
@@ -5154,10 +5253,26 @@ mod tests {
                 .node(&[morpheme], 0, 1)
                 .expect("single morpheme resolves as unknown");
 
-            assert_eq!(token.surface, "る");
-            assert_eq!(token.dictionary_form, "る");
+            assert_eq!(token.surface, surface);
+            assert_eq!(token.dictionary_form, surface);
             assert!(!token.is_known());
         }
+
+        let grammar_dict = Dictionary::from_entries(vec![entry(&["り"], &["り"], "prt", &["and"])]);
+        let morpheme = Morpheme {
+            surface: "り".to_string(),
+            base_form: "り".to_string(),
+            reading: Some("り".to_string()),
+            pos: vec!["助詞".to_string(), "*".to_string()],
+            conjugation_form: None,
+        };
+        let (_, token) = grammar_dict
+            .node(&[morpheme], 0, 1)
+            .expect("single grammar morpheme resolves");
+
+        assert_eq!(token.surface, "り");
+        assert_eq!(token.dictionary_form, "り");
+        assert!(token.is_known());
     }
 
     #[test]
