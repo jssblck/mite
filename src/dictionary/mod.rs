@@ -1456,6 +1456,7 @@ impl Dictionary {
         let tokens = self.normalize_te_shimau_auxiliary_tokens(tokens);
         let tokens = self.normalize_te_benefactive_auxiliary_tokens(tokens);
         let tokens = normalize_policy_homographs(tokens);
+        let tokens = normalize_copular_dearu_tokens(tokens);
         let tokens = normalize_dekiru_stem_tokens(tokens);
         let tokens = split_contextual_slash_numeric_unknowns(tokens);
         merge_repeated_punctuation_unknowns(tokens)
@@ -2159,9 +2160,142 @@ fn normalize_policy_homographs(tokens: Vec<Token>) -> Vec<Token> {
             "なき" if token.dictionary_form == "ない" || token.dictionary_form == "無き" => {
                 literary_naki_token()
             }
+            "お過" => osugoshi_fragment_token(
+                "お過",
+                vec![
+                    RubySegment {
+                        text: "お".to_string(),
+                        furigana: None,
+                    },
+                    RubySegment {
+                        text: "過".to_string(),
+                        furigana: Some("す".to_string()),
+                    },
+                ],
+                "Line-wrapped first part of お過ごしください.",
+            ),
+            "ごし" if next_token(&tokens, index).is_some_and(|next| next.surface == "ください") => {
+                osugoshi_fragment_token(
+                    "ごし",
+                    vec![RubySegment {
+                        text: "ごし".to_string(),
+                        furigana: None,
+                    }],
+                    "Line-wrapped continuation of お過ごしください.",
+                )
+            }
             _ => token.clone(),
         })
         .collect()
+}
+
+fn normalize_copular_dearu_tokens(tokens: Vec<Token>) -> Vec<Token> {
+    // See docs/eval-metadata.md: である/であり is the learner-facing copular
+    // construction. Keep で and ある addressable, but do not let the で token
+    // fall back to a case particle or the ある token prefer resultative てある.
+    let mut normalized = Vec::with_capacity(tokens.len());
+    let mut index = 0;
+    while index < tokens.len() {
+        if tokens.get(index).is_some_and(is_dearu_de_connector_token)
+            && tokens.get(index + 1).is_some_and(is_dearu_aru_family_token)
+        {
+            let aru = tokens[index + 1].clone();
+            normalized.push(copular_de_token());
+            normalized.push(copular_aru_token(&aru));
+            index += 2;
+        } else {
+            normalized.push(tokens[index].clone());
+            index += 1;
+        }
+    }
+    normalized
+}
+
+fn is_dearu_de_connector_token(token: &Token) -> bool {
+    token.surface == "で"
+}
+
+fn is_dearu_aru_family_token(token: &Token) -> bool {
+    matches!(token.surface.as_str(), "ある" | "あり" | "あっ" | "あって")
+        && token.dictionary_form == "ある"
+}
+
+fn copular_de_token() -> Token {
+    Token {
+        surface: "で".to_string(),
+        dictionary_form: "だ".to_string(),
+        reasons: vec!["連用形".to_string()],
+        entries: vec![Entry {
+            kanji: Vec::new(),
+            kana: vec!["だ".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["aux-v".to_string(), "cop".to_string()],
+                glosses: vec!["be; is".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "だ".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["be; is  (aux-v, cop)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::AuxVerb),
+        note_override: Some("で · 連用形".to_string()),
+    }
+}
+
+fn copular_aru_token(token: &Token) -> Token {
+    Token {
+        surface: token.surface.clone(),
+        dictionary_form: "ある".to_string(),
+        reasons: token.reasons.clone(),
+        entries: vec![Entry {
+            kanji: vec!["有る".to_string(), "在る".to_string()],
+            kana: vec!["ある".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["v5r-i".to_string(), "vi".to_string()],
+                glosses: vec!["to be; to exist".to_string()],
+                misc: vec!["uk".to_string()],
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "ある".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["to be; to exist  (v5r-i, vi)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Verb),
+        note_override: None,
+    }
+}
+
+fn osugoshi_fragment_token(surface: &str, ruby: Vec<RubySegment>, note: &str) -> Token {
+    Token {
+        surface: surface.to_string(),
+        dictionary_form: "過ごす".to_string(),
+        reasons: Vec::new(),
+        entries: vec![Entry {
+            kanji: vec!["過ごす".to_string()],
+            kana: vec!["すごす".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["v5s".to_string(), "vt".to_string()],
+                glosses: vec!["to pass (time); to spend".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby,
+                glosses: vec!["to pass (time); to spend  (v5s, vt)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Verb),
+        note_override: Some(note.to_string()),
+    }
 }
 
 fn previous_token(tokens: &[Token], index: usize) -> Option<&Token> {
@@ -5413,6 +5547,14 @@ mod tests {
             .expect("sense")
             .part_of_speech;
         assert_eq!(pos, &vec!["vs-i".to_string()]);
+
+        let kudasai = tokens
+            .iter()
+            .find(|token| token.surface == "ください")
+            .unwrap_or_else(|| panic!("ください token in {tokens:?}"));
+        assert_eq!(kudasai.dictionary_form, "ください");
+        assert!(kudasai.reasons.is_empty());
+        assert_eq!(kudasai.source_pos, Some(LinderaPos::AuxVerb));
     }
 
     #[test]
@@ -6363,6 +6505,96 @@ mod tests {
         assert_eq!(
             normalized[4].entries[0].senses[0].part_of_speech,
             vec!["adj-na", "adv"]
+        );
+    }
+
+    #[test]
+    fn dearu_construction_keeps_copula_and_existence_verb_readings() {
+        let normalized = normalize_copular_dearu_tokens(vec![
+            token("で", "で", "prt"),
+            token("ある", "ある", "aux-v"),
+            token("で", "で", "prt"),
+            {
+                let mut ari = token("あり", "ある", "aux-v");
+                ari.reasons = vec!["連用形".to_string()];
+                ari
+            },
+        ]);
+
+        assert_eq!(normalized[0].surface, "で");
+        assert_eq!(normalized[0].dictionary_form, "だ");
+        assert_eq!(normalized[0].source_pos, Some(LinderaPos::AuxVerb));
+        assert_eq!(normalized[0].reasons, vec!["連用形".to_string()]);
+        assert_eq!(normalized[0].note_override.as_deref(), Some("で · 連用形"));
+        assert_eq!(
+            normalized[0].entries[0].senses[0].part_of_speech,
+            vec!["aux-v".to_string(), "cop".to_string()]
+        );
+
+        assert_eq!(normalized[1].surface, "ある");
+        assert_eq!(normalized[1].dictionary_form, "ある");
+        assert_eq!(normalized[1].source_pos, Some(LinderaPos::Verb));
+        assert_eq!(
+            normalized[1].entries[0].senses[0].part_of_speech,
+            vec!["v5r-i".to_string(), "vi".to_string()]
+        );
+
+        assert_eq!(normalized[2].dictionary_form, "だ");
+        assert_eq!(normalized[3].surface, "あり");
+        assert_eq!(normalized[3].dictionary_form, "ある");
+        assert_eq!(normalized[3].reasons, vec!["連用形".to_string()]);
+        assert_eq!(normalized[3].source_pos, Some(LinderaPos::Verb));
+    }
+
+    #[test]
+    fn dearu_construction_does_not_rewrite_standalone_de_or_aru() {
+        let normalized = normalize_copular_dearu_tokens(vec![
+            token("で", "で", "prt"),
+            token("目的", "目的", "n"),
+            token("ある", "ある", "aux-v"),
+        ]);
+
+        assert_eq!(normalized[0].dictionary_form, "で");
+        assert_eq!(normalized[2].source_pos, None);
+    }
+
+    #[test]
+    fn osugoshi_wrapped_fragments_keep_spend_metadata() {
+        let normalized = normalize_policy_homographs(vec![
+            token("お過", "過", "pref"),
+            token("ごし", "する", "vs-i"),
+            token("ください", "ください", "aux-v"),
+        ]);
+
+        assert_eq!(normalized[0].dictionary_form, "過ごす");
+        assert_eq!(normalized[0].source_pos, Some(LinderaPos::Verb));
+        assert_eq!(
+            normalized[0].note_override.as_deref(),
+            Some("Line-wrapped first part of お過ごしください.")
+        );
+        assert_eq!(
+            normalized[0].entries[0]
+                .popup_override
+                .as_ref()
+                .expect("popup")
+                .ruby,
+            vec![
+                RubySegment {
+                    text: "お".to_string(),
+                    furigana: None
+                },
+                RubySegment {
+                    text: "過".to_string(),
+                    furigana: Some("す".to_string())
+                }
+            ]
+        );
+
+        assert_eq!(normalized[1].dictionary_form, "過ごす");
+        assert_eq!(normalized[1].source_pos, Some(LinderaPos::Verb));
+        assert_eq!(
+            normalized[1].note_override.as_deref(),
+            Some("Line-wrapped continuation of お過ごしください.")
         );
     }
 

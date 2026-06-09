@@ -223,34 +223,39 @@ pub fn popup_content(
 ) -> PopupContent {
     let word = token.dictionary_form.clone();
     let entry = token.entries.first();
-    let ruby = entry
-        .and_then(|entry| entry.popup_override.as_ref())
-        .map(|popup| ruby_segments_from_override(&popup.ruby))
-        .unwrap_or_else(|| {
-            let reading = entry
-                .and_then(|entry| entry.kana.first())
-                .filter(|reading| has_kanji(&word) && reading.as_str() != word)
-                .cloned();
-            if entry.is_none() && is_quiet_unknown_surface(&token.surface) {
-                Vec::new()
-            } else if entry.is_none()
-                && token.source_pos == Some(crate::pos::LinderaPos::AuxVerb)
-                && token.surface != token.dictionary_form
-            {
-                vec![FuriSegment {
-                    text: token.surface.clone(),
-                    furigana: None,
-                }]
-            } else {
-                match &reading {
-                    Some(reading) => furigana_segments(&word, reading),
-                    None => vec![FuriSegment {
-                        text: word.clone(),
+    let ruby = if is_quiet_symbol_surface(&token.surface) && token.surface == token.dictionary_form
+    {
+        Vec::new()
+    } else {
+        entry
+            .and_then(|entry| entry.popup_override.as_ref())
+            .map(|popup| ruby_segments_from_override(&popup.ruby))
+            .unwrap_or_else(|| {
+                let reading = entry
+                    .and_then(|entry| entry.kana.first())
+                    .filter(|reading| has_kanji(&word) && reading.as_str() != word)
+                    .cloned();
+                if entry.is_none() && is_quiet_unknown_surface(&token.surface) {
+                    Vec::new()
+                } else if entry.is_none()
+                    && token.source_pos == Some(crate::pos::LinderaPos::AuxVerb)
+                    && token.surface != token.dictionary_form
+                {
+                    vec![FuriSegment {
+                        text: token.surface.clone(),
                         furigana: None,
-                    }],
+                    }]
+                } else {
+                    match &reading {
+                        Some(reading) => furigana_segments(&word, reading),
+                        None => vec![FuriSegment {
+                            text: word.clone(),
+                            furigana: None,
+                        }],
+                    }
                 }
-            }
-        });
+            })
+    };
 
     let note = if let Some(note) = &token.note_override {
         Some(note.clone())
@@ -306,6 +311,10 @@ fn is_quiet_unknown_surface(surface: &str) -> bool {
                 || ch.is_ascii_alphanumeric()
                 || !is_cjk(ch) && !is_kana(ch) && !ch.is_ascii_alphabetic()
         })
+}
+
+fn is_quiet_symbol_surface(surface: &str) -> bool {
+    !surface.is_empty() && surface.chars().all(is_quiet_symbol_char)
 }
 
 fn is_quiet_symbol_char(ch: char) -> bool {
@@ -661,6 +670,36 @@ mod tests {
             let content = popup_content(&tok(surface), SenseHint::default(), 3, 4);
             assert_eq!(content.ruby, Vec::<FuriSegment>::new());
             assert_eq!(content.category, WordCategory::Unknown);
+        }
+    }
+
+    #[test]
+    fn popup_content_has_no_ruby_for_known_punctuation() {
+        for surface in ["、", "。", "・", "："] {
+            let content = popup_content(
+                &Token {
+                    surface: surface.to_string(),
+                    dictionary_form: surface.to_string(),
+                    reasons: Vec::new(),
+                    entries: vec![Entry {
+                        kanji: Vec::new(),
+                        kana: Vec::new(),
+                        senses: vec![Sense {
+                            part_of_speech: vec!["unc".to_string()],
+                            glosses: Vec::new(),
+                            misc: Vec::new(),
+                        }],
+                        common: true,
+                        popup_override: None,
+                    }],
+                    source_pos: Some(LinderaPos::Other),
+                    note_override: None,
+                },
+                SenseHint::default(),
+                3,
+                4,
+            );
+            assert_eq!(content.ruby, Vec::<FuriSegment>::new());
         }
     }
 
