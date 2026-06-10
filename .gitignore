@@ -6,6 +6,10 @@
 /.venv-models
 /.env
 
+# Local scratch copy of private eval captures for fast iteration; the private
+# data must never land in this repository.
+/eval-subset
+
 # Claude session scheduler artifacts
 .claude/scheduled_tasks.lock
 .claude/scheduled_tasks.json

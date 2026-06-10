@@ -75,3 +75,25 @@ cargo run -- eval-corpus `
 The eval output is the accuracy side of the performance trade. The local
 precommit script still supports `.\scripts\precommit.ps1 -IncludeEval` for a
 strict perfect-score gate over each image.
+
+## Reference Numbers (2026-06-09)
+
+Offline full-pass profile on labeled 4K eval captures (reference NVIDIA GPU,
+PP-OCRv5 mobile, TensorRT FP16, `cargo run --release --example profile_ocr`):
+
+```text
+dense 95-line menu frame (capture-1780033429968):
+  before: detect p50 207 / p95 252 / p99 260   e2e p50 302 / p95 356 / p99 367
+  after:  detect p50 114 / p95 140 / p99 160   e2e p50 205 / p95 244 / p99 267
+typical 40-line frame (capture-1780033168244):
+  after:  detect p50 113 / p95 149              e2e p50 171 / p95 202 / p99 246
+```
+
+The "after" build replaces the per-pixel flood fill in detector
+postprocessing with scanline union-find connected components (identical
+output, several times faster) and overlaps the CPU local-contrast image build
+with the primary detector inference. A half-resolution local-mean variant was
+measured and rejected: it saved ~5 ms wall but cost 0.10 aggregate eval
+points. Likewise PP-OCRv5 server recognition was measured against the eval
+corpus and scored below mobile recognition (98.44% vs 98.73% characters) at
+several times the per-line cost, so mobile remains the recognizer.

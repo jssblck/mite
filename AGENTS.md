@@ -72,6 +72,7 @@ cargo run -- watch --title "Window title" --auto
 cargo run -- watch --hud
 cargo run -- watch --metrics-interval-secs 5
 cargo run -- eval --image eval\collection-name\capture-<ts>\underlying.png --labels eval\collection-name\capture-<ts>\eval.json --out target\eval\capture-<ts>.json
+cargo run -- eval-corpus --root eval --out target\eval\corpus-summary.json --out-dir target\eval\corpus --allow-failures
 ```
 
 Use `eval` against manually labeled real captures as the OCR plus dictionary
@@ -157,7 +158,9 @@ auditing captures.
 - For eval metadata, follow `docs/eval-metadata.md`: choose one stable,
   learner-safe primary interpretation by rule, keep visible text strict, and put
   ambiguity in notes or alternate-analysis UI rather than drifting labels by
-  capture.
+  capture. Label corrections require pixel- or convention-level proof and an
+  entry in `eval/LABEL-CHANGES.md`; `examples/audit_label_bounds.rs` and
+  `examples/relabel_eval_tokens.rs` are the audited paths for them.
 - Update docs when command behavior, model requirements, config defaults, or
   latency/accuracy expectations change.
 - Use plain ASCII quotes in docs, code comments, and generated text.

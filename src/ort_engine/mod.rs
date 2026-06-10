@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fs;
 use std::time::Instant;
 
@@ -43,6 +44,10 @@ const DET_ALIGNMENT_RESIZE_THRESHOLD: f32 = 0.05;
 const DET_PROFILE_MIN_SIDE: u32 = 64;
 const DET_PROFILE_OPT_HEIGHT: u32 = 1088;
 const DET_PROFILE_OPT_WIDTH: u32 = 1920;
+/// Keep the profile exactly at native 4K: widening it (for example to cover
+/// `detector_upscale` above 1.0) rebuilds the engine with different tactic
+/// choices and measurably perturbs detection scores. Inputs beyond the
+/// profile fall back to the CUDA execution provider with a logged warning.
 const DET_PROFILE_MAX_SIDE: u32 = 3840;
 
 /// Rec601 luma weights (R, G, B) for the grayscale/contrast-stretch helpers.
@@ -91,6 +96,13 @@ fn prof<T>(label: &str, f: impl FnOnce() -> T) -> T {
         f()
     }
 }
+
+/// Lines the primary recognizer reads below this confidence get a second
+/// opinion from the optional fallback recognizer.
+const REC_FALLBACK_MAX_CONFIDENCE: f32 = 0.75;
+/// The fallback's read replaces the primary's only at or above this absolute
+/// confidence (and only when it also beats the primary's confidence).
+const REC_FALLBACK_ACCEPT_MIN: f32 = 0.92;
 
 /// Maximum text lines per recognizer batch. Recognizer compute scales with
 /// `batch × padded_width`, and every line in a batch is zero-padded to the
@@ -143,11 +155,17 @@ impl DetectorInput<'_> {
 pub struct OrtOcrEngine {
     detector: Session,
     recognizer: Session,
+    /// Optional heavier second-opinion recognizer for low-confidence lines.
+    fallback_recognizer: Option<Session>,
     dictionary: Vec<String>,
     stable_ids: StableIdAllocator,
     /// Set from the pipeline config during `detect`, reused by `recognize`
     /// (which has no config argument) so both stages see the same preprocessing.
     contrast_stretch: bool,
+    /// The recognition-confidence floor from the pipeline config, captured in
+    /// `detect`; lines below it never receive a fallback read (junk must stay
+    /// dead rather than having its confidence boosted past the noise filters).
+    min_recognition_confidence: f32,
 }
 
 impl OrtOcrEngine {
@@ -162,6 +180,19 @@ impl OrtOcrEngine {
 
         let detector = commit_session(&models.detector_path, runtime, ModelKind::Detector)?;
         let recognizer = commit_session(&models.recognizer_path, runtime, ModelKind::Recognizer)?;
+        let fallback_recognizer = match &models.fallback_recognizer_path {
+            Some(path) => {
+                require_file(path)?;
+                // The PP-OCRv5 server recognizer overflows FP16 (see
+                // docs/models.md); the fallback always runs FP32.
+                let fp32_runtime = RuntimeConfig {
+                    fp16: false,
+                    ..runtime.clone()
+                };
+                Some(commit_session(path, &fp32_runtime, ModelKind::Recognizer)?)
+            }
+            None => None,
+        };
         let dictionary = fs::read_to_string(charset_path)
             .with_context(|| format!("failed to read {}", charset_path.display()))?
             .lines()
@@ -171,9 +202,11 @@ impl OrtOcrEngine {
         Ok(Self {
             detector,
             recognizer,
+            fallback_recognizer,
             dictionary,
             stable_ids: StableIdAllocator::default(),
             contrast_stretch: false,
+            min_recognition_confidence: 0.5,
         })
     }
 }
@@ -185,26 +218,50 @@ impl OcrEngine for OrtOcrEngine {
             .as_ref()
             .context("real OCR requires frames with RGB pixels")?;
         self.contrast_stretch = config.detector_contrast_stretch;
+        self.min_recognition_confidence = config.min_recognition_confidence;
         let image = maybe_contrast_stretch(image, self.contrast_stretch);
         let native_long = image.width().max(image.height());
         let target_long = config.detector_target_long_side(native_long);
         let detector_input = prof("det.resize", || {
             resize_for_detector(image.as_ref(), target_long, config.detector_resize_filter)
         });
-        let mut candidates = prof("det.primary", || {
-            detect_candidate_rects(
-                &mut self.detector,
-                &detector_input,
-                frame.size,
-                config,
-                DetectorPassConfig::primary(config),
-            )
-        })?;
-
-        if config.detector_low_contrast_pass {
-            let enhanced = prof("det.local_contrast", || {
-                local_contrast_detector_image(detector_input.image.as_ref())
+        // The low-contrast pass needs a CPU-built local-contrast image; build
+        // it concurrently with the primary pass so the GPU inference and the
+        // CPU enhancement overlap instead of running back to back.
+        let (primary, enhanced) = if config.detector_low_contrast_pass {
+            std::thread::scope(|scope| {
+                let enhance = scope.spawn(|| {
+                    prof("det.local_contrast", || {
+                        local_contrast_detector_image(detector_input.image.as_ref())
+                    })
+                });
+                let primary = prof("det.primary", || {
+                    detect_candidate_rects(
+                        &mut self.detector,
+                        &detector_input,
+                        frame.size,
+                        config,
+                        DetectorPassConfig::primary(config),
+                    )
+                });
+                let enhanced = enhance.join().expect("local contrast build panicked");
+                (primary, Some(enhanced))
+            })
+        } else {
+            let primary = prof("det.primary", || {
+                detect_candidate_rects(
+                    &mut self.detector,
+                    &detector_input,
+                    frame.size,
+                    config,
+                    DetectorPassConfig::primary(config),
+                )
             });
+            (primary, None)
+        };
+        let mut candidates = primary?;
+
+        if let Some(enhanced) = enhanced {
             let enhanced_input = DetectorInput {
                 image: Cow::Owned(enhanced),
                 padded_size: detector_input.padded_size,
@@ -292,11 +349,379 @@ impl OcrEngine for OrtOcrEngine {
             Ok(())
         })?;
 
+        // Second opinion from the heavier fallback recognizer for lines the
+        // primary read with low confidence. Crops are reused as-is; both
+        // recognizers share the input shape, normalization, and charset. The
+        // fallback's read wins only when it clears a high absolute confidence
+        // bar and beats the primary, so cross-model confidence noise cannot
+        // churn ordinary lines, and lines below the recognition floor are
+        // never upgraded.
+        if let Some(fallback) = self.fallback_recognizer.as_mut() {
+            let floor = self.min_recognition_confidence;
+            let consult: Vec<usize> = results
+                .iter()
+                .enumerate()
+                .filter(|(_, slot)| {
+                    slot.as_ref().is_some_and(|line| {
+                        !line.text.trim().is_empty()
+                            && line.confidence >= floor
+                            && line.confidence < REC_FALLBACK_MAX_CONFIDENCE
+                    })
+                })
+                .map(|(index, _)| index)
+                .collect();
+            if !consult.is_empty() {
+                prof("rec.fallback", || -> Result<()> {
+                    let mut fallback_results: Vec<Option<RecognizedText>> =
+                        (0..boxes.len()).map(|_| None).collect();
+                    let mut consult_order: Vec<usize> = Vec::new();
+                    for (crop_index, crop) in crops.iter().enumerate() {
+                        if consult.contains(&crop.index) {
+                            consult_order.push(crop_index);
+                        }
+                    }
+                    consult_order.sort_by_key(|&crop_index| crops[crop_index].real_w);
+                    for chunk in consult_order.chunks(REC_BATCH_MAX) {
+                        run_recognizer_batch(
+                            fallback,
+                            &self.dictionary,
+                            &crops,
+                            chunk,
+                            boxes,
+                            &mut fallback_results,
+                        )?;
+                    }
+                    for index in consult {
+                        if let (Some(original), Some(second)) =
+                            (results[index].as_ref(), fallback_results[index].take())
+                            && second.confidence >= REC_FALLBACK_ACCEPT_MIN
+                            && second.confidence > original.confidence
+                            && !second.text.trim().is_empty()
+                        {
+                            results[index] = Some(second);
+                        }
+                    }
+                    Ok(())
+                })?;
+            }
+        }
+
+        prof("rec.shape_rescue", || {
+            rescue_shape_glyphs(frame_image, &mut results)
+        });
+
         Ok(results
             .into_iter()
             .map(|result| result.expect("every box produces a recognition result"))
             .collect())
     }
+}
+
+/// Diamond list bullets (◇/◆) are real, labeled UI glyphs in the target games,
+/// but they are not in the recognizer charset, so their detected boxes decode
+/// to empty text and get dropped as noise. For small near-square boxes that
+/// decoded empty, classify the glyph geometrically on the frame and synthesize
+/// the recognition, with the box refined to the measured glyph extent (the
+/// detector typically boxes only the brighter inner part of the diamond).
+fn rescue_shape_glyphs(image: &RgbImage, results: &mut [Option<RecognizedText>]) {
+    let text_rects: Vec<Rect> = results
+        .iter()
+        .flatten()
+        .filter(|line| !line.text.trim().is_empty())
+        .map(|line| line.text_box.rect)
+        .collect();
+
+    for slot in results.iter_mut().flatten() {
+        if !slot.text.trim().is_empty() {
+            continue;
+        }
+        let rect = slot.text_box.rect;
+        if !(12.0..=90.0).contains(&rect.height) {
+            continue;
+        }
+        let aspect = rect.width / rect.height.max(1.0);
+        if !(0.5..=1.8).contains(&aspect) {
+            continue;
+        }
+        // A bullet introduces text on the same row; lone diamonds are timeline
+        // markers and map decorations, not glyphs.
+        if !has_same_row_text(rect, &text_rects) {
+            continue;
+        }
+        if let Some((glyph, measured)) = classify_diamond_glyph(image, rect) {
+            slot.text = glyph.to_string();
+            slot.confidence = 0.95;
+            slot.text_box.rect = measured;
+            slot.char_centers = vec![measured.x + measured.width / 2.0];
+        }
+    }
+}
+
+/// Whether any recognized text line shares this rect's row (>= half-height
+/// vertical overlap) within a few glyph widths horizontally.
+fn has_same_row_text(rect: Rect, text_rects: &[Rect]) -> bool {
+    let max_gap = rect.height * 4.0;
+    text_rects.iter().any(|other| {
+        let overlap = (rect.bottom().min(other.bottom()) - rect.y.max(other.y)).max(0.0);
+        if overlap < rect.height * 0.5 {
+            return false;
+        }
+        let gap = if other.x >= rect.right() {
+            other.x - rect.right()
+        } else if rect.x >= other.right() {
+            rect.x - other.right()
+        } else {
+            0.0
+        };
+        gap <= max_gap
+    })
+}
+
+/// Decide whether the region around `rect` holds a diamond bullet. Returns the
+/// glyph (outline `◇` or filled `◆`) and the measured glyph bounding box in
+/// frame coordinates.
+fn classify_diamond_glyph(image: &RgbImage, rect: Rect) -> Option<(char, Rect)> {
+    // Probe a neighborhood larger than the detector box: the box usually covers
+    // only the glyph's bright core.
+    let margin = rect.height * 0.75;
+    let x0 = (rect.x - margin).max(0.0) as u32;
+    let y0 = (rect.y - margin).max(0.0) as u32;
+    let x1 = ((rect.right() + margin) as u32).min(image.width().saturating_sub(1));
+    let y1 = ((rect.bottom() + margin) as u32).min(image.height().saturating_sub(1));
+    if x1 <= x0 + 8 || y1 <= y0 + 8 {
+        return None;
+    }
+
+    let width = (x1 - x0 + 1) as usize;
+    let height = (y1 - y0 + 1) as usize;
+    let mut luma = vec![0f32; width * height];
+    for y in 0..height {
+        for x in 0..width {
+            let pixel = image.get_pixel(x0 + x as u32, y0 + y as u32);
+            luma[y * width + x] = LUMA_WEIGHTS[0] * pixel[0] as f32
+                + LUMA_WEIGHTS[1] * pixel[1] as f32
+                + LUMA_WEIGHTS[2] * pixel[2] as f32;
+        }
+    }
+
+    // Background reference: median of the probe border ring.
+    let mut border: Vec<f32> = Vec::with_capacity(2 * (width + height));
+    for x in 0..width {
+        border.push(luma[x]);
+        border.push(luma[(height - 1) * width + x]);
+    }
+    for y in 0..height {
+        border.push(luma[y * width]);
+        border.push(luma[y * width + width - 1]);
+    }
+    border.sort_by(f32::total_cmp);
+    let background = border[border.len() / 2];
+
+    const FG_LUMA_DELTA: f32 = 45.0;
+    let foreground: Vec<bool> = luma
+        .iter()
+        .map(|&value| (value - background).abs() > FG_LUMA_DELTA)
+        .collect();
+
+    // Text-layer glyphs are sharp; out-of-focus UI chrome (blurred buttons
+    // behind a modal) smears into shapes that pass soft geometry tests. Demand
+    // at least one crisp edge anywhere in the probe.
+    const MIN_PEAK_EDGE_GRADIENT: f32 = 55.0;
+    let mut peak_gradient = 0f32;
+    for y in 0..height {
+        for x in 0..width.saturating_sub(1) {
+            peak_gradient =
+                peak_gradient.max((luma[y * width + x + 1] - luma[y * width + x]).abs());
+        }
+    }
+    for y in 0..height.saturating_sub(1) {
+        for x in 0..width {
+            peak_gradient =
+                peak_gradient.max((luma[(y + 1) * width + x] - luma[y * width + x]).abs());
+        }
+    }
+    if peak_gradient < MIN_PEAK_EDGE_GRADIENT {
+        return None;
+    }
+
+    let mut min_x = usize::MAX;
+    let mut max_x = 0usize;
+    let mut min_y = usize::MAX;
+    let mut max_y = 0usize;
+    let mut count = 0usize;
+    let mut sum_x = 0f32;
+    let mut sum_y = 0f32;
+    for y in 0..height {
+        for x in 0..width {
+            if foreground[y * width + x] {
+                count += 1;
+                sum_x += x as f32;
+                sum_y += y as f32;
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                min_y = min_y.min(y);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+    if count < 24 || max_x <= min_x + 9 || max_y <= min_y + 9 {
+        return None;
+    }
+    let glyph_w = (max_x - min_x + 1) as f32;
+    let glyph_h = (max_y - min_y + 1) as f32;
+    let glyph_aspect = glyph_w / glyph_h;
+    if !(0.7..=1.4).contains(&glyph_aspect) {
+        return None;
+    }
+    // Labeled diamond bullets are 17-42 px; larger rhombic shapes are game
+    // decorations, not text glyphs.
+    if !(12.0..=50.0).contains(&glyph_w) || !(12.0..=50.0).contains(&glyph_h) {
+        return None;
+    }
+
+    let cx = sum_x / count as f32;
+    let cy = sum_y / count as f32;
+    let rx = (glyph_w / 2.0).max(1.0);
+    let ry = (glyph_h / 2.0).max(1.0);
+
+    // A diamond's mass lies inside the L1 ball spanned by its half-extents and
+    // its bounding-box corners are empty; reject squares, letters, and icons.
+    let mut inside = 0usize;
+    let mut corner_total = 0usize;
+    let mut corner_foreground = 0usize;
+    let mut quadrant = [false; 4];
+    let mut core_total = 0usize;
+    let mut core_foreground = 0usize;
+    let mut ring_total = 0usize;
+    let mut ring_foreground = 0usize;
+    // Glyph mass near each axis-extreme vertex (top, bottom, left, right). A
+    // diamond peaks exactly there; bracket/reticle icons have gaps.
+    let mut vertex_foreground = [0usize; 4];
+    // Glyph mass near each 45-degree edge midpoint. A diamond's outline runs
+    // exactly there; circular reticle icons with diagonal notches do not.
+    let mut edge_foreground = [0usize; 4];
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let dx = (x as f32 - cx) / rx;
+            let dy = (y as f32 - cy) / ry;
+            let l1 = dx.abs() + dy.abs();
+            let is_fg = foreground[y * width + x];
+            if is_fg {
+                if dy <= -0.7 && dx.abs() <= 0.3 {
+                    vertex_foreground[0] += 1;
+                }
+                if dy >= 0.7 && dx.abs() <= 0.3 {
+                    vertex_foreground[1] += 1;
+                }
+                if dx <= -0.7 && dy.abs() <= 0.3 {
+                    vertex_foreground[2] += 1;
+                }
+                if dx >= 0.7 && dy.abs() <= 0.3 {
+                    vertex_foreground[3] += 1;
+                }
+                if (dx.abs() - 0.5).abs() <= 0.22 && (dy.abs() - 0.5).abs() <= 0.22 {
+                    let qx = usize::from(dx >= 0.0);
+                    let qy = usize::from(dy >= 0.0);
+                    edge_foreground[qy * 2 + qx] += 1;
+                }
+            }
+            if l1 > 1.3 {
+                corner_total += 1;
+                if is_fg {
+                    corner_foreground += 1;
+                }
+            }
+            if l1 <= 0.40 {
+                core_total += 1;
+                if is_fg {
+                    core_foreground += 1;
+                }
+            } else if (0.45..=0.75).contains(&l1) {
+                ring_total += 1;
+                if is_fg {
+                    ring_foreground += 1;
+                }
+            }
+            if is_fg {
+                if l1 <= 1.2 {
+                    inside += 1;
+                }
+                let qx = usize::from(dx >= 0.0);
+                let qy = usize::from(dy >= 0.0);
+                quadrant[qy * 2 + qx] = true;
+            }
+        }
+    }
+
+    if (inside as f32) < count as f32 * 0.92 {
+        return None;
+    }
+    if corner_total > 0 && corner_foreground as f32 > corner_total as f32 * 0.08 {
+        return None;
+    }
+    if quadrant.iter().any(|present| !present) {
+        return None;
+    }
+    if vertex_foreground.iter().any(|&count| count < 2) {
+        return None;
+    }
+    if edge_foreground.iter().any(|&count| count < 2) {
+        return None;
+    }
+
+    // A true diamond's horizontal extent tapers linearly toward the vertical
+    // tips; rhombic-ish icon blobs do not.
+    let mut taper_error = 0f32;
+    let mut taper_rows = 0usize;
+    for y in min_y..=max_y {
+        let dy = ((y as f32 - cy) / ry).abs();
+        if dy > 0.9 {
+            continue;
+        }
+        let mut row_min = None;
+        let mut row_max = None;
+        for x in min_x..=max_x {
+            if foreground[y * width + x] {
+                row_min.get_or_insert(x);
+                row_max = Some(x);
+            }
+        }
+        taper_rows += 1;
+        match row_min.zip(row_max) {
+            Some((row_left, row_right)) => {
+                let actual_half = (row_right - row_left + 1) as f32 / 2.0 / rx;
+                taper_error += (actual_half - (1.0 - dy)).abs();
+            }
+            None => taper_error += 1.0,
+        }
+    }
+    if taper_rows == 0 || taper_error / taper_rows as f32 > 0.18 {
+        return None;
+    }
+
+    let core_fill = if core_total == 0 {
+        0.0
+    } else {
+        core_foreground as f32 / core_total as f32
+    };
+    let ring_fill = if ring_total == 0 {
+        0.0
+    } else {
+        ring_foreground as f32 / ring_total as f32
+    };
+    // Filled core with an empty ring is a nested glyph (e.g. the gold ◈ event
+    // bullet), which is neither ◇ nor ◆; do not synthesize a wrong glyph.
+    if core_fill >= 0.55 && ring_fill <= 0.35 {
+        return None;
+    }
+    let glyph = if core_fill >= 0.5 { '◆' } else { '◇' };
+    let measured = Rect::new(
+        x0 as f32 + min_x as f32,
+        y0 as f32 + min_y as f32,
+        glyph_w,
+        glyph_h,
+    );
+    Some((glyph, measured))
 }
 
 /// Optionally apply a per-image luminance contrast stretch. Returns the input
@@ -362,7 +787,9 @@ fn percentile_bin(histogram: &[u32; 256], total: u32, fraction: f32) -> u8 {
 
 /// Build a detector-only local-contrast view. Recognition still crops from the
 /// original frame; this image exists only to let the detector see faint glyph
-/// strokes on translucent panels and grey-on-grey game UI.
+/// strokes on translucent panels and grey-on-grey game UI. This build runs
+/// concurrently with the primary detector inference, so most of its cost stays
+/// off the latency critical path.
 fn local_contrast_detector_image(image: &RgbImage) -> RgbImage {
     let width = image.width() as usize;
     let height = image.height() as usize;
@@ -795,6 +1222,12 @@ fn finalize_detection_boxes(
     content_epoch: u64,
 ) -> Vec<TextBox> {
     let mut candidates = merge_detection_rects(candidates, frame_size, config);
+    // When the cap binds, drop the least-confident boxes rather than whatever
+    // happens to sit lowest on the screen.
+    if candidates.len() > config.max_boxes_per_frame {
+        candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
+        candidates.truncate(config.max_boxes_per_frame);
+    }
     candidates.sort_by(|a, b| {
         a.rect
             .y
@@ -806,7 +1239,6 @@ fn finalize_detection_boxes(
 
     candidates
         .into_iter()
-        .take(config.max_boxes_per_frame)
         .map(|candidate| {
             let id = stable_ids.id_for(candidate.rect, STABLE_ID_BUCKET_PX);
             TextBox {
@@ -978,11 +1410,20 @@ fn adjust_text_box_for_normalization(
         return original.clone();
     }
     if let Some(removed) = removed_leading_timer_badge_len(raw_text, normalized_text) {
-        return shrink_text_box_left_to_kept_prefix(original, raw_centers, removed);
+        // Only move the edge for glyphs that actually sat inside the detector
+        // box; decoded junk from the crop padding outside it must not shrink
+        // the box.
+        if removed_prefix_inside_box(original, raw_centers, removed) {
+            return shrink_text_box_left_to_kept_prefix(original, raw_centers, removed);
+        }
+        return original.clone();
     }
     if let Some((start, end)) = kept_span_after_removed_trailing_ui_value(raw_text, normalized_text)
     {
-        return shrink_text_box_to_kept_span(original, raw_centers, start, end);
+        if removed_edges_inside_box(original, raw_centers, start, end) {
+            return shrink_text_box_to_kept_span(original, raw_centers, start, end);
+        }
+        return original.clone();
     }
     if has_inserted_trailing_punctuation(raw_text, normalized_text) {
         return expand_text_box_right_for_inserted_suffix(original, raw_text);
@@ -999,6 +1440,36 @@ fn adjust_text_box_for_normalization(
     adjusted.rect.x = left;
     adjusted.rect.width = right - left;
     adjusted
+}
+
+/// Whether any removed leading glyph's center lies inside the detector box
+/// (with a small slack); pad-region junk outside it must not move edges.
+fn removed_prefix_inside_box(original: &TextBox, raw_centers: &[f32], removed: usize) -> bool {
+    let slack = original.rect.height * 0.1;
+    raw_centers
+        .iter()
+        .take(removed)
+        .any(|&center| center >= original.rect.x + slack)
+}
+
+/// Whether the glyphs removed at either edge of the kept span sat inside the
+/// detector box.
+fn removed_edges_inside_box(
+    original: &TextBox,
+    raw_centers: &[f32],
+    start: usize,
+    end: usize,
+) -> bool {
+    let slack = original.rect.height * 0.1;
+    let leading_inside = raw_centers
+        .iter()
+        .take(start)
+        .any(|&center| center >= original.rect.x + slack);
+    let trailing_inside = raw_centers
+        .iter()
+        .skip(end)
+        .any(|&center| center <= original.rect.right() - slack);
+    leading_inside || trailing_inside || raw_centers.is_empty()
 }
 
 fn removed_leading_timer_badge_len(raw_text: &str, normalized_text: &str) -> Option<usize> {
@@ -1234,6 +1705,15 @@ impl DetectionCandidate {
     }
 }
 
+/// One horizontal run of mask-true pixels, with its union-find run id.
+#[derive(Debug, Clone, Copy)]
+struct MaskRun {
+    row: u32,
+    start: u32,
+    end: u32,
+    score_sum: f32,
+}
+
 fn detect_components_from_probability_map(
     data: &[f32],
     width: usize,
@@ -1243,76 +1723,134 @@ fn detect_components_from_probability_map(
     close_radius_px: u32,
     unclip_ratio: f32,
 ) -> Vec<DetectionCandidate> {
+    // Scanline connected components with union-find over row runs. Produces
+    // exactly the same components (bounding box, area, score sum) as a
+    // per-pixel flood fill under 4-connectivity, but touches each pixel once
+    // in row order, which is several times faster on 4K probability maps.
     let mask = detector_component_mask(data, width, height, threshold, close_radius_px);
-    let mut visited = vec![false; width * height];
-    let mut candidates = Vec::new();
     let min_area = min_component_area.max(1);
 
-    for y in 0..height {
-        for x in 0..width {
-            let index = y * width + x;
-            if visited[index] || !mask[index] {
-                continue;
-            }
+    let mut runs: Vec<MaskRun> = Vec::new();
+    let mut parent: Vec<u32> = Vec::new();
+    // Run-index ranges of the previous and current row.
+    let mut previous_row: std::ops::Range<usize> = 0..0;
 
-            let mut stack = vec![(x, y)];
-            visited[index] = true;
-            let mut min_x = x;
-            let mut max_x = x;
-            let mut min_y = y;
-            let mut max_y = y;
-            let mut area = 0usize;
-            let mut score_sum = 0.0f32;
-
-            while let Some((cx, cy)) = stack.pop() {
-                area += 1;
-                score_sum += data[cy * width + cx].clamp(0.0, 1.0);
-                min_x = min_x.min(cx);
-                max_x = max_x.max(cx);
-                min_y = min_y.min(cy);
-                max_y = max_y.max(cy);
-
-                let neighbors = [
-                    (cx.wrapping_sub(1), cy, cx > 0),
-                    (cx + 1, cy, cx + 1 < width),
-                    (cx, cy.wrapping_sub(1), cy > 0),
-                    (cx, cy + 1, cy + 1 < height),
-                ];
-                for (nx, ny, valid) in neighbors {
-                    if !valid {
-                        continue;
-                    }
-                    let next_index = ny * width + nx;
-                    if !visited[next_index] && mask[next_index] {
-                        visited[next_index] = true;
-                        stack.push((nx, ny));
-                    }
-                }
-            }
-
-            if area >= min_area {
-                let rect = unclip_detector_rect(
-                    Rect::new(
-                        min_x as f32,
-                        min_y as f32,
-                        (max_x - min_x + 1) as f32,
-                        (max_y - min_y + 1) as f32,
-                    ),
-                    area,
-                    width,
-                    height,
-                    unclip_ratio,
-                );
-                candidates.push(DetectionCandidate {
-                    rect,
-                    area,
-                    score_sum,
-                });
-            }
+    fn find(parent: &mut [u32], mut node: u32) -> u32 {
+        while parent[node as usize] != node {
+            let grandparent = parent[parent[node as usize] as usize];
+            parent[node as usize] = grandparent;
+            node = grandparent;
         }
+        node
     }
 
-    candidates
+    for y in 0..height {
+        let row_offset = y * width;
+        let row_start = runs.len();
+        let mut x = 0usize;
+        while x < width {
+            if !mask[row_offset + x] {
+                x += 1;
+                continue;
+            }
+            let start = x;
+            let mut score_sum = 0.0f32;
+            while x < width && mask[row_offset + x] {
+                score_sum += data[row_offset + x].clamp(0.0, 1.0);
+                x += 1;
+            }
+            let id = runs.len() as u32;
+            runs.push(MaskRun {
+                row: y as u32,
+                start: start as u32,
+                end: x as u32,
+                score_sum,
+            });
+            parent.push(id);
+        }
+        let current_row = row_start..runs.len();
+
+        // Union with 4-connected overlapping runs of the previous row. Both
+        // run lists are sorted by start column; sweep them together.
+        let mut above = previous_row.start;
+        for current in current_row.clone() {
+            let (cur_start, cur_end) = (runs[current].start, runs[current].end);
+            while above < previous_row.end && runs[above].end <= cur_start {
+                above += 1;
+            }
+            let mut probe = above;
+            while probe < previous_row.end && runs[probe].start < cur_end {
+                let a = find(&mut parent, current as u32);
+                let b = find(&mut parent, probe as u32);
+                if a != b {
+                    parent[a.max(b) as usize] = a.min(b);
+                }
+                if runs[probe].end >= cur_end {
+                    break;
+                }
+                probe += 1;
+            }
+        }
+        previous_row = current_row;
+    }
+
+    // Fold runs into per-root accumulators.
+    #[derive(Clone, Copy)]
+    struct Accumulator {
+        min_x: u32,
+        max_x: u32,
+        min_y: u32,
+        max_y: u32,
+        area: usize,
+        score_sum: f32,
+    }
+    let mut accumulators: HashMap<u32, Accumulator> = HashMap::new();
+    for (index, &run) in runs.iter().enumerate() {
+        let root = find(&mut parent, index as u32);
+        let entry = accumulators.entry(root).or_insert(Accumulator {
+            min_x: run.start,
+            max_x: run.end - 1,
+            min_y: run.row,
+            max_y: run.row,
+            area: 0,
+            score_sum: 0.0,
+        });
+        entry.min_x = entry.min_x.min(run.start);
+        entry.max_x = entry.max_x.max(run.end - 1);
+        entry.min_y = entry.min_y.min(run.row);
+        entry.max_y = entry.max_y.max(run.row);
+        entry.area += (run.end - run.start) as usize;
+        entry.score_sum += run.score_sum;
+    }
+
+    let mut roots: Vec<u32> = accumulators.keys().copied().collect();
+    roots.sort_unstable();
+    roots
+        .into_iter()
+        .filter_map(|root| {
+            let acc = accumulators[&root];
+            if acc.area < min_area {
+                return None;
+            }
+            let rect = unclip_detector_rect(
+                Rect::new(
+                    acc.min_x as f32,
+                    acc.min_y as f32,
+                    (acc.max_x - acc.min_x + 1) as f32,
+                    (acc.max_y - acc.min_y + 1) as f32,
+                ),
+                acc.area,
+                width,
+                height,
+                unclip_ratio,
+            );
+            Some(DetectionCandidate {
+                rect,
+                area: acc.area,
+                score_sum: acc.score_sum,
+            })
+        })
+        .collect()
 }
 
 fn detector_component_mask(
@@ -1421,8 +1959,13 @@ struct CropBounds {
     height: u32,
 }
 
-/// Padding around the detected rect, as a fraction of its height (with a floor).
-const CROP_PAD_RATIO: f32 = 0.30;
+/// Padding around the detected rect, as a fraction of its height (with a
+/// floor). The detector's component boxes routinely clip a weak edge glyph
+/// (trailing 。/：, leading brackets); at 0.5h the recognizer sees most of
+/// that glyph's body and decodes it, while the scored box stays the
+/// detector's. Measured on the eval corpus, the recovered edge glyphs
+/// outweigh the occasional neighbor-glyph bleed this margin admits.
+const CROP_PAD_RATIO: f32 = 0.50;
 const CROP_PAD_MIN_PX: f32 = 3.0;
 
 fn crop_bounds(image_w: u32, image_h: u32, rect: Rect) -> CropBounds {
@@ -1516,6 +2059,7 @@ fn normalize_single_char(ch: char) -> Option<char> {
         '测' => Some('測'),
         '值' => Some('値'),
         '銳' => Some('鋭'),
+        '齐' => Some('斉'),
         _ => None,
     }
 }
@@ -1549,6 +2093,8 @@ fn resize_for_recognizer(image: &RgbImage) -> RgbImage {
     let width = ((REC_INPUT_HEIGHT as f32 * ratio).round() as u32)
         .clamp(REC_MIN_WIDTH, REC_MAX_WIDTH)
         .next_multiple_of(REC_WIDTH_MULTIPLE);
+    // Bilinear matches the recognizer's training-time preprocessing; bicubic
+    // upscaling was measured slightly worse on the eval corpus.
     imageops::resize(image, width, REC_INPUT_HEIGHT, FilterType::Triangle)
 }
 

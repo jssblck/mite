@@ -22,6 +22,10 @@ const COMMON_REPLACEMENTS: &[(&str, &str)] = &[
     ("すベて", "すべて"),
     ("准禁·", "進捗："),
     ("准禁・", "進捗："),
+    ("准ザ・", "進捗："),
+    // Dotless ı is not part of any game text; it is the recognizer's misread
+    // of the roman numeral Ⅱ before a closing bracket.
+    ("ı」", "Ⅱ」"),
     ("·", "・"),
     ("准禁", "進捗"),
     ("進步", "進捗"),
@@ -120,6 +124,31 @@ const COMMON_REPLACEMENTS: &[(&str, &str)] = &[
     ("25 Pt", "25Pt"),
     ("Ptこつき", "Ptにつき"),
     ("攻撃カ", "攻撃力"),
+    // Stat rows whose leading element icon bleeds into the crop and decodes as
+    // a CJK glyph.
+    ("父攻撃力", "攻撃力"),
+    // 乗霄山 (Mt. Firmament): 霄 is routinely dropped at small UI sizes.
+    ("乗山", "乗霄山"),
+    // Small-kana and dakuten confusions observed in the eval corpus.
+    ("ましよう", "ましょう"),
+    ("でしよう", "でしょう"),
+    ("マッブ", "マップ"),
+    ("ドロッブ", "ドロップ"),
+    ("ブォイド", "ヴォイド"),
+    ("セツト", "セット"),
+    ("ツト】", "ット】"),
+    ("ツト）", "ット）"),
+    // キ misread as 土, カ misread as 力 in specific contexts where the
+    // corrected reading is the only plausible one.
+    ("土ャラ", "キャラ"),
+    ("土ッ下", "キット"),
+    ("住執", "焦熱"),
+    ("力メラ", "カメラ"),
+    ("グリ力", "グリカ"),
+    ("圧カ", "圧力"),
+    ("変奉", "変奏"),
+    ("となリ", "となり"),
+    ("巡リ", "巡り"),
     ("1:80", "1.80"),
     ("本日の獲得可能回数：610", "本日の獲得可能回数：6/10"),
     (

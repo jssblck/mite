@@ -34,3 +34,8 @@ pub fn is_kana(ch: char) -> bool {
 pub fn is_katakana(ch: char) -> bool {
     (KATAKANA_START..=KATAKANA_END).contains(&ch)
 }
+
+/// Hiragana block only (excludes katakana).
+pub fn is_hiragana(ch: char) -> bool {
+    ('\u{3040}'..'\u{30a0}').contains(&ch)
+}

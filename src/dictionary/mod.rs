@@ -17,7 +17,7 @@ use serde::Serialize;
 use crate::frequency::FrequencyTable;
 use crate::morphology::{Analyzer, Morpheme};
 use crate::pos::{LinderaPos, PosClass};
-use crate::script::{is_kana, is_katakana};
+use crate::script::{is_cjk, is_kana, is_katakana};
 
 mod deinflection;
 mod raw;
@@ -75,6 +75,13 @@ const DOMAIN_KNOWN_TERMS: &[KnownTermSpec] = &[
             ruby("数", Some("すう")),
         ],
         glosses: &["available purchase count; purchasable quantity  (n)"],
+    },
+    KnownTermSpec {
+        surface: "所持数",
+        dictionary_form: "所持数",
+        part_of_speech: &["n"],
+        ruby: &[ruby("所持", Some("しょじ")), ruby("数", Some("すう"))],
+        glosses: &["number owned; quantity possessed  (n)"],
     },
     KnownTermSpec {
         surface: "秒間",
@@ -598,6 +605,10 @@ const DOMAIN_UNKNOWN_TERMS: &[&str] = &[
     "残星組織",
     "ブラックショア",
     "セブン・ヒルズ",
+    // Wrapped continuation of セブン・ヒルズ人 (the people of Seven Hills).
+    "ヒルズ人",
+    // Concerto Energy, the resonator resource.
+    "協奏エネルギー",
     "拾方薬局",
     "スペーストレック",
     "フラクトシデス",
@@ -1459,7 +1470,58 @@ impl Dictionary {
         let tokens = normalize_copular_dearu_tokens(tokens);
         let tokens = normalize_dekiru_stem_tokens(tokens);
         let tokens = split_contextual_slash_numeric_unknowns(tokens);
+        let tokens = self.normalize_wrap_tail_fragments(tokens);
+        let tokens = normalize_truncated_title_fragments(tokens);
+        let tokens = normalize_punctuation_unknown_tokens(tokens);
         merge_repeated_punctuation_unknowns(tokens)
+    }
+
+    /// Line-final wrap fragments where Lindera's segmentation hides the word
+    /// the next line completes. See docs/eval-metadata.md (wrapped fragments):
+    /// the visible prefix should teach the word a learner can act on.
+    fn normalize_wrap_tail_fragments(&self, tokens: Vec<Token>) -> Vec<Token> {
+        let mut tokens = tokens;
+        if tokens.len() < 2 {
+            return tokens;
+        }
+
+        // A line beginning with った is the wrapped tail of a past-tense form
+        // (なかった, 終わった); neither っ nor た is useful standalone.
+        if tokens[0].surface == "っ" && tokens[1].surface == "た" {
+            tokens.splice(0..2, [unknown_surface_token("った".to_string())]);
+        }
+        let len = tokens.len();
+        if len < 2 {
+            return tokens;
+        }
+
+        // 同 + 一目 at a line end is 同一 + a clipped 目 (e.g. 同一目標 wrapped
+        // mid-word); 一目 "at a glance" misleads there.
+        if tokens[len - 1].surface == "一目"
+            && tokens[len - 2].surface == "同"
+            && let Some(douitsu) = self.exact_known_token("同一")
+        {
+            tokens.truncate(len - 2);
+            tokens.push(douitsu);
+            tokens.push(unknown_surface_token("目".to_string()));
+            return tokens;
+        }
+
+        // A line-final にし after a nominal is に + し(て) clipped by the wrap,
+        // not the noun 西.
+        if tokens[len - 1].surface == "にし"
+            && tokens[len - 1].dictionary_form != "にする"
+            && tokens
+                .get(len - 2)
+                .is_some_and(is_nominal_wrap_context_token)
+        {
+            tokens.truncate(len - 1);
+            tokens.push(canonical_particle_token("に"));
+            tokens.push(suru_renyou_shi_token());
+            return tokens;
+        }
+
+        tokens
     }
 
     fn normalize_inflected_stem_tokens(&self, tokens: Vec<Token>) -> Vec<Token> {
@@ -1620,10 +1682,7 @@ impl Dictionary {
             let after_plain_te_form = previous.is_some_and(is_plain_te_form_connector_token);
             let after_te_contracted_verb_stem =
                 previous.is_some_and(is_te_contracted_verb_stem_token);
-            if after_plain_te_form && is_iru_existential_token(&token) {
-                normalized.pop();
-                normalized.push(te_iru_phrase_auxiliary_token());
-            } else if after_te_form && is_iru_existential_token(&token) {
+            if after_te_form && is_iru_existential_token(&token) {
                 normalized.push(te_iru_auxiliary_token());
             } else if (after_te_form || after_te_contracted_verb_stem)
                 && is_teru_shine_homograph(&token)
@@ -1876,10 +1935,6 @@ fn suru_passive_auxiliary_token() -> Token {
     }
 }
 
-fn te_iru_phrase_auxiliary_token() -> Token {
-    te_iru_phrase_token("ている", Vec::new(), None)
-}
-
 fn te_iru_past_phrase_auxiliary_token() -> Token {
     te_iru_phrase_token(
         "ていた",
@@ -1889,7 +1944,33 @@ fn te_iru_past_phrase_auxiliary_token() -> Token {
 }
 
 fn te_iru_auxiliary_token() -> Token {
-    te_iru_auxiliary_surface_token("いる", "いる", Vec::new(), None)
+    // After a te-form, いる is the progressive/result-state auxiliary
+    // (補助動詞). The popup teaches the auxiliary reading, not the
+    // existential verb.
+    Token {
+        surface: "いる".to_string(),
+        dictionary_form: "いる".to_string(),
+        reasons: vec!["補助動詞".to_string()],
+        entries: vec![Entry {
+            kanji: Vec::new(),
+            kana: vec!["いる".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["aux-v".to_string(), "v1".to_string()],
+                glosses: vec!["to be ...-ing".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "いる".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["to be ...-ing  (aux-v, v1)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::AuxVerb),
+        note_override: None,
+    }
 }
 
 fn te_iru_past_auxiliary_token() -> Token {
@@ -2102,6 +2183,14 @@ fn normalize_policy_homographs(tokens: Vec<Token>) -> Vec<Token> {
             "なら" if is_nara_particle_context(previous_token(&tokens, index)) => {
                 nara_conditional_particle_token()
             }
+            // Line-initial な is the wrapped tail of an adjectival/copular
+            // construction from the previous visual line (静か / な輝き); the
+            // sentence-final particle reading can never start a line.
+            "な" if is_na_copula_context(previous_token(&tokens, index))
+                || (index == 0 && tokens.len() > 1) =>
+            {
+                na_copula_token()
+            }
             "非" if is_bound_prefix_context(next_token(&tokens, index)) => {
                 bound_prefix_token("非", "non-; un-; anti-", Some("ひ"))
             }
@@ -2203,6 +2292,17 @@ fn normalize_copular_dearu_tokens(tokens: Vec<Token>) -> Vec<Token> {
             normalized.push(copular_de_token());
             normalized.push(copular_aru_token(&aru));
             index += 2;
+        } else if tokens[index].surface == "でも"
+            && tokens
+                .get(index + 1)
+                .is_some_and(is_aru_family_or_wrap_fragment_token)
+        {
+            // でもある/でもあった is copula で + focus も + ある, and a wrapped
+            // でもあ tail follows the same analysis. The fused でも conjunction
+            // reading would hide that grammar.
+            normalized.push(copular_de_token());
+            normalized.push(canonical_particle_token("も"));
+            index += 1;
         } else {
             normalized.push(tokens[index].clone());
             index += 1;
@@ -2211,8 +2311,54 @@ fn normalize_copular_dearu_tokens(tokens: Vec<Token>) -> Vec<Token> {
     normalized
 }
 
+fn is_aru_family_or_wrap_fragment_token(token: &Token) -> bool {
+    is_dearu_aru_family_token(token) || (token.surface == "あ" && !token.is_known())
+}
+
 fn is_dearu_de_connector_token(token: &Token) -> bool {
     token.surface == "で"
+}
+
+/// な directly after a na-adjective stem is the attributive copula だ
+/// (体言接続), not the sentence-final particle homograph. See
+/// docs/eval-metadata.md: the copula reading is the stable learner-facing
+/// primary for adjective-noun titles such as 静かな輝き.
+fn is_na_copula_context(previous: Option<&Token>) -> bool {
+    previous.is_some_and(|previous| {
+        previous.is_known()
+            && previous
+                .entries
+                .first()
+                .and_then(|entry| entry.senses.first())
+                .is_some_and(|sense| sense.part_of_speech.iter().any(|pos| pos == "adj-na"))
+    })
+}
+
+fn na_copula_token() -> Token {
+    Token {
+        surface: "な".to_string(),
+        dictionary_form: "だ".to_string(),
+        reasons: vec!["体言接続".to_string()],
+        entries: vec![Entry {
+            kanji: Vec::new(),
+            kana: vec!["だ".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["aux-v".to_string(), "cop".to_string()],
+                glosses: vec!["be; is".to_string()],
+                misc: Vec::new(),
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "だ".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["be; is  (aux-v, cop)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::AuxVerb),
+        note_override: None,
+    }
 }
 
 fn is_dearu_aru_family_token(token: &Token) -> bool {
@@ -2272,6 +2418,168 @@ fn copular_aru_token(token: &Token) -> Token {
         source_pos: Some(LinderaPos::Verb),
         note_override: None,
     }
+}
+
+fn is_nominal_wrap_context_token(token: &Token) -> bool {
+    token.is_known()
+        && token
+            .entries
+            .first()
+            .and_then(|entry| entry.senses.first())
+            .is_some_and(|sense| sense.part_of_speech.iter().any(|pos| pos == "n"))
+}
+
+fn suru_renyou_shi_token() -> Token {
+    Token {
+        surface: "し".to_string(),
+        dictionary_form: "する".to_string(),
+        reasons: vec!["連用形".to_string()],
+        entries: vec![Entry {
+            kanji: vec!["為る".to_string()],
+            kana: vec!["する".to_string()],
+            senses: vec![Sense {
+                part_of_speech: vec!["vs-i".to_string()],
+                glosses: vec!["to do; to carry out; to perform".to_string()],
+                misc: vec!["uk".to_string()],
+            }],
+            common: true,
+            popup_override: Some(PopupOverride {
+                ruby: vec![RubySegment {
+                    text: "する".to_string(),
+                    furigana: None,
+                }],
+                glosses: vec!["to do; to carry out; to perform  (vs-i)".to_string()],
+            }),
+        }],
+        source_pos: Some(LinderaPos::Verb),
+        note_override: None,
+    }
+}
+
+/// Truncated list/quest titles end in an ASCII-dot truncation marker ("...").
+/// The clipped fragment before it is part of one cut-off name, not a sequence
+/// of incidental short words: a learner hovering メモワー in 探れ！メモワー...
+/// must not be told メモ means "memo", and レジ in 焦熱レジ... is not a cash
+/// register. The fragment and the marker fuse into one unknown token, matching
+/// the newest annotation passes and keeps_clipped_material_fragments below.
+/// Prose trail-off uses the … leader and is left alone. See
+/// docs/eval-metadata.md (wrapped fragments).
+fn normalize_truncated_title_fragments(tokens: Vec<Token>) -> Vec<Token> {
+    let mut tokens = tokens;
+    let Some(last_index) = tokens.len().checked_sub(1) else {
+        return tokens;
+    };
+    if !is_truncation_marker_surface(&tokens[last_index].surface) {
+        return tokens;
+    }
+
+    let mut start = last_index;
+    let mut run_chars = 0usize;
+    while start > 0 && is_pure_katakana_surface(&tokens[start - 1].surface) {
+        start -= 1;
+        run_chars += tokens[start].surface.chars().count();
+    }
+    if run_chars < 2 {
+        // A single clipped katakana character stays its own fragment
+        // (古びたメ + ...), matching the labeling convention; reset any
+        // one-char run and check for the lone clipped kanji shape instead
+        // (中音・叫..., 普通の手...). Longer non-katakana fragments also stay
+        // separate (ブブ急便・届け + ...).
+        start = last_index;
+        let previous = last_index.checked_sub(1).map(|index| &tokens[index]);
+        if let Some(previous) = previous {
+            let mut chars = previous.surface.chars();
+            if let (Some(only), None) = (chars.next(), chars.next())
+                && is_cjk(only)
+            {
+                start = last_index - 1;
+            }
+        }
+    }
+    if start < last_index {
+        let merged: String = tokens[start..=last_index]
+            .iter()
+            .map(|token| token.surface.as_str())
+            .collect();
+        tokens.splice(start..=last_index, [unknown_surface_token(merged)]);
+    }
+    tokens
+}
+
+/// UI truncation marker: two or more ASCII dots (the corpus convention for cut
+/// list rows). The … leader is prose trail-off, not truncation.
+fn is_truncation_marker_surface(surface: &str) -> bool {
+    let mut dots = 0usize;
+    for ch in surface.chars() {
+        if ch != '.' {
+            return false;
+        }
+        dots += 1;
+    }
+    dots >= 2
+}
+
+fn is_pure_katakana_surface(surface: &str) -> bool {
+    !surface.is_empty() && surface.chars().all(is_katakana)
+}
+
+/// Bracket and punctuation tokens are layout, not vocabulary: the overlay
+/// should never claim 」 is a known particle or give 、 dictionary senses. See
+/// docs/eval-metadata.md (function words are labeled by their role; symbols
+/// have none).
+fn normalize_punctuation_unknown_tokens(tokens: Vec<Token>) -> Vec<Token> {
+    tokens
+        .into_iter()
+        .map(|token| {
+            if !token.surface.is_empty()
+                && token.surface.chars().all(is_nonlexical_punctuation_char)
+                && (token.is_known() || token.dictionary_form != token.surface)
+            {
+                unknown_surface_token(token.surface)
+            } else {
+                token
+            }
+        })
+        .collect()
+}
+
+fn is_nonlexical_punctuation_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '。' | '、'
+            | '．'
+            | '，'
+            | '.'
+            | ','
+            | '！'
+            | '!'
+            | '？'
+            | '?'
+            | '「'
+            | '」'
+            | '『'
+            | '』'
+            | '【'
+            | '】'
+            | '（'
+            | '）'
+            | '('
+            | ')'
+            | '['
+            | ']'
+            | '［'
+            | '］'
+            | '・'
+            | '…'
+            | '‥'
+            | '―'
+            | '—'
+            | '：'
+            | ':'
+            | '；'
+            | ';'
+            | '々'
+    )
 }
 
 fn osugoshi_fragment_token(surface: &str, ruby: Vec<RubySegment>, note: &str) -> Token {
@@ -4756,7 +5064,7 @@ fn is_false_grammar_merge(surface: &str, slice: &[Morpheme]) -> bool {
     // as じゃないか and でも need individual learner-primary decisions.
     matches!(
         surface,
-        "たの" | "たこ" | "であり" | "である" | "なのである"
+        "たの" | "たこ" | "であり" | "である" | "なのである" | "無理のない"
     ) && slice.iter().any(|morpheme| {
         matches!(
             morpheme.major_pos(),
@@ -5308,6 +5616,167 @@ mod tests {
     }
 
     #[test]
+    fn fuses_truncated_title_fragments_with_marker() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&[], &["メモ"], "n", &["memo"]),
+            entry(&[], &["レジ"], "n", &["cash register"]),
+            entry(&["焦熱"], &["しょうねつ"], "n", &["scorching heat"]),
+            entry(&["探る"], &["さぐる"], "v5r", &["to probe"]),
+            entry(&["手"], &["て"], "n", &["hand"]),
+            entry(&["普通"], &["ふつう"], "adj-na", &["ordinary"]),
+            entry(&["の"], &["の"], "prt", &["of"]),
+        ]);
+
+        // Split katakana pieces before the marker re-fuse into one fragment.
+        let memo = dict.analyze_line("探れ！メモワー...");
+        let memo_surfaces: Vec<&str> = memo.iter().map(|token| token.surface.as_str()).collect();
+        assert!(memo_surfaces.contains(&"メモワー..."), "{memo_surfaces:?}");
+        let fragment = memo
+            .iter()
+            .find(|token| token.surface == "メモワー...")
+            .expect("fused fragment");
+        assert!(!fragment.is_known());
+
+        // A known katakana word before the marker is still a clipped fragment.
+        let reji = dict.analyze_line("焦熱レジ...");
+        let reji_surfaces: Vec<&str> = reji.iter().map(|token| token.surface.as_str()).collect();
+        assert!(reji_surfaces.contains(&"レジ..."), "{reji_surfaces:?}");
+
+        // A lone clipped CJK character fuses with the marker.
+        let te = dict.analyze_line("普通の手...");
+        let te_surfaces: Vec<&str> = te.iter().map(|token| token.surface.as_str()).collect();
+        assert!(te_surfaces.contains(&"手..."), "{te_surfaces:?}");
+
+        // Prose trail-off with the … leader does not fuse.
+        let prose = dict.analyze_line("舞い込んだのである……");
+        assert!(
+            prose.iter().any(|token| token.surface == "……"),
+            "{:?}",
+            prose.iter().map(|t| &t.surface).collect::<Vec<_>>()
+        );
+
+        // A single clipped katakana character stays its own fragment.
+        let me = dict.analyze_line("古びたメ...");
+        let me_surfaces: Vec<&str> = me.iter().map(|token| token.surface.as_str()).collect();
+        assert!(
+            me_surfaces.ends_with(&["メ", "..."]),
+            "single katakana fragment must stay split: {me_surfaces:?}"
+        );
+    }
+
+    #[test]
+    fn punctuation_tokens_stay_unknown() {
+        let dict = sample_dict();
+        for line in ["水。", "「水」", "水、水"] {
+            for token in dict.analyze_line(line) {
+                if token
+                    .surface
+                    .chars()
+                    .all(|ch| matches!(ch, '。' | '、' | '「' | '」'))
+                {
+                    assert!(!token.is_known(), "{} known in {line}", token.surface);
+                    assert!(token.entries.is_empty(), "{} has entries", token.surface);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn na_after_na_adjective_is_attributive_copula() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["静か"], &["しずか"], "adj-na", &["quiet"]),
+            entry(&["輝き"], &["かがやき"], "n", &["radiance"]),
+            entry(&[], &["な"], "prt", &["sentence-final na"]),
+        ]);
+
+        let tokens = dict.analyze_line("静かな輝き");
+        let na = tokens
+            .iter()
+            .find(|token| token.surface == "な")
+            .expect("na token");
+        assert_eq!(na.dictionary_form, "だ");
+        assert_eq!(na.reasons, vec!["体言接続".to_string()]);
+    }
+
+    #[test]
+    fn demo_before_aru_family_splits_into_copula_and_focus_particle() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["仲間"], &["なかま"], "n", &["companion"]),
+            entry(&["有る"], &["ある"], "v5r-i", &["to exist"]),
+        ]);
+
+        let tokens = dict.analyze_line("仲間でもあった");
+        let surfaces: Vec<&str> = tokens.iter().map(|token| token.surface.as_str()).collect();
+        assert!(
+            !surfaces.contains(&"でも"),
+            "でも must split before ある: {surfaces:?}"
+        );
+        let de = tokens
+            .iter()
+            .find(|token| token.surface == "で")
+            .expect("で token");
+        assert_eq!(de.dictionary_form, "だ");
+        let mo = tokens
+            .iter()
+            .find(|token| token.surface == "も")
+            .expect("も token");
+        assert_eq!(mo.dictionary_form, "も");
+    }
+
+    #[test]
+    fn rejects_muri_no_nai_expression_merge() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["無理"], &["むり"], "adj-na", &["unreasonable"]),
+            entry(&["無理のない"], &["むりのない"], "exp", &["reasonable"]),
+            entry(&["ない"], &["ない"], "adj-i", &["not"]),
+            entry(&["範囲"], &["はんい"], "n", &["range"]),
+        ]);
+
+        let tokens = dict.analyze_line("無理のない範囲");
+        let surfaces: Vec<&str> = tokens.iter().map(|token| token.surface.as_str()).collect();
+        assert!(
+            surfaces.contains(&"無理") && surfaces.contains(&"の") && surfaces.contains(&"ない"),
+            "無理のない must stay split: {surfaces:?}"
+        );
+    }
+
+    #[test]
+    fn line_final_douitsu_fragment_prefers_douitsu() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["同一"], &["どういつ"], "adj-no", &["identical"]),
+            entry(&["一目"], &["ひとめ"], "n", &["a glance"]),
+            entry(&["スキル"], &[], "n", &["skill"]),
+        ]);
+
+        let tokens = dict.analyze_line("スキルは同一目");
+        let surfaces: Vec<&str> = tokens.iter().map(|token| token.surface.as_str()).collect();
+        assert!(
+            surfaces.ends_with(&["同一", "目"]),
+            "expected 同一 + clipped 目: {surfaces:?}"
+        );
+        let me = tokens.last().expect("目 token");
+        assert!(!me.is_known());
+    }
+
+    #[test]
+    fn line_final_nishi_after_nominal_is_ni_plus_suru_stem() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["モチーフ"], &[], "n", &["motif"]),
+            entry(&["西"], &["にし"], "n", &["west"]),
+        ]);
+
+        let tokens = dict.analyze_line("モチーフにし");
+        let surfaces: Vec<&str> = tokens.iter().map(|token| token.surface.as_str()).collect();
+        assert!(
+            surfaces.ends_with(&["に", "し"]),
+            "expected に + し(する): {surfaces:?}"
+        );
+        let shi = tokens.last().expect("し token");
+        assert_eq!(shi.dictionary_form, "する");
+        assert_eq!(shi.reasons, vec!["連用形".to_string()]);
+    }
+
+    #[test]
     fn merges_domain_known_terms() {
         let dict = sample_dict();
         let tokens = dict.analyze_line("購入可能数");
@@ -5632,26 +6101,32 @@ mod tests {
 
     #[test]
     fn te_iru_becomes_progressive_auxiliary() {
+        // The labeling convention keeps て as the connective particle and
+        // marks いる as the progressive auxiliary (補助動詞); see
+        // docs/eval-metadata.md and eval/LABEL-CHANGES.md. ていた stays a
+        // merged past-progressive phrase below.
         let dict = Dictionary::from_entries(vec![
             entry(&["見る"], &["みる"], "v1", &["to see"]),
             entry_with_common(&[], &["て"], "prt", &["connective te-form particle"], true),
             entry(&["いる"], &["いる"], "v1", &["to be"]),
         ]);
         let tokens = dict.analyze_line("見ている");
-        let token = tokens
+        let te = tokens
             .iter()
-            .find(|token| token.surface == "ている")
-            .unwrap_or_else(|| panic!("ている token in {tokens:?}"));
-        assert_eq!(token.dictionary_form, "ている");
-        assert!(token.reasons.is_empty());
-        assert_eq!(token.source_pos, Some(LinderaPos::AuxVerb));
-        let popup = token.entries[0].popup_override.as_ref().expect("popup");
+            .find(|token| token.surface == "て")
+            .unwrap_or_else(|| panic!("て token in {tokens:?}"));
+        assert_eq!(te.dictionary_form, "て");
+        let iru = tokens
+            .iter()
+            .find(|token| token.surface == "いる")
+            .unwrap_or_else(|| panic!("いる token in {tokens:?}"));
+        assert_eq!(iru.dictionary_form, "いる");
+        assert_eq!(iru.reasons, vec!["補助動詞".to_string()]);
+        assert_eq!(iru.source_pos, Some(LinderaPos::AuxVerb));
+        let popup = iru.entries[0].popup_override.as_ref().expect("popup");
         assert_eq!(
             popup.glosses,
-            vec![
-                "to be doing; to have been doing  (aux-v, v1)".to_string(),
-                "to have done; to be in a state resulting from an action  (aux-v, v1)".to_string()
-            ]
+            vec!["to be ...-ing  (aux-v, v1)".to_string()]
         );
     }
 

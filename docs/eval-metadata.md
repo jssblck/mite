@@ -42,6 +42,26 @@ copying a long table into docs; the table will drift from the implementation.
 
 ## Current Decisions
 
+The corpus historically labeled several constructions two different ways in
+different annotation passes. The matrix in code now pins one convention per
+construction (each with a unit test in `src/dictionary/mod.rs`), and the
+nonconforming labels were regenerated; `eval/LABEL-CHANGES.md` records every
+change. The pinned conventions:
+
+- である/であり split into copula で (だ · 連用形) plus ある/あり; でも before
+  an ある-family token splits into copula で plus focus particle も.
+- て + いる stays split, with いる as the progressive auxiliary (補助動詞);
+  ていた remains one merged past-progressive token.
+- Truncated list rows ending in the ASCII "..." marker fuse the clipped
+  fragment with the marker into one unknown token (メモワー..., 叫...), except
+  a single clipped katakana character, which stays its own fragment. The …
+  leader is prose trail-off and never fuses.
+- Date values such as 2月2日 are one unscored value token.
+- Bracket and punctuation tokens are always unknown layout tokens, never
+  dictionary words.
+- な after a na-adjective stem (or starting a wrapped line) is the attributive
+  copula だ (体言接続).
+
 ### Canonical Spellings
 
 `dictionary_form` should be the form a learner should look up and learn as the

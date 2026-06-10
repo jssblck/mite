@@ -87,6 +87,13 @@ pub struct ModelConfig {
     pub detector_path: PathBuf,
     pub recognizer_path: PathBuf,
     pub charset_path: Option<PathBuf>,
+    /// Optional heavier recognizer used as a second opinion on lines the
+    /// primary recognizer reads with low confidence (faint or stylized text).
+    /// Loaded in FP32 (the PP-OCRv5 server recognizer overflows FP16) and only
+    /// consulted for the few low-confidence lines per frame, so the GPU cost
+    /// stays small. Its read replaces the primary's only when it is both
+    /// confident in absolute terms and more confident than the primary.
+    pub fallback_recognizer_path: Option<PathBuf>,
 }
 
 impl Default for ModelConfig {
@@ -95,6 +102,7 @@ impl Default for ModelConfig {
             detector_path: PathBuf::from("models/pp-ocrv5-mobile-det.onnx"),
             recognizer_path: PathBuf::from("models/pp-ocrv5-mobile-rec.onnx"),
             charset_path: Some(PathBuf::from("models/pp-ocrv5-dict.txt")),
+            fallback_recognizer_path: None,
         }
     }
 }
@@ -113,6 +121,10 @@ pub struct PipelineConfig {
     /// Hard ceiling on the detector's input long side, to bound cost on very
     /// high-resolution displays.
     pub detector_max_long_side: u32,
+    /// Enlarge the detector input beyond native resolution by this factor
+    /// (1.0 = native). Small isolated glyphs the detector misses at native
+    /// resolution become detectable at 1.5x, at significant inference cost.
+    pub detector_upscale: f32,
     /// Resampling filter used when scaling the frame for the detector. Higher
     /// quality filters retain more fine text detail when downscaling, at some CPU
     /// cost (paid once per frame).
@@ -198,6 +210,12 @@ impl PipelineConfig {
                 self.detector_downscale
             );
         }
+        if !(1.0..=2.0).contains(&self.detector_upscale) {
+            bail!(
+                "detector_upscale must be in [1, 2], got {}",
+                self.detector_upscale
+            );
+        }
         if self.detector_min_long_side > self.detector_max_long_side {
             bail!(
                 "detector_min_long_side ({}) must be <= detector_max_long_side ({})",
@@ -215,13 +233,15 @@ impl PipelineConfig {
     }
 
     /// Detector input long side for a frame whose native long side is `native`.
-    /// Downscales to `detector_downscale` of native, but never below
-    /// `detector_min_long_side`, and never above `detector_max_long_side`.
+    /// Scales by `detector_upscale` (above 1.0 the frame is enlarged so the
+    /// detector sees small glyphs at more pixels), then applies
+    /// `detector_downscale`, clamped to the configured min/max long sides.
     pub fn detector_target_long_side(&self, native: u32) -> u32 {
-        let target = if native <= self.detector_min_long_side {
-            native
+        let upscaled = (native as f32 * self.detector_upscale.max(1.0)).round() as u32;
+        let target = if upscaled <= self.detector_min_long_side {
+            upscaled
         } else {
-            let scaled = (native as f32 * self.detector_downscale).round() as u32;
+            let scaled = (upscaled as f32 * self.detector_downscale).round() as u32;
             scaled.max(self.detector_min_long_side)
         };
         target.min(self.detector_max_long_side).max(1)
@@ -234,9 +254,14 @@ impl Default for PipelineConfig {
             detector_downscale: 1.0,
             detector_min_long_side: 3840,
             detector_max_long_side: 3840,
+            detector_upscale: 1.0,
             detector_resize_filter: ResizeFilter::CatmullRom,
             detector_cadence_frames: 2,
-            max_boxes_per_frame: 128,
+            // Dense 4K menu screens really do contain 80-100+ text lines;
+            // boxes beyond the cap are silently dropped, which the eval corpus
+            // showed as whole missing panels. 256 is a safety valve, not a
+            // typical load.
+            max_boxes_per_frame: 256,
             recognition_cache_ttl_frames: 45,
             stale_frame_budget: 1,
             detector_probability_threshold: 0.30,

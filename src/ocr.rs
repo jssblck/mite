@@ -50,6 +50,18 @@ const MIN_MULTICHAR_LEN: usize = 1;
 /// corpus are taller than this, while the junk runs are microscopic.
 const MAX_ASCII_MICROTEXT_HEIGHT: f32 = 12.0;
 const MIN_SINGLE_ASCII_WIDTH: f32 = 12.0;
+/// Short ASCII-only lines below this confidence are decal/chrome misreads:
+/// in the eval corpus, legitimate short ASCII labels (HP, Lv.1, x5, 0/6)
+/// recognize at 0.88+, while background junk (CI, Yi, WD, CL) tops out at
+/// 0.86.
+const SHORT_ASCII_MIN_CONFIDENCE: f32 = 0.87;
+const SHORT_ASCII_MAX_CHARS: usize = 5;
+/// Japanese text smaller than this is background/decal noise; the smallest
+/// labeled Japanese line in the eval corpus is 15 px tall.
+const MAX_CJK_MICROTEXT_HEIGHT: f32 = 13.5;
+/// Trademark superscript next to game logos; never user-facing text at this
+/// size.
+const TRADEMARK_MARK_MAX_HEIGHT: f32 = 20.0;
 
 pub fn filter_recognized_items(
     items: impl IntoIterator<Item = RecognizedText>,
@@ -71,6 +83,15 @@ fn is_usable_recognized_item(item: &RecognizedText, config: &PipelineConfig) -> 
         return false;
     }
     if is_ascii_microtext_noise(item, text) {
+        return false;
+    }
+    if is_low_confidence_short_ascii(item, text) {
+        return false;
+    }
+    if is_cjk_microtext_noise(item, text) {
+        return false;
+    }
+    if is_trademark_mark(item, text) {
         return false;
     }
 
@@ -99,6 +120,22 @@ fn is_id_like_numeric_noise(text: &str) -> bool {
         && right.chars().count() >= 3
         && left.chars().all(|ch| ch.is_ascii_digit())
         && right.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn is_low_confidence_short_ascii(item: &RecognizedText, text: &str) -> bool {
+    let visible_chars = text.chars().filter(|ch| !ch.is_whitespace()).count();
+    visible_chars > 0
+        && visible_chars <= SHORT_ASCII_MAX_CHARS
+        && text.chars().all(|ch| ch.is_ascii() && !ch.is_control())
+        && item.confidence < SHORT_ASCII_MIN_CONFIDENCE
+}
+
+fn is_cjk_microtext_noise(item: &RecognizedText, text: &str) -> bool {
+    item.text_box.rect.height <= MAX_CJK_MICROTEXT_HEIGHT && text.chars().any(crate::script::is_cjk)
+}
+
+fn is_trademark_mark(item: &RecognizedText, text: &str) -> bool {
+    text == "TM" && item.text_box.rect.height <= TRADEMARK_MARK_MAX_HEIGHT
 }
 
 fn is_ascii_microtext_noise(item: &RecognizedText, text: &str) -> bool {
@@ -168,13 +205,6 @@ fn should_merge_adjacent_fragments(left: &RecognizedText, right: &RecognizedText
     }
 
     let gap = b.x - a.right();
-    if !(-avg_height * 0.15..=avg_height * 0.12).contains(&gap) {
-        return false;
-    }
-
-    if vertical_overlap_ratio(a, b) < 0.70 {
-        return false;
-    }
 
     let Some(left_last) = left_text.chars().next_back() else {
         return false;
@@ -182,6 +212,38 @@ fn should_merge_adjacent_fragments(left: &RecognizedText, right: &RecognizedText
     let Some(right_first) = right_text.chars().next() else {
         return false;
     };
+
+    // Mid-line prose pause: the detector splits dialogue lines at the visual
+    // gap after …… or ——. Those marks are pauses, not terminators; rejoin
+    // when the continuation sits immediately to the right on the same
+    // baseline.
+    if matches!(left_last, '…' | '—' | '―')
+        && (crate::script::is_kana(right_first) || crate::script::is_cjk(right_first))
+        && (-avg_height * 0.15..=avg_height * 0.35).contains(&gap)
+        && vertical_overlap_ratio(a, b) >= 0.70
+    {
+        return true;
+    }
+
+    // A one-glyph wrapped tail plus its period (ム。 from クリームゲーム。)
+    // is not a sentence of its own; rejoin it with the continuation the
+    // detector split off to its right.
+    if left_text.chars().count() <= 2
+        && left_last == '。'
+        && (crate::script::is_kana(right_first) || crate::script::is_cjk(right_first))
+        && (-avg_height * 0.15..=avg_height * 0.35).contains(&gap)
+        && vertical_overlap_ratio(a, b) >= 0.70
+    {
+        return true;
+    }
+
+    if !(-avg_height * 0.15..=avg_height * 0.12).contains(&gap) {
+        return false;
+    }
+
+    if vertical_overlap_ratio(a, b) < 0.70 {
+        return false;
+    }
     if left_text.chars().count() < 5 || has_recent_fragment_boundary_stop(left_text) {
         return false;
     }

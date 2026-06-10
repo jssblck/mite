@@ -1,4 +1,4 @@
-use crate::script::{is_cjk, is_kana, is_katakana};
+use crate::script::{is_cjk, is_hiragana, is_kana, is_katakana};
 
 use super::normalize_single_char;
 
@@ -10,6 +10,7 @@ pub(super) fn normalize_recognized_text(raw: &str) -> String {
 
     let collapsed = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
     let dekanji = fix_katakana_lookalikes(&collapsed);
+    let dekanji = fix_hiragana_he_particle(&dekanji);
     let quantity_normalized = normalize_item_quantity_multipliers(&dekanji);
     let separated = split_latin_ui_boundaries(&quantity_normalized);
     normalize_common_game_text(&separated)
@@ -48,6 +49,23 @@ fn fix_katakana_lookalikes(text: &str) -> String {
             Some(kana) if matches!(ch, '一' | '工') && adjacent_katakana => out.push(kana),
             Some(kana) if between_katakana => out.push(kana),
             _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Katakana ヘ and hiragana へ are visually identical, so the recognizer picks
+/// one arbitrarily. A katakana ヘ followed by hiragana is virtually always the
+/// direction particle へ (スペースへと, 旅行へと); inside a katakana word the
+/// next character is katakana and the glyph is left alone.
+fn fix_hiragana_he_particle(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    for (index, &ch) in chars.iter().enumerate() {
+        if ch == 'ヘ' && chars.get(index + 1).copied().is_some_and(is_hiragana) {
+            out.push('へ');
+        } else {
+            out.push(ch);
         }
     }
     out
@@ -102,6 +120,8 @@ fn normalize_common_game_text(text: &str) -> String {
     let mut out = trim_leading_noise_marks(text);
     out = normalize_user_id(&out);
     out = normalize_japanese_ascii_punctuation(&out);
+    out = fix_small_katakana_yo_yu(&out);
+    out = strip_stray_digit_after_period(&out);
     out = crate::text_corrections::apply_common_replacements(&out);
     out = space_after_punctuation(&out);
     collapse_spaces(&out)
@@ -116,9 +136,48 @@ fn normalize_japanese_ascii_punctuation(text: &str) -> String {
         .map(|ch| match ch {
             '!' => '！',
             '?' => '？',
+            '(' => '（',
+            ')' => '）',
             _ => ch,
         })
         .collect()
+}
+
+/// Full-size katakana ヨ/ユ after a palatalizable kana and before more
+/// katakana is virtually always the small glyph the recognizer missed
+/// (シヨック -> ショック); a real full-size ヨ never follows シ/チ/ジ
+/// mid-word.
+fn fix_small_katakana_yo_yu(text: &str) -> String {
+    const PALATALIZABLE: &[char] = &[
+        'キ', 'ギ', 'シ', 'ジ', 'チ', 'ヂ', 'ニ', 'ヒ', 'ビ', 'ピ', 'ミ', 'リ',
+    ];
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    for (index, &ch) in chars.iter().enumerate() {
+        let prev_palatalizable = index > 0 && PALATALIZABLE.contains(&chars[index - 1]);
+        let next_katakana = chars
+            .get(index + 1)
+            .copied()
+            .is_some_and(crate::script::is_katakana);
+        match ch {
+            'ヨ' if prev_palatalizable && next_katakana => out.push('ョ'),
+            'ユ' if prev_palatalizable && next_katakana => out.push('ュ'),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// A lone ASCII digit directly after a sentence-final 。 at the end of a line
+/// is a neighboring list-number or footnote glyph pulled in by the crop, not
+/// part of the sentence.
+fn strip_stray_digit_after_period(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() >= 3 && chars[chars.len() - 1].is_ascii_digit() && chars[chars.len() - 2] == '。'
+    {
+        return chars[..chars.len() - 1].iter().collect();
+    }
+    text.to_string()
 }
 
 fn trim_leading_noise_marks(text: &str) -> String {

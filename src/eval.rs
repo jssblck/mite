@@ -900,22 +900,7 @@ pub fn draft_expected_detection(
 
     let chars = text.chars().map(|ch| ch.to_string()).collect::<Vec<_>>();
     let token_spans = complete_token_spans(dict, &text);
-    let expected_tokens = token_spans
-        .iter()
-        .enumerate()
-        .map(|(index, draft)| {
-            expected_token_from_token(
-                &draft.token,
-                CharSpan {
-                    start: draft.start,
-                    end: draft.end,
-                },
-                format!("token_{index:02}"),
-                &token_spans,
-                index,
-            )
-        })
-        .collect::<Vec<_>>();
+    let expected_tokens = draft_expected_tokens(dict, &text);
 
     let char_width = bounds.width / chars.len() as f32;
     let characters = chars
@@ -964,6 +949,29 @@ pub fn draft_expected_detection(
         notes: None,
     })?;
     Ok(detection)
+}
+
+/// The canonical matrix tokenization of `text` as expected-token labels, the
+/// same shapes `draft_expected_detection` embeds. Label-audit tooling uses this
+/// to regenerate token arrays that must agree with the runtime matrix.
+pub fn draft_expected_tokens(dict: &Dictionary, text: &str) -> Vec<ExpectedToken> {
+    let token_spans = complete_token_spans(dict, text);
+    token_spans
+        .iter()
+        .enumerate()
+        .map(|(index, draft)| {
+            expected_token_from_token(
+                &draft.token,
+                CharSpan {
+                    start: draft.start,
+                    end: draft.end,
+                },
+                format!("token_{index:02}"),
+                &token_spans,
+                index,
+            )
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]

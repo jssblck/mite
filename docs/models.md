@@ -15,6 +15,18 @@ FP32 — slower and more GPU-hungry. To use them, point
 `runtime.fp16 = false`. See the README's "TensorRT acceleration" section for the
 download commands and `docs/architecture.md` for the measured trade-off.
 
+## Optional fallback recognizer
+
+`models.fallback_recognizer_path` (off by default) loads a second, heavier
+recognizer — intended for `ch_PP-OCRv5_rec_server.onnx` — that gives a second
+opinion on lines the primary reads below 0.75 confidence. It always runs FP32
+(the server recognizer overflows FP16) and its read wins only above 0.92
+absolute confidence, so it touches a handful of lines per frame. Measured on
+the labeled eval corpus this was score-neutral (96.17% vs 96.18% aggregate):
+the corpus labels co-evolved with mobile recognition, so a different reader
+shifts ambiguous lines in both directions. It may still help on text outside
+the labeled corpus if you have the GPU headroom.
+
 ## Download
 
 ```powershell
