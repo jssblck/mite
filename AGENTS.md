@@ -24,6 +24,9 @@ dictionary segmentation, or overlay presentation.
 - `docs/local-windows.md` documents local setup, model/runtime files, watch
   usage, and troubleshooting.
 - `docs/models.md` documents model provenance and the mobile-vs-server tradeoff.
+- `docs/accuracy.md` documents where character accuracy comes from: the
+  pipeline's accuracy levers, the measured overfitting boundary, and the
+  fine-tuning path beyond it.
 - `docs/performance.md` documents the before/after evidence expected for latency
   or throughput changes.
 - `docs/eval-metadata.md` documents the learner-first metadata policy for eval
