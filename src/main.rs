@@ -15,8 +15,39 @@ struct Cli {
     #[arg(short, long, default_value = "mite.toml")]
     config: PathBuf,
 
+    /// Run the INT8-quantized detector and recognizer (overrides the
+    /// `runtime.int8_*` config flags; see scripts/quantize-models.py).
+    #[arg(long, global = true)]
+    int8: bool,
+
+    /// Run only the detector in INT8 (the recognizer keeps its configured
+    /// precision).
+    #[arg(long, global = true)]
+    int8_detector: bool,
+
+    /// Run only the recognizer in INT8 (the detector keeps its configured
+    /// precision).
+    #[arg(long, global = true)]
+    int8_recognizer: bool,
+
     #[command(subcommand)]
     command: Command,
+}
+
+impl Cli {
+    fn int8_override(&self) -> Int8Override {
+        Int8Override {
+            detector: self.int8 || self.int8_detector,
+            recognizer: self.int8 || self.int8_recognizer,
+        }
+    }
+}
+
+/// INT8 selections from the CLI, applied on top of the loaded config.
+#[derive(Debug, Clone, Copy)]
+struct Int8Override {
+    detector: bool,
+    recognizer: bool,
 }
 
 /// Shared window-targeting flags. The criteria combine (a window must satisfy
@@ -151,10 +182,11 @@ enum Command {
 fn main() -> Result<()> {
     init_tracing();
     let cli = Cli::parse();
+    let int8 = cli.int8_override();
 
     match cli.command {
         Command::InitConfig { force } => cmd_init_config(&cli.config, force),
-        Command::Doctor => cmd_doctor(&cli.config),
+        Command::Doctor => cmd_doctor(&cli.config, int8),
         Command::ListWindows => cmd_list_windows(),
         Command::Eval {
             image,
@@ -165,6 +197,7 @@ fn main() -> Result<()> {
             allow_failures,
         } => cmd_eval(
             &cli.config,
+            int8,
             &image,
             &labels,
             &lexicon,
@@ -183,6 +216,7 @@ fn main() -> Result<()> {
             allow_failures,
         } => cmd_eval_corpus(
             &cli.config,
+            int8,
             &root,
             &lexicon,
             out,
@@ -193,7 +227,7 @@ fn main() -> Result<()> {
             allow_failures,
         ),
         Command::CleanImages { dry_run } => cmd_clean_images(dry_run),
-        Command::Watch(args) => cmd_watch(&cli.config, args),
+        Command::Watch(args) => cmd_watch(&cli.config, int8, args),
     }
 }
 
@@ -228,8 +262,8 @@ fn cmd_init_config(config_path: &Path, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_doctor(config_path: &Path) -> Result<()> {
-    let report = DoctorReport::inspect(&load_or_default(config_path)?);
+fn cmd_doctor(config_path: &Path, int8: Int8Override) -> Result<()> {
+    let report = DoctorReport::inspect(&load_or_default(config_path, int8)?);
     print!("{}", report.render_text());
     Ok(())
 }
@@ -249,8 +283,10 @@ fn cmd_list_windows() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_eval(
     config_path: &Path,
+    int8: Int8Override,
     image: &Path,
     labels: &Path,
     lexicon: &Path,
@@ -261,7 +297,7 @@ fn cmd_eval(
     if !(0.0..=1.0).contains(&min_iou) {
         bail!("--min-iou must be in [0, 1], got {min_iou}");
     }
-    let config = load_or_default(config_path)?;
+    let config = load_or_default(config_path, int8)?;
     let report = eval::run_eval(
         &config,
         image,
@@ -286,6 +322,7 @@ fn cmd_eval(
 #[allow(clippy::too_many_arguments)]
 fn cmd_eval_corpus(
     config_path: &Path,
+    int8: Int8Override,
     root: &Path,
     lexicon: &Path,
     out: Option<PathBuf>,
@@ -301,7 +338,7 @@ fn cmd_eval_corpus(
     if !(0.0..=1.0).contains(&min_aggregate) {
         bail!("--min-aggregate must be in [0, 1], got {min_aggregate}");
     }
-    let config = load_or_default(config_path)?;
+    let config = load_or_default(config_path, int8)?;
     let report = eval::run_eval_corpus(
         &config,
         root,
@@ -342,8 +379,8 @@ fn cmd_clean_images(dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_watch(config_path: &Path, args: WatchArgs) -> Result<()> {
-    let config = load_or_default(config_path)?;
+fn cmd_watch(config_path: &Path, int8: Int8Override, args: WatchArgs) -> Result<()> {
+    let config = load_or_default(config_path, int8)?;
     let backend = args.window.capture_backend;
     let eval_hotkey = match args.enable_eval_hotkey {
         Some(combo) => Some(interactive::EvalHotkeyRequest {
@@ -398,10 +435,17 @@ fn resolve_window_id(selector: &WindowSelector) -> Result<u32> {
     Ok(first.id)
 }
 
-fn load_or_default(path: &Path) -> Result<AppConfig> {
-    if path.exists() {
-        AppConfig::load(path)
+fn load_or_default(path: &Path, int8: Int8Override) -> Result<AppConfig> {
+    let mut config = if path.exists() {
+        AppConfig::load(path)?
     } else {
-        Ok(AppConfig::default())
+        AppConfig::default()
+    };
+    if int8.detector {
+        config.runtime.int8_detector = true;
     }
+    if int8.recognizer {
+        config.runtime.int8_recognizer = true;
+    }
+    Ok(config)
 }

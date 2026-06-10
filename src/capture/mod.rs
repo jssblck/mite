@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -21,11 +22,94 @@ pub struct Frame {
     pub screen_rect: ScreenRect,
     pub source: FrameSourceMetadata,
     pub content_epoch: u64,
-    pub pixels: Option<RgbImage>,
+    /// Shared so retaining a frame across passes (WGC stale-serve, snapshots,
+    /// smoothing anchors) never copies the ~25 MB 4K buffer.
+    pub pixels: Option<Arc<RgbImage>>,
     /// Capture-source frames delivered since the previous frame (WGC drop count;
     /// 1 for one-shot sources). See [`crate::wgc_capture::CaptureStats`].
     pub frames_delivered: u32,
     /// How stale the pixels were when consumed (0 for one-shot sources).
+    pub staging_age: Duration,
+}
+
+/// A scene-stability probe a [`FrameSource`] may evaluate *before* paying for
+/// full frame materialization: sample luma at fixed points and compare against
+/// the values recorded at the last full detection. Built by the smoothing
+/// layer from its anchor; sources that support it (WGC) can answer
+/// "unchanged" straight off the GPU staging buffer without converting,
+/// fingerprinting, or allocating a frame.
+#[derive(Debug, Clone)]
+pub struct FrameProbe {
+    /// Frame size the probe was sampled at; a size mismatch is always
+    /// "changed".
+    pub expected_size: Size,
+    /// Sample coordinates, clamped in-bounds at construction.
+    pub points: Vec<(u32, u32)>,
+    /// Expected luma (see [`FrameProbe::luma`]) per point.
+    pub luma: Vec<u8>,
+    /// Max mean absolute per-point luma difference still considered the same
+    /// scene.
+    pub max_mean_diff: u32,
+}
+
+/// Integer Rec601 luma weights (R, G, B) summing to 256, with a right-shift by
+/// [`FrameProbe::LUMA_SHIFT`] - the cheap luma approximation used for scene
+/// signatures on both the RGB and capture-side BGRA paths.
+impl FrameProbe {
+    pub const LUMA_WEIGHTS: [u32; 3] = [77, 150, 29];
+    pub const LUMA_SHIFT: u32 = 8;
+
+    pub fn luma(r: u8, g: u8, b: u8) -> u8 {
+        ((r as u32 * Self::LUMA_WEIGHTS[0]
+            + g as u32 * Self::LUMA_WEIGHTS[1]
+            + b as u32 * Self::LUMA_WEIGHTS[2])
+            >> Self::LUMA_SHIFT) as u8
+    }
+
+    /// Mean absolute difference between the recorded luma and `sampled`;
+    /// `u32::MAX` when incomparable.
+    pub fn mean_diff(&self, sampled: &[u8]) -> u32 {
+        if self.luma.is_empty() || self.luma.len() != sampled.len() {
+            return u32::MAX;
+        }
+        let sum: u32 = self
+            .luma
+            .iter()
+            .zip(sampled)
+            .map(|(a, b)| a.abs_diff(*b) as u32)
+            .sum();
+        sum / self.luma.len() as u32
+    }
+
+    /// Evaluate the probe against a materialized RGB frame.
+    pub fn matches_rgb(&self, image: &RgbImage) -> bool {
+        if Size::new(image.width(), image.height()) != self.expected_size {
+            return false;
+        }
+        let sampled: Vec<u8> = self
+            .points
+            .iter()
+            .map(|&(x, y)| {
+                let p = image.get_pixel(x, y);
+                Self::luma(p[0], p[1], p[2])
+            })
+            .collect();
+        self.mean_diff(&sampled) <= self.max_mean_diff
+    }
+}
+
+/// What a probing capture call produced: a full frame, or proof the scene is
+/// unchanged plus the lightweight per-pass metadata.
+pub enum FrameDelivery {
+    Frame(Frame),
+    Unchanged(UnchangedFrame),
+}
+
+/// Metadata for a pass whose frame was proven unchanged without
+/// materialization.
+pub struct UnchangedFrame {
+    pub screen_rect: ScreenRect,
+    pub frames_delivered: u32,
     pub staging_age: Duration,
 }
 
@@ -82,6 +166,14 @@ impl FrameSourceMetadata {
 
 pub trait FrameSource {
     fn next_frame(&mut self) -> Result<Frame>;
+
+    /// Capture, but allow the source to prove the scene unchanged via `probe`
+    /// before paying for materialization. The default materializes and lets
+    /// the caller evaluate the probe itself; sources with a cheaper vantage
+    /// point (WGC's mapped staging buffer) override this.
+    fn next_frame_or_unchanged(&mut self, _probe: &FrameProbe) -> Result<FrameDelivery> {
+        self.next_frame().map(FrameDelivery::Frame)
+    }
 }
 
 /// Which window-capture path to use. Doubles as the `--capture-backend` CLI
@@ -100,7 +192,7 @@ pub enum WindowCapturePreference {
 #[derive(Debug)]
 pub struct ImageFileCapture {
     next_id: u64,
-    image: RgbImage,
+    image: Arc<RgbImage>,
     fingerprint: u64,
     source_label: String,
 }
@@ -114,7 +206,7 @@ impl ImageFileCapture {
         let fingerprint = fingerprint_rgb(&image);
         Ok(Self {
             next_id: 0,
-            image,
+            image: Arc::new(image),
             fingerprint,
             source_label: path.display().to_string(),
         })
@@ -184,7 +276,7 @@ impl FrameSource for WindowScreenshotCapture {
             ),
             source,
             content_epoch: fingerprint,
-            pixels: Some(image),
+            pixels: Some(Arc::new(image)),
             frames_delivered: 1,
             staging_age: Duration::ZERO,
         })
@@ -269,10 +361,9 @@ impl WindowsGraphicsCapture {
         Ok(info)
     }
 
-    fn capture_with_session(&mut self) -> Result<Frame> {
-        let info = self.resolve_window_info()?;
-        let session = match &mut self.session {
-            Some(session) if session.window_id == info.id => session,
+    fn ensure_session(&mut self, info: &WindowInfo) -> Result<&mut ActiveWgcSession> {
+        match &self.session {
+            Some(session) if session.window_id == info.id => {}
             _ => {
                 self.session = Some(ActiveWgcSession {
                     window_id: info.id,
@@ -283,20 +374,45 @@ impl WindowsGraphicsCapture {
                         self.timeout,
                     )?,
                 });
-                self.session.as_mut().expect("WGC session was just created")
             }
-        };
+        }
+        Ok(self.session.as_mut().expect("WGC session set above"))
+    }
 
-        let (image, stats) = session.session.capture_next()?;
-        Ok(frame_from_window_image(self.next_id, &info, image, stats))
+    fn capture_with_session(&mut self, probe: Option<&FrameProbe>) -> Result<FrameDelivery> {
+        let info = self.resolve_window_info()?;
+        let session = self.ensure_session(&info)?;
+        match session.session.capture_next_probed(probe)? {
+            crate::wgc_capture::ProbedCapture::Unchanged(stats) => {
+                Ok(FrameDelivery::Unchanged(UnchangedFrame {
+                    screen_rect: ScreenRect::new(
+                        info.x,
+                        info.y,
+                        Size::new(info.width, info.height),
+                    ),
+                    frames_delivered: stats.frames_delivered,
+                    staging_age: stats.staging_age,
+                }))
+            }
+            crate::wgc_capture::ProbedCapture::Frame(image, stats) => {
+                let frame = frame_from_window_image(self.next_id, &info, image, stats);
+                self.next_id += 1;
+                Ok(FrameDelivery::Frame(frame))
+            }
+        }
     }
 }
 
 impl FrameSource for WindowsGraphicsCapture {
     fn next_frame(&mut self) -> Result<Frame> {
-        let frame = self.capture_with_session()?;
-        self.next_id += 1;
-        Ok(frame)
+        match self.capture_with_session(None)? {
+            FrameDelivery::Frame(frame) => Ok(frame),
+            FrameDelivery::Unchanged(_) => unreachable!("no probe given"),
+        }
+    }
+
+    fn next_frame_or_unchanged(&mut self, probe: &FrameProbe) -> Result<FrameDelivery> {
+        self.capture_with_session(Some(probe))
     }
 }
 
@@ -346,6 +462,15 @@ impl FrameSource for AutoWindowCapture {
             Err(error) => self.fall_back_to_screenshot(FallbackReason::WgcError(error)),
         }
     }
+
+    fn next_frame_or_unchanged(&mut self, probe: &FrameProbe) -> Result<FrameDelivery> {
+        if let Some(active) = &mut self.active {
+            return active.next_frame_or_unchanged(probe);
+        }
+        // A probe implies a previous full detection, which implies a settled
+        // backend; before that, run the normal probe-frame selection.
+        self.next_frame().map(FrameDelivery::Frame)
+    }
 }
 
 impl AutoWindowCapture {
@@ -387,6 +512,13 @@ impl FrameSource for ActiveWindowCapture {
             Self::Screenshot(source) => source.next_frame(),
         }
     }
+
+    fn next_frame_or_unchanged(&mut self, probe: &FrameProbe) -> Result<FrameDelivery> {
+        match self {
+            Self::Wgc(source) => source.next_frame_or_unchanged(probe),
+            Self::Screenshot(source) => source.next_frame_or_unchanged(probe),
+        }
+    }
 }
 
 pub fn window_frame_source(
@@ -415,7 +547,7 @@ fn probe_screenshot_fallback(
 fn frame_from_window_image(
     id: u64,
     info: &WindowInfo,
-    image: RgbImage,
+    image: Arc<RgbImage>,
     stats: crate::wgc_capture::CaptureStats,
 ) -> Frame {
     let fingerprint = fingerprint_rgb(&image);
@@ -440,7 +572,7 @@ fn frame_from_window_image(
 }
 
 fn frame_has_signal(frame: &Frame) -> bool {
-    frame.pixels.as_ref().is_some_and(image_has_signal)
+    frame.pixels.as_deref().is_some_and(image_has_signal)
 }
 
 #[cfg(test)]

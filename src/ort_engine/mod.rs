@@ -170,23 +170,40 @@ pub struct OrtOcrEngine {
 
 impl OrtOcrEngine {
     pub fn new(models: &ModelConfig, runtime: &RuntimeConfig) -> Result<Self> {
-        require_file(&models.detector_path)?;
-        require_file(&models.recognizer_path)?;
+        let resolve_int8 = |enabled: bool, path: &std::path::Path| -> Result<std::path::PathBuf> {
+            if !enabled {
+                return Ok(path.to_path_buf());
+            }
+            let int8 = crate::config::int8_model_path(path);
+            if !int8.exists() {
+                bail!(
+                    "INT8 is enabled but {} is missing; generate the INT8 models \
+                     with `.venv-models\\Scripts\\python.exe scripts\\quantize-models.py`",
+                    int8.display()
+                );
+            }
+            Ok(int8)
+        };
+        let detector_path = resolve_int8(runtime.int8_detector, &models.detector_path)?;
+        let recognizer_path = resolve_int8(runtime.int8_recognizer, &models.recognizer_path)?;
+        require_file(&detector_path)?;
+        require_file(&recognizer_path)?;
         let charset_path = models
             .charset_path
             .as_ref()
             .context("models.charset_path is required for real OCR")?;
         require_file(charset_path)?;
 
-        let detector = commit_session(&models.detector_path, runtime, ModelKind::Detector)?;
-        let recognizer = commit_session(&models.recognizer_path, runtime, ModelKind::Recognizer)?;
+        let detector = commit_session(&detector_path, runtime, ModelKind::Detector)?;
+        let recognizer = commit_session(&recognizer_path, runtime, ModelKind::Recognizer)?;
         let fallback_recognizer = match &models.fallback_recognizer_path {
             Some(path) => {
                 require_file(path)?;
                 // The PP-OCRv5 server recognizer overflows FP16 (see
-                // docs/models.md); the fallback always runs FP32.
+                // docs/models.md); the fallback always runs FP32, never INT8.
                 let fp32_runtime = RuntimeConfig {
                     fp16: false,
+                    int8_recognizer: false,
                     ..runtime.clone()
                 };
                 Some(commit_session(path, &fp32_runtime, ModelKind::Recognizer)?)
@@ -225,30 +242,74 @@ impl OcrEngine for OrtOcrEngine {
         let detector_input = prof("det.resize", || {
             resize_for_detector(image.as_ref(), target_long, config.detector_resize_filter)
         });
-        // The low-contrast pass needs a CPU-built local-contrast image; build
-        // it concurrently with the primary pass so the GPU inference and the
-        // CPU enhancement overlap instead of running back to back.
-        let (primary, enhanced) = if config.detector_low_contrast_pass {
-            std::thread::scope(|scope| {
-                let enhance = scope.spawn(|| {
-                    prof("det.local_contrast", || {
+        // Dual-pass scheduling: the GPU should never wait for CPU work between
+        // the two detector inferences. While the primary inference holds the
+        // session, a worker thread builds the local-contrast image *and* its
+        // NCHW tensor; the moment the primary inference returns, the
+        // low-contrast inference launches and the primary probability map's
+        // postprocessing runs concurrently on a second thread.
+        let candidates = if config.detector_low_contrast_pass {
+            let primary_cfg = DetectorPassConfig::primary(config);
+            let low_cfg = DetectorPassConfig::low_contrast(config);
+            let padded_size = detector_input.padded_size;
+            let content_size = detector_input.content_size();
+            let frame_size = frame.size;
+            std::thread::scope(|scope| -> Result<Vec<ScoredRect>> {
+                let low_input_thread = scope.spawn(|| {
+                    let enhanced = prof("det.local_contrast", || {
                         local_contrast_detector_image(detector_input.image.as_ref())
-                    })
+                    });
+                    let enhanced_input = DetectorInput {
+                        image: Cow::Owned(enhanced),
+                        padded_size,
+                    };
+                    let tensor = prof("det.low_contrast.tensor", || {
+                        detector_tensor(&enhanced_input)
+                    });
+                    (enhanced_input, tensor)
                 });
-                let primary = prof("det.primary", || {
-                    detect_candidate_rects(
-                        &mut self.detector,
-                        &detector_input,
-                        frame.size,
-                        config,
-                        DetectorPassConfig::primary(config),
-                    )
+                let primary_tensor =
+                    prof("det.primary.tensor", || detector_tensor(&detector_input));
+                let (primary_value, map_w, map_h) = detector_probability_value(
+                    &mut self.detector,
+                    primary_tensor,
+                    padded_size,
+                    "det.primary",
+                )?;
+                let (enhanced_input, low_tensor) = low_input_thread
+                    .join()
+                    .expect("local contrast build panicked");
+                let primary_components = scope.spawn(move || -> Result<Vec<ScoredRect>> {
+                    let (_, primary_map) = primary_value.try_extract_tensor::<f32>()?;
+                    Ok(prof("det.primary.components", || {
+                        candidates_from_probability_map(
+                            primary_map,
+                            map_w,
+                            map_h,
+                            padded_size,
+                            content_size,
+                            frame_size,
+                            config,
+                            primary_cfg,
+                        )
+                    }))
                 });
-                let enhanced = enhance.join().expect("local contrast build panicked");
-                (primary, Some(enhanced))
-            })
+                let low = detect_candidate_rects_with_tensor(
+                    &mut self.detector,
+                    low_tensor,
+                    &enhanced_input,
+                    frame_size,
+                    config,
+                    low_cfg,
+                )?;
+                let mut candidates = primary_components
+                    .join()
+                    .expect("primary postprocessing panicked")?;
+                candidates.extend(low);
+                Ok(candidates)
+            })?
         } else {
-            let primary = prof("det.primary", || {
+            prof("det.primary", || {
                 detect_candidate_rects(
                     &mut self.detector,
                     &detector_input,
@@ -256,26 +317,8 @@ impl OcrEngine for OrtOcrEngine {
                     config,
                     DetectorPassConfig::primary(config),
                 )
-            });
-            (primary, None)
+            })?
         };
-        let mut candidates = primary?;
-
-        if let Some(enhanced) = enhanced {
-            let enhanced_input = DetectorInput {
-                image: Cow::Owned(enhanced),
-                padded_size: detector_input.padded_size,
-            };
-            candidates.extend(prof("det.low_contrast", || {
-                detect_candidate_rects(
-                    &mut self.detector,
-                    &enhanced_input,
-                    frame.size,
-                    config,
-                    DetectorPassConfig::low_contrast(config),
-                )
-            })?);
-        }
 
         let boxes = finalize_detection_boxes(
             candidates,
@@ -335,18 +378,15 @@ impl OcrEngine for OrtOcrEngine {
         order.sort_by_key(|&index| crops[index].real_w);
 
         let mut results: Vec<Option<RecognizedText>> = (0..boxes.len()).map(|_| None).collect();
-        prof("rec.batches", || -> Result<()> {
-            for chunk in order.chunks(REC_BATCH_MAX) {
-                run_recognizer_batch(
-                    &mut self.recognizer,
-                    &self.dictionary,
-                    &crops,
-                    chunk,
-                    boxes,
-                    &mut results,
-                )?;
-            }
-            Ok(())
+        prof("rec.batches", || {
+            run_recognizer_batches_pipelined(
+                &mut self.recognizer,
+                &self.dictionary,
+                &crops,
+                &order,
+                boxes,
+                &mut results,
+            )
         })?;
 
         // Second opinion from the heavier fallback recognizer for lines the
@@ -796,61 +836,100 @@ fn local_contrast_detector_image(image: &RgbImage) -> RgbImage {
     if width == 0 || height == 0 {
         return image.clone();
     }
-
-    let luma = image.pixels().map(luminance).collect::<Vec<_>>();
-    let integral = luminance_integral(&luma, width, height);
     let radius = LOCAL_CONTRAST_RADIUS_PX as usize;
-    let mut out = vec![0u8; width * height * 3];
 
-    out.par_chunks_mut(width * 3)
+    // Separable sliding-window box mean instead of a u64 integral image: the
+    // integral build was single-threaded and its (w+1)x(h+1) u64 buffer cost
+    // ~66 MB of allocation and traffic at 4K. Every accumulation below is exact
+    // integer math over the same clamped window, so the output is bit-identical
+    // to the integral formulation.
+    let raw = image.as_raw();
+    let mut luma = vec![0u8; width * height];
+    luma.par_chunks_mut(width)
+        .zip(raw.par_chunks(width * 3))
+        .for_each(|(dst, src)| {
+            for (out, px) in dst.iter_mut().zip(src.chunks_exact(3)) {
+                *out = luminance(&Rgb([px[0], px[1], px[2]]));
+            }
+        });
+
+    // Horizontal clamped moving sums, rows independent. Window max is
+    // (2*radius+1) * 255, far inside u32.
+    let mut hsum = vec![0u32; width * height];
+    hsum.par_chunks_mut(width)
+        .zip(luma.par_chunks(width))
+        .for_each(|(dst, row)| {
+            let mut sum: u32 = row[..(radius + 1).min(width)]
+                .iter()
+                .map(|&v| v as u32)
+                .sum();
+            dst[0] = sum;
+            for x in 1..width {
+                if x + radius < width {
+                    sum += row[x + radius] as u32;
+                }
+                if x > radius {
+                    sum -= row[x - radius - 1] as u32;
+                }
+                dst[x] = sum;
+            }
+        });
+
+    let hcount: Vec<u32> = (0..width)
+        .map(|x| ((x + radius + 1).min(width) - x.saturating_sub(radius)) as u32)
+        .collect();
+
+    // Vertical pass fused with output: parallel over contiguous row chunks, each
+    // chunk seeding its vertical window once and then sliding it row by row.
+    // The seed costs window-height row additions per chunk, negligible next to
+    // the per-row work it saves.
+    let chunk_rows = height
+        .div_ceil((rayon::current_num_threads() * 4).max(1))
+        .max(1);
+    let mut out = vec![0u8; width * height * 3];
+    out.par_chunks_mut(chunk_rows * width * 3)
         .enumerate()
-        .for_each(|(y, row)| {
-            for x in 0..width {
-                let local_mean = local_mean_luma(&integral, width, height, x, y, radius);
-                let value = 128.0 + (luma[y * width + x] as f32 - local_mean) * LOCAL_CONTRAST_GAIN;
-                let value = value.round().clamp(0.0, 255.0) as u8;
-                let offset = x * 3;
-                row[offset] = value;
-                row[offset + 1] = value;
-                row[offset + 2] = value;
+        .for_each(|(chunk, out_rows)| {
+            let y_start = chunk * chunk_rows;
+            let y_end = (y_start + chunk_rows).min(height);
+            let mut vsum = vec![0u32; width];
+            for r in y_start.saturating_sub(radius)..(y_start + radius + 1).min(height) {
+                let row = &hsum[r * width..(r + 1) * width];
+                for (acc, &value) in vsum.iter_mut().zip(row) {
+                    *acc += value;
+                }
+            }
+            for (y, out_row) in (y_start..y_end).zip(out_rows.chunks_mut(width * 3)) {
+                let vcount = ((y + radius + 1).min(height) - y.saturating_sub(radius)) as u32;
+                let luma_row = &luma[y * width..(y + 1) * width];
+                for x in 0..width {
+                    let local_mean = vsum[x] as f32 / (hcount[x] * vcount) as f32;
+                    let value = 128.0 + (luma_row[x] as f32 - local_mean) * LOCAL_CONTRAST_GAIN;
+                    let value = value.round().clamp(0.0, 255.0) as u8;
+                    let offset = x * 3;
+                    out_row[offset] = value;
+                    out_row[offset + 1] = value;
+                    out_row[offset + 2] = value;
+                }
+                if y + 1 < y_end {
+                    if y + radius + 1 < height {
+                        let row = &hsum[(y + radius + 1) * width..(y + radius + 2) * width];
+                        for (acc, &value) in vsum.iter_mut().zip(row) {
+                            *acc += value;
+                        }
+                    }
+                    if y + 1 > radius {
+                        let row = &hsum[(y - radius) * width..(y - radius + 1) * width];
+                        for (acc, &value) in vsum.iter_mut().zip(row) {
+                            *acc -= value;
+                        }
+                    }
+                }
             }
         });
 
     RgbImage::from_raw(image.width(), image.height(), out)
         .expect("local contrast buffer matches dimensions")
-}
-
-fn luminance_integral(luma: &[u8], width: usize, height: usize) -> Vec<u64> {
-    let stride = width + 1;
-    let mut integral = vec![0u64; (width + 1) * (height + 1)];
-    for y in 0..height {
-        let mut row_sum = 0u64;
-        for x in 0..width {
-            row_sum += luma[y * width + x] as u64;
-            integral[(y + 1) * stride + x + 1] = integral[y * stride + x + 1] + row_sum;
-        }
-    }
-    integral
-}
-
-fn local_mean_luma(
-    integral: &[u64],
-    width: usize,
-    height: usize,
-    x: usize,
-    y: usize,
-    radius: usize,
-) -> f32 {
-    let stride = width + 1;
-    let x0 = x.saturating_sub(radius);
-    let y0 = y.saturating_sub(radius);
-    let x1 = (x + radius + 1).min(width);
-    let y1 = (y + radius + 1).min(height);
-    let sum = integral[y1 * stride + x1] + integral[y0 * stride + x0]
-        - integral[y0 * stride + x1]
-        - integral[y1 * stride + x0];
-    let count = ((x1 - x0) * (y1 - y0)).max(1);
-    sum as f32 / count as f32
 }
 
 fn resize_for_detector(
@@ -1111,6 +1190,29 @@ fn detect_candidate_rects(
 ) -> Result<Vec<ScoredRect>> {
     let label = pass_config.label;
     let tensor_data = prof(&format!("{label}.tensor"), || detector_tensor(input_image));
+    detect_candidate_rects_with_tensor(
+        detector,
+        tensor_data,
+        input_image,
+        frame_size,
+        config,
+        pass_config,
+    )
+}
+
+/// Run the detector on a prebuilt NCHW tensor and postprocess the probability
+/// map in place. Split from [`detect_candidate_rects`] so the dual-pass path
+/// can build the second pass's tensor on a worker thread while the first
+/// pass's inference holds the session.
+fn detect_candidate_rects_with_tensor(
+    detector: &mut Session,
+    tensor_data: Vec<f32>,
+    input_image: &DetectorInput,
+    frame_size: Size,
+    config: &PipelineConfig,
+    pass_config: DetectorPassConfig,
+) -> Result<Vec<ScoredRect>> {
+    let label = pass_config.label;
     let input = Tensor::from_array((
         [
             1usize,
@@ -1123,6 +1225,56 @@ fn detect_candidate_rects(
     let outputs = prof(&format!("{label}.infer"), || {
         detector.run(ort::inputs![input])
     })?;
+    let (map, map_w, map_h) = extract_probability_map(&outputs)?;
+    Ok(prof(&format!("{label}.components"), || {
+        candidates_from_probability_map(
+            map,
+            map_w,
+            map_h,
+            input_image.padded_size,
+            input_image.content_size(),
+            frame_size,
+            config,
+            pass_config,
+        )
+    }))
+}
+
+/// Run the detector on a prebuilt tensor and return the probability map as the
+/// owned output value, so postprocessing can move to another thread while the
+/// session runs the next inference. `DynValue` owns its (host) buffer
+/// independently of the session, so this hands the ~33 MB map across threads
+/// without copying it.
+fn detector_probability_value(
+    detector: &mut Session,
+    tensor_data: Vec<f32>,
+    padded_size: Size,
+    label: &str,
+) -> Result<(ort::value::DynValue, usize, usize)> {
+    let input = Tensor::from_array((
+        [
+            1usize,
+            DET_CHANNELS,
+            padded_size.height as usize,
+            padded_size.width as usize,
+        ],
+        tensor_data.into_boxed_slice(),
+    ))?;
+    let outputs = prof(&format!("{label}.infer"), || {
+        detector.run(ort::inputs![input])
+    })?;
+    let (_, map_w, map_h) = extract_probability_map(&outputs)?;
+    let value = outputs
+        .into_iter()
+        .next()
+        .map(|(_, value)| value)
+        .context("detector produced no outputs")?;
+    Ok((value, map_w, map_h))
+}
+
+fn extract_probability_map<'a>(
+    outputs: &'a ort::session::SessionOutputs<'_>,
+) -> Result<(&'a [f32], usize, usize)> {
     let (shape, data) = outputs[0].try_extract_tensor::<f32>()?;
     let dims = shape
         .iter()
@@ -1131,20 +1283,29 @@ fn detect_candidate_rects(
     if dims.len() != 4 || dims[0] != 1 || dims[1] != 1 {
         bail!("unexpected detector output shape: {dims:?}");
     }
+    Ok((data, dims[3], dims[2]))
+}
 
-    let map_h = dims[2];
-    let map_w = dims[3];
-    let mut candidates = prof(&format!("{label}.components"), || {
-        detect_components_from_probability_map(
-            data,
-            map_w,
-            map_h,
-            pass_config.probability_threshold,
-            pass_config.min_component_area,
-            pass_config.close_radius_px,
-            pass_config.unclip_ratio,
-        )
-    });
+#[allow(clippy::too_many_arguments)]
+fn candidates_from_probability_map(
+    data: &[f32],
+    map_w: usize,
+    map_h: usize,
+    input_size: Size,
+    content_size: Size,
+    frame_size: Size,
+    config: &PipelineConfig,
+    pass_config: DetectorPassConfig,
+) -> Vec<ScoredRect> {
+    let mut candidates = detect_components_from_probability_map(
+        data,
+        map_w,
+        map_h,
+        pass_config.probability_threshold,
+        pass_config.min_component_area,
+        pass_config.close_radius_px,
+        pass_config.unclip_ratio,
+    );
     candidates.sort_by(|a, b| {
         b.score()
             .total_cmp(&a.score())
@@ -1154,19 +1315,18 @@ fn detect_candidate_rects(
             .then_with(|| a.rect.height.total_cmp(&b.rect.height))
     });
 
-    let input_size = input_image.padded_size;
     let map_size = Size::new(
         u32::try_from(map_w).unwrap_or(u32::MAX),
         u32::try_from(map_h).unwrap_or(u32::MAX),
     );
-    Ok(candidates
+    candidates
         .into_iter()
         .filter(|candidate| candidate.score() >= pass_config.box_score_threshold)
         .filter_map(|candidate| {
             let rect = scale_detector_map_rect_to_frame(
                 candidate.rect,
                 input_size,
-                input_image.content_size(),
+                content_size,
                 map_size,
                 frame_size,
             )?;
@@ -1177,7 +1337,7 @@ fn detect_candidate_rects(
             })
         })
         .filter(|candidate| is_plausible_text_rect(candidate.rect, frame_size, config))
-        .collect())
+        .collect()
 }
 
 fn scale_detector_map_rect_to_frame(
@@ -1310,17 +1470,8 @@ fn intersection_area(a: Rect, b: Rect) -> f32 {
 /// CTC-decode each row back into `results` at its original box index. Each row is
 /// zero-padded (the recognizer's training pad value) from `real_w` to the batch's
 /// `target_w`.
-fn run_recognizer_batch(
-    recognizer: &mut Session,
-    dictionary: &[String],
-    crops: &[RecCrop],
-    batch: &[usize],
-    boxes: &[TextBox],
-    results: &mut [Option<RecognizedText>],
-) -> Result<()> {
-    if batch.is_empty() {
-        return Ok(());
-    }
+/// Pad-and-pack a width-sorted batch of crops into one NCHW tensor.
+fn pack_recognizer_batch(crops: &[RecCrop], batch: &[usize]) -> (Vec<f32>, usize) {
     let rows = batch.len();
     let min_width = REC_MIN_WIDTH as usize;
     let target_w = batch
@@ -1336,27 +1487,35 @@ fn run_recognizer_batch(
     for (row, &bi) in batch.iter().enumerate() {
         write_recognizer_row(&mut tensor, row, &crops[bi].resized, target_w);
     }
-    let input = Tensor::from_array((
-        [rows, REC_CHANNELS, height, target_w],
-        tensor.into_boxed_slice(),
-    ))?;
-    let outputs = prof(&format!("  rec.infer[n={rows} w={target_w}]"), || {
-        recognizer.run(ort::inputs![input])
-    })?;
-    let (shape, data) = outputs[0].try_extract_tensor::<f32>()?;
+    (tensor, target_w)
+}
+
+/// CTC-decode one inferred batch. Rows decode in parallel: the per-timestep
+/// argmax over the large recognizer charset is a meaningful CPU cost, and rows
+/// are independent.
+fn decode_recognizer_value(
+    value: &ort::value::DynValue,
+    dictionary: &[String],
+    crops: &[RecCrop],
+    batch: &[usize],
+    boxes: &[TextBox],
+    target_w: usize,
+) -> Result<Vec<(usize, RecognizedText)>> {
+    let (shape, data) = value.try_extract_tensor::<f32>()?;
     let dims = shape
         .iter()
         .map(|dim| usize::try_from(*dim).unwrap_or_default())
         .collect::<Vec<_>>();
-    if dims.len() != 3 || dims[0] != rows {
-        bail!("unexpected recognizer output shape: {dims:?} (expected batch {rows})");
+    if dims.len() != 3 || dims[0] != batch.len() {
+        bail!(
+            "unexpected recognizer output shape: {dims:?} (expected batch {})",
+            batch.len()
+        );
     }
     let timesteps = dims[1];
     let classes = dims[2];
 
-    // CTC-decode every row in parallel: the per-timestep argmax over the large
-    // recognizer charset is a meaningful CPU cost, and rows are independent.
-    let decoded: Vec<(usize, RecognizedText)> = batch
+    Ok(batch
         .par_iter()
         .enumerate()
         .map(|(row, &bi)| {
@@ -1393,7 +1552,140 @@ fn run_recognizer_batch(
                 },
             )
         })
-        .collect();
+        .collect())
+}
+
+fn run_recognizer_infer(
+    recognizer: &mut Session,
+    tensor: Vec<f32>,
+    rows: usize,
+    target_w: usize,
+) -> Result<ort::value::DynValue> {
+    let input = Tensor::from_array((
+        [rows, REC_CHANNELS, REC_INPUT_HEIGHT as usize, target_w],
+        tensor.into_boxed_slice(),
+    ))?;
+    let outputs = prof(&format!("  rec.infer[n={rows} w={target_w}]"), || {
+        recognizer.run(ort::inputs![input])
+    })?;
+    outputs
+        .into_iter()
+        .next()
+        .map(|(_, value)| value)
+        .context("recognizer produced no outputs")
+}
+
+fn run_recognizer_batch(
+    recognizer: &mut Session,
+    dictionary: &[String],
+    crops: &[RecCrop],
+    batch: &[usize],
+    boxes: &[TextBox],
+    results: &mut [Option<RecognizedText>],
+) -> Result<()> {
+    if batch.is_empty() {
+        return Ok(());
+    }
+    let (tensor, target_w) = pack_recognizer_batch(crops, batch);
+    let value = run_recognizer_infer(recognizer, tensor, batch.len(), target_w)?;
+    for (index, recognized) in
+        decode_recognizer_value(&value, dictionary, crops, batch, boxes, target_w)?
+    {
+        results[index] = Some(recognized);
+    }
+    Ok(())
+}
+
+/// Run every batch through a three-stage pipeline: a packer thread builds the
+/// next batch's tensor and a decoder thread CTC-decodes the previous batch's
+/// logits while the session thread keeps the GPU busy with inference. Batch
+/// composition and all per-batch math are identical to the sequential path;
+/// only the scheduling differs. The output `DynValue` owns its buffer, so
+/// logits cross to the decoder thread without copying.
+fn run_recognizer_batches_pipelined(
+    recognizer: &mut Session,
+    dictionary: &[String],
+    crops: &[RecCrop],
+    order: &[usize],
+    boxes: &[TextBox],
+    results: &mut [Option<RecognizedText>],
+) -> Result<()> {
+    if order.is_empty() {
+        return Ok(());
+    }
+
+    struct PackedBatch {
+        batch: Vec<usize>,
+        tensor: Vec<f32>,
+        target_w: usize,
+    }
+    struct InferredBatch {
+        batch: Vec<usize>,
+        value: ort::value::DynValue,
+        target_w: usize,
+    }
+
+    let decoded = std::thread::scope(|scope| -> Result<Vec<(usize, RecognizedText)>> {
+        let (pack_tx, pack_rx) = std::sync::mpsc::sync_channel::<PackedBatch>(1);
+        let (decode_tx, decode_rx) = std::sync::mpsc::sync_channel::<InferredBatch>(2);
+
+        scope.spawn(move || {
+            for batch in order.chunks(REC_BATCH_MAX) {
+                let (tensor, target_w) = pack_recognizer_batch(crops, batch);
+                let packed = PackedBatch {
+                    batch: batch.to_vec(),
+                    tensor,
+                    target_w,
+                };
+                // The session thread hanging up early (on error) ends packing.
+                if pack_tx.send(packed).is_err() {
+                    return;
+                }
+            }
+        });
+
+        let decoder = scope.spawn(move || -> Result<Vec<(usize, RecognizedText)>> {
+            let mut decoded = Vec::new();
+            while let Ok(inferred) = decode_rx.recv() {
+                decoded.extend(decode_recognizer_value(
+                    &inferred.value,
+                    dictionary,
+                    crops,
+                    &inferred.batch,
+                    boxes,
+                    inferred.target_w,
+                )?);
+            }
+            Ok(decoded)
+        });
+
+        let mut session_result: Result<()> = Ok(());
+        while let Ok(packed) = pack_rx.recv() {
+            let rows = packed.batch.len();
+            match run_recognizer_infer(recognizer, packed.tensor, rows, packed.target_w) {
+                Ok(value) => {
+                    let inferred = InferredBatch {
+                        batch: packed.batch,
+                        value,
+                        target_w: packed.target_w,
+                    };
+                    if decode_tx.send(inferred).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    session_result = Err(error);
+                    break;
+                }
+            }
+        }
+        drop(pack_rx);
+        drop(decode_tx);
+        let decoded = decoder.join().expect("recognizer decode thread panicked");
+        session_result?;
+        decoded
+    })?;
+
     for (index, recognized) in decoded {
         results[index] = Some(recognized);
     }
@@ -2598,6 +2890,77 @@ mod tests {
             max - min > 100,
             "expected stretched range to widen, got {min}..{max}"
         );
+    }
+
+    /// The integral-image formulation the sliding-window build replaced. Kept
+    /// as the reference for the exact-equality test below.
+    fn reference_local_contrast(image: &RgbImage) -> RgbImage {
+        let width = image.width() as usize;
+        let height = image.height() as usize;
+        if width == 0 || height == 0 {
+            return image.clone();
+        }
+        let luma = image.pixels().map(luminance).collect::<Vec<_>>();
+        let stride = width + 1;
+        let mut integral = vec![0u64; (width + 1) * (height + 1)];
+        for y in 0..height {
+            let mut row_sum = 0u64;
+            for x in 0..width {
+                row_sum += luma[y * width + x] as u64;
+                integral[(y + 1) * stride + x + 1] = integral[y * stride + x + 1] + row_sum;
+            }
+        }
+        let radius = LOCAL_CONTRAST_RADIUS_PX as usize;
+        let mut out = vec![0u8; width * height * 3];
+        for y in 0..height {
+            for x in 0..width {
+                let x0 = x.saturating_sub(radius);
+                let y0 = y.saturating_sub(radius);
+                let x1 = (x + radius + 1).min(width);
+                let y1 = (y + radius + 1).min(height);
+                let sum = integral[y1 * stride + x1] + integral[y0 * stride + x0]
+                    - integral[y0 * stride + x1]
+                    - integral[y1 * stride + x0];
+                let count = ((x1 - x0) * (y1 - y0)).max(1);
+                let local_mean = sum as f32 / count as f32;
+                let value = 128.0 + (luma[y * width + x] as f32 - local_mean) * LOCAL_CONTRAST_GAIN;
+                let value = value.round().clamp(0.0, 255.0) as u8;
+                let offset = (y * width + x) * 3;
+                out[offset] = value;
+                out[offset + 1] = value;
+                out[offset + 2] = value;
+            }
+        }
+        RgbImage::from_raw(image.width(), image.height(), out)
+            .expect("reference buffer matches dimensions")
+    }
+
+    #[test]
+    fn sliding_window_local_contrast_matches_integral_reference_exactly() {
+        // Deterministic but irregular pixel pattern; sizes chosen to exercise
+        // width/height below, at, and above the window diameter (2*14+1 = 29),
+        // plus chunk boundaries in the parallel vertical pass.
+        let mut seed = 0x2545F491u32;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        for (w, h) in [(1, 1), (5, 3), (29, 29), (64, 32), (100, 7), (31, 100)] {
+            let mut image = RgbImage::new(w, h);
+            for pixel in image.pixels_mut() {
+                let v = next();
+                *pixel = Rgb([v as u8, (v >> 8) as u8, (v >> 16) as u8]);
+            }
+            let fast = local_contrast_detector_image(&image);
+            let reference = reference_local_contrast(&image);
+            assert_eq!(
+                fast.as_raw(),
+                reference.as_raw(),
+                "sliding-window output diverged from integral reference at {w}x{h}"
+            );
+        }
     }
 
     #[test]

@@ -34,7 +34,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetForegroundWindow};
 
 use crate::capture::{
-    Frame, FrameSource, WindowCapturePreference, WindowSelector, window_frame_source,
+    Frame, FrameDelivery, FrameSource, WindowCapturePreference, WindowSelector, window_frame_source,
 };
 use crate::config::AppConfig;
 use crate::debug_capture::{self, CaptureInput};
@@ -95,7 +95,7 @@ pub struct EvalHotkeyRequest {
 struct Snapshot {
     screen_rect: ScreenRect,
     window_id: u32,
-    image: Option<RgbImage>,
+    image: Option<std::sync::Arc<RgbImage>>,
     items: Vec<RecognizedText>,
     words: Vec<WordSpan>,
     /// Capture-health extras for the HUD/metrics (drop count + staleness).
@@ -460,22 +460,65 @@ impl Worker {
     /// Capture the target window, run detection + recognition, then segment each
     /// recognized line into word spans (highlight geometry + popup content).
     fn pass(&mut self, window_id: u32) -> Result<Snapshot> {
-        let (frame, target_changed) = self.capture_frame(window_id)?;
+        let target_changed = self.prepare_capture(window_id)?;
+
+        // Temporal smoothing: if the previously detected text regions are
+        // unchanged (sampled in the new frame at the same rects), reuse that
+        // detection and skip the expensive stages. Comparing only text regions
+        // ignores animated game backgrounds. Bounded by MAX_REUSE so any missed
+        // change self-corrects. When eligible, the anchor is handed to the
+        // capture source as a probe so a WGC source can answer "unchanged"
+        // straight off the staging buffer, skipping frame materialization
+        // entirely; sources without that vantage return a full frame and the
+        // same signature is checked here instead.
+        let probe_eligible = self.limits.smoothing
+            && !target_changed
+            && self.smoothing.last_full.elapsed() < MAX_REUSE
+            && self.smoothing.cached.is_some();
+        let source = &mut self.capture.as_mut().expect("capture prepared above").1;
+        let delivery = {
+            let _span = tracing::info_span!("capture").entered();
+            match (probe_eligible, &self.smoothing.anchor) {
+                (true, Some(anchor)) => source
+                    .next_frame_or_unchanged(anchor.probe())
+                    .context("failed to capture frame")?,
+                _ => FrameDelivery::Frame(source.next_frame().context("failed to capture frame")?),
+            }
+        };
+        let frame = match delivery {
+            FrameDelivery::Unchanged(unchanged) => {
+                let cached = self
+                    .smoothing
+                    .cached
+                    .clone()
+                    .expect("probe eligibility requires a cached detection");
+                // Enter the skipped stages as empty spans so the metrics/HUD
+                // reflect the reuse (≈0 ms) instead of carrying stale durations.
+                drop(tracing::info_span!("detect").entered());
+                drop(tracing::info_span!("recognize").entered());
+                drop(tracing::info_span!("analyze").entered());
+                return Ok(Snapshot {
+                    screen_rect: unchanged.screen_rect,
+                    window_id,
+                    image: None,
+                    items: cached.items,
+                    words: cached.words,
+                    extras: PassExtras {
+                        staging_age: unchanged.staging_age,
+                        frames_delivered: unchanged.frames_delivered,
+                    },
+                });
+            }
+            FrameDelivery::Frame(frame) => frame,
+        };
         let screen_rect = frame.screen_rect;
         let extras = PassExtras {
             staging_age: frame.staging_age,
             frames_delivered: frame.frames_delivered,
         };
 
-        // Temporal smoothing: if the previously detected text regions are
-        // unchanged (sampled in the new frame at the same rects), reuse that
-        // detection and skip the expensive stages. Comparing only text regions
-        // ignores animated game backgrounds. Bounded by MAX_REUSE so any missed
-        // change self-corrects.
-        let reuse = self.limits.smoothing
-            && !target_changed
-            && self.smoothing.last_full.elapsed() < MAX_REUSE
-            && match (&self.smoothing.anchor, frame.pixels.as_ref()) {
+        let reuse = probe_eligible
+            && match (&self.smoothing.anchor, frame.pixels.as_deref()) {
                 (Some(anchor), Some(image)) => anchor.matches(image),
                 _ => false,
             };
@@ -564,7 +607,9 @@ impl Worker {
         eval_capture::write_raw_capture(output_dir, window_id, &frame)
     }
 
-    fn capture_frame(&mut self, window_id: u32) -> Result<(Frame, bool)> {
+    /// Ensure a capture source exists for `window_id`; returns whether the
+    /// target changed since the previous pass.
+    fn prepare_capture(&mut self, window_id: u32) -> Result<bool> {
         let target_changed = Some(window_id) != self.last_id;
         self.last_id = Some(window_id);
 
@@ -573,7 +618,11 @@ impl Worker {
             let source = window_frame_source(selector, self.limits.backend);
             self.capture = Some((window_id, source));
         }
+        Ok(target_changed)
+    }
 
+    fn capture_frame(&mut self, window_id: u32) -> Result<(Frame, bool)> {
+        let target_changed = self.prepare_capture(window_id)?;
         let source = &mut self.capture.as_mut().expect("capture source set above").1;
         // Each stage is wrapped in a `tracing` span named after the stage; the
         // `StageTimingLayer` times them and feeds the watch HUD's latency graph

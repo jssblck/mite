@@ -128,13 +128,20 @@ fn commit_trt_session(path: &Path, runtime: &RuntimeConfig, kind: ModelKind) -> 
     let cache = cache_dir.to_string_lossy().to_string();
     let (min, opt, max) = trt_profile_shapes(kind);
 
-    let cache_prefix = match kind {
+    let int8 = runtime.int8_for(kind == ModelKind::Detector);
+    let mut cache_prefix = match kind {
         ModelKind::Detector => format!("mite-detector-max{DET_PROFILE_MAX_SIDE}"),
         ModelKind::Recognizer => format!("mite-recognizer-max{REC_MAX_WIDTH}"),
     };
+    if int8 {
+        cache_prefix.push_str("-int8");
+    }
 
     let trt = TensorRT::default()
         .with_fp16(runtime.fp16)
+        // For explicit-QDQ models this lets TensorRT build INT8 kernels; the
+        // scales come from the Q/DQ nodes, so no calibration table is needed.
+        .with_int8(int8)
         .with_engine_cache(true)
         .with_engine_cache_path(cache.clone())
         .with_engine_cache_prefix(cache_prefix)

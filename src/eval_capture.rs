@@ -145,7 +145,7 @@ mod tests {
                 pid: Some(99),
             },
             content_epoch: 123,
-            pixels: Some(image),
+            pixels: Some(std::sync::Arc::new(image)),
             frames_delivered: 3,
             staging_age: Duration::from_millis(12),
         };

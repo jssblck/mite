@@ -25,6 +25,8 @@ use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemIntero
 use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsIconic, IsWindow};
 use windows::core::{IInspectable, Interface, Ref, factory};
 
+use crate::capture::FrameProbe;
+
 /// Steady-state max wait for a fresh WGC frame (after the first). A changing
 /// scene delivers frames well within this; a static one returns the last frame
 /// after this, capping capture latency instead of stalling.
@@ -137,7 +139,7 @@ pub struct WindowCaptureSession {
     frame_pool: Direct3D11CaptureFramePool,
     session: GraphicsCaptureSession,
     timeout: Duration,
-    last_image: Option<RgbImage>,
+    last_image: Option<Arc<RgbImage>>,
     /// Stamp of the most recent frame actually consumed, so the staleness of a
     /// fallback (stale) frame keeps growing while no new frame arrives.
     last_consumed_stamp: Instant,
@@ -235,7 +237,18 @@ impl WindowCaptureSession {
         })
     }
 
-    pub fn capture_next(&mut self) -> Result<(RgbImage, CaptureStats)> {
+    pub fn capture_next(&mut self) -> Result<(Arc<RgbImage>, CaptureStats)> {
+        match self.capture_next_probed(None)? {
+            ProbedCapture::Frame(image, stats) => Ok((image, stats)),
+            ProbedCapture::Unchanged(_) => unreachable!("no probe given"),
+        }
+    }
+
+    /// Capture, optionally proving the scene unchanged from the mapped staging
+    /// buffer instead of materializing an RGB frame. With a probe, a matching
+    /// fresh frame (or no delivered frame at all) costs a few hundred point
+    /// samples instead of the ~80 MB convert + retain + fingerprint path.
+    pub fn capture_next_probed(&mut self, probe: Option<&FrameProbe>) -> Result<ProbedCapture> {
         // Wait the full timeout for the *first* frame (session startup can be
         // slow), but only briefly once we have a frame to fall back on — a static
         // scene delivers nothing, so returning a slightly-stale frame fast keeps
@@ -272,31 +285,43 @@ impl WindowCaptureSession {
                 .staging
                 .as_ref()
                 .expect("a fresh frame implies the staging texture exists");
-            let image = map_staging_to_rgb(&self.device_pair.context, staging)?;
             let stamp = slot.stamped;
             let stats = CaptureStats {
                 frames_delivered: slot.delivered,
                 staging_age: stamp.elapsed(),
             };
+            let outcome = consume_staging(&self.device_pair.context, staging, probe)?;
             slot.fresh = false;
             slot.delivered = 0;
             drop(slot);
 
             self.last_consumed_stamp = stamp;
-            self.last_image = Some(image.clone());
-            return Ok((image, stats));
+            return Ok(match outcome {
+                StagingOutcome::Unchanged => ProbedCapture::Unchanged(stats),
+                StagingOutcome::Image(image) => {
+                    let image = Arc::new(image);
+                    self.last_image = Some(Arc::clone(&image));
+                    ProbedCapture::Frame(image, stats)
+                }
+            });
         }
 
         let error = slot.error.take();
         drop(slot);
         if let Some(image) = &self.last_image {
-            // No new frame arrived: serve the last one, with its staleness still
-            // accruing from when it was originally captured.
+            // No new frame arrived: the scene cannot have changed. With a probe
+            // that is already an answer; without one, serve the retained frame
+            // (shared, so this never copies), staleness still accruing from when
+            // it was originally captured.
             let stats = CaptureStats {
                 frames_delivered: 0,
                 staging_age: self.last_consumed_stamp.elapsed(),
             };
-            return Ok((image.clone(), stats));
+            return Ok(if probe.is_some() {
+                ProbedCapture::Unchanged(stats)
+            } else {
+                ProbedCapture::Frame(Arc::clone(image), stats)
+            });
         }
         if let Some(error) = error {
             bail!("WGC capture failed before the first frame: {error}");
@@ -306,6 +331,68 @@ impl WindowCaptureSession {
             wait.as_millis()
         );
     }
+}
+
+/// Outcome of a probing capture.
+pub enum ProbedCapture {
+    Frame(Arc<RgbImage>, CaptureStats),
+    Unchanged(CaptureStats),
+}
+
+enum StagingOutcome {
+    Image(RgbImage),
+    Unchanged,
+}
+
+/// Map the staging texture once and either prove the scene unchanged via the
+/// probe (sampling a few hundred BGRA points) or convert the full frame.
+fn consume_staging(
+    context: &ID3D11DeviceContext,
+    staging: &StagingTexture,
+    probe: Option<&FrameProbe>,
+) -> Result<StagingOutcome> {
+    unsafe {
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        context
+            .Map(&staging.resource, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+            .context("failed to map WGC staging texture")?;
+        let width = staging.width as usize;
+        let height = staging.height as usize;
+        let row_pitch = mapped.RowPitch as usize;
+        let source =
+            std::slice::from_raw_parts(mapped.pData as *const u8, height.max(1) * row_pitch);
+
+        if let Some(probe) = probe
+            && probe.expected_size == crate::geometry::Size::new(staging.width, staging.height)
+            && probe.mean_diff(&sample_bgra_probe(source, row_pitch, probe)) <= probe.max_mean_diff
+        {
+            context.Unmap(&staging.resource, 0);
+            return Ok(StagingOutcome::Unchanged);
+        }
+
+        let rgb = bgra_to_rgb(source, width, height, row_pitch);
+        context.Unmap(&staging.resource, 0);
+        let image = RgbImage::from_raw(staging.width, staging.height, rgb)
+            .context("failed to build RGB image from WGC frame")?;
+        Ok(StagingOutcome::Image(image))
+    }
+}
+
+/// Sample the probe's points from a row-padded BGRA buffer, producing the same
+/// luma values [`FrameProbe::matches_rgb`] would compute on the converted
+/// frame (the swizzle is applied per point).
+fn sample_bgra_probe(source: &[u8], row_pitch: usize, probe: &FrameProbe) -> Vec<u8> {
+    probe
+        .points
+        .iter()
+        .map(|&(x, y)| {
+            let offset = y as usize * row_pitch + x as usize * 4;
+            let b = source[offset];
+            let g = source[offset + 1];
+            let r = source[offset + 2];
+            FrameProbe::luma(r, g, b)
+        })
+        .collect()
 }
 
 impl Drop for WindowCaptureSession {
@@ -497,46 +584,32 @@ fn copy_texture_into_staging(
     Ok(())
 }
 
-/// Consumer side: map the staging texture and convert BGRA→RGB. Runs once per
-/// consumed frame on the worker thread (not per delivered frame).
-fn map_staging_to_rgb(context: &ID3D11DeviceContext, staging: &StagingTexture) -> Result<RgbImage> {
-    unsafe {
-        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-        context
-            .Map(&staging.resource, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
-            .context("failed to map WGC staging texture")?;
-
-        let width = staging.width as usize;
-        let height = staging.height as usize;
-        let row_pitch = mapped.RowPitch as usize;
-        let source =
-            std::slice::from_raw_parts(mapped.pData as *const u8, height.max(1) * row_pitch);
-        let rgb = bgra_to_rgb(source, width, height, row_pitch);
-        context.Unmap(&staging.resource, 0);
-
-        RgbImage::from_raw(staging.width, staging.height, rgb)
-            .context("failed to build RGB image from WGC frame")
-    }
-}
-
 /// Convert a row-padded BGRA staging buffer (`row_pitch` ≥ `width*4`) into a tight
 /// RGB buffer. Parallelized across output rows with rayon: at 4K this is ~8.3M
 /// pixels of channel-swizzle per frame and was a meaningful slice of the capture
 /// stage when run single-threaded. Rows are independent and write to disjoint
 /// output chunks, so this scales cleanly across cores.
 fn bgra_to_rgb(source: &[u8], width: usize, height: usize, row_pitch: usize) -> Vec<u8> {
-    let mut rgb = vec![0u8; width * height * 3];
-    rgb.par_chunks_mut(width * 3)
+    // ~25 MB at 4K, fully overwritten below; skip the zero-initialization that
+    // `vec![0; n]` would pay (and its first-touch page faults) by writing into
+    // spare capacity.
+    let len = width * height * 3;
+    let mut rgb: Vec<u8> = Vec::with_capacity(len);
+    rgb.spare_capacity_mut()[..len]
+        .par_chunks_mut(width * 3)
         .enumerate()
         .for_each(|(row, dst_row)| {
             let src_start = row * row_pitch;
             let src_row = &source[src_start..src_start + width * 4];
             for (src, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(3)) {
-                dst[0] = src[2];
-                dst[1] = src[1];
-                dst[2] = src[0];
+                dst[0].write(src[2]);
+                dst[1].write(src[1]);
+                dst[2].write(src[0]);
             }
         });
+    // SAFETY: the parallel loop above wrote every byte in `..len` (height rows
+    // of exactly width*3 bytes each).
+    unsafe { rgb.set_len(len) };
     rgb
 }
 
@@ -560,5 +633,45 @@ mod tests {
         let rgb = bgra_to_rgb(&source, width, height, row_pitch);
         // Expect R,G,B per pixel (B/R swapped from source), padding ignored.
         assert_eq!(rgb, vec![3, 2, 1, 6, 5, 4, 9, 8, 7, 12, 11, 10]);
+    }
+
+    #[test]
+    fn bgra_probe_sampling_matches_rgb_probe_evaluation() {
+        // A probe evaluated on the raw BGRA staging buffer must produce the
+        // same luma samples as evaluating on the converted RGB image, so the
+        // capture-side fast path and the worker-side fallback agree.
+        let width = 7usize;
+        let height = 5usize;
+        let row_pitch = width * 4 + 12;
+        let mut source = vec![0u8; height * row_pitch];
+        for y in 0..height {
+            for x in 0..width {
+                let offset = y * row_pitch + x * 4;
+                source[offset] = (x * 40 + y) as u8; // B
+                source[offset + 1] = (x * 11 + y * 31) as u8; // G
+                source[offset + 2] = (x * 7 + y * 13) as u8; // R
+                source[offset + 3] = 255;
+            }
+        }
+        let rgb = bgra_to_rgb(&source, width, height, row_pitch);
+        let image = RgbImage::from_raw(width as u32, height as u32, rgb).unwrap();
+
+        let points: Vec<(u32, u32)> = vec![(0, 0), (6, 4), (3, 2), (6, 0), (0, 4)];
+        let expected: Vec<u8> = points
+            .iter()
+            .map(|&(x, y)| {
+                let p = image.get_pixel(x, y);
+                FrameProbe::luma(p[0], p[1], p[2])
+            })
+            .collect();
+        let probe = FrameProbe {
+            expected_size: crate::geometry::Size::new(width as u32, height as u32),
+            points: points.clone(),
+            luma: expected.clone(),
+            max_mean_diff: 0,
+        };
+
+        assert_eq!(sample_bgra_probe(&source, row_pitch, &probe), expected);
+        assert!(probe.matches_rgb(&image));
     }
 }

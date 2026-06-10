@@ -60,6 +60,16 @@ fn main() -> Result<()> {
     if let Some(rec) = std::env::var_os("MITE_REC") {
         config.models.recognizer_path = rec.into();
     }
+    if std::env::var_os("MITE_INT8").is_some() {
+        config.runtime.int8_detector = true;
+        config.runtime.int8_recognizer = true;
+    }
+    if std::env::var_os("MITE_INT8_DET").is_some() {
+        config.runtime.int8_detector = true;
+    }
+    if std::env::var_os("MITE_INT8_REC").is_some() {
+        config.runtime.int8_recognizer = true;
+    }
     if let Some(backend) = std::env::var_os("MITE_BACKEND") {
         use mite::config::RuntimeBackend;
         config.runtime.backend = match backend.to_string_lossy().as_ref() {

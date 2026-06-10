@@ -26,20 +26,34 @@ hardware.
   back to xcap only when WGC cannot produce a usable frame). `ImageFileCapture`
   feeds the offline eval. Select a window by title substring / window id / pid
   via `WindowSelector` (fields are private; the all-empty, matches-nothing
-  state is unconstructable, so ">= 1 criterion" holds by construction). The WGC
-  path still uses CPU readback; device-resident handoff is exploratory (see
-  `docs/future/pure-gpu.md`).
+  state is unconstructable, so ">= 1 criterion" holds by construction). Frame
+  pixels are shared (`Arc<RgbImage>`), so retaining a frame across passes (WGC
+  stale-serve, smoothing anchors, snapshots) never copies the ~25 MB 4K
+  buffer. A `FrameSource` can also be handed a `FrameProbe` - the smoothing
+  anchor's luma signature - and the WGC implementation evaluates it directly
+  on the mapped staging buffer: when the sampled text regions are unchanged it
+  answers without converting, fingerprinting, or allocating a frame at all,
+  which removes the whole BGRA->RGB materialization cost from stable-scene
+  passes. The WGC path still uses CPU readback for changed frames;
+  device-resident handoff is exploratory (see `docs/future/pure-gpu.md`).
 - `OcrEngine` (`ocr.rs`): performs detection and recognition. `OrtOcrEngine`
   (`ort_engine/mod.rs`, `ort_engine/text.rs`) runs the PP-OCRv5 ONNX
   detector/recognizer plus OCR text normalization. Detection runs twice per
   frame by default: a standard pass and a `detector_low_contrast_pass` over a
   local-contrast luminance image, deduped against the primary boxes; the
-  second pass recovers faint text on translucent game panels. The
-  local-contrast image is built on a worker thread while the primary detector
-  inference runs on the GPU, so the second pass costs less wall time than its
-  CPU time. Detector postprocessing extracts components with scanline
+  second pass recovers faint text on translucent game panels. The dual-pass
+  schedule keeps the GPU saturated: while the primary inference holds the
+  session, a worker thread builds the local-contrast image (a parallel
+  sliding-window box mean, exact-equal to the integral-image formulation) and
+  its NCHW tensor, so the second inference launches the moment the first
+  returns; the primary probability map's postprocessing runs concurrently
+  with that second inference, handed across threads as the owned ORT output
+  value (no copy). Detector postprocessing extracts components with scanline
   union-find (bit-identical to the old per-pixel flood fill, several times
-  faster). Box candidates are capped per frame by confidence rank, never by
+  faster). Recognition runs width-sorted batches through a pack -> infer ->
+  decode thread pipeline (identical batch composition to a sequential loop),
+  so tensor packing and parallel CTC decode overlap GPU inference instead of
+  serializing with it. Box candidates are capped per frame by confidence rank, never by
   screen position, so dense menus cannot silently lose a region. Recognition
   keeps short Japanese lines that clear the confidence floor (game UI uses
   compact labels), synthesizes the diamond bullets that PP-OCR's character set
@@ -79,8 +93,13 @@ are unchanged, skipping detect + recognize + analyze. It samples luma at the
 previously detected text rects (an `Anchor`) rather than hashing the whole
 frame, so an animated game background outside the text does not force a
 re-OCR; the reuse is bounded by a max age (3 s) so any missed change
-self-corrects. This is the only frame-reuse mechanism - `watch` does not run
-through a generic pipeline scheduler.
+self-corrects. The anchor doubles as a capture-side `FrameProbe`: when reuse
+is eligible, the worker hands it to the frame source, and the WGC path
+samples the same points on the raw staging buffer - an unchanged scene skips
+frame materialization entirely, so a stable-scene pass costs a map plus a few
+hundred point samples instead of the full convert/retain/fingerprint path.
+This is the only frame-reuse mechanism - `watch` does not run through a
+generic pipeline scheduler.
 
 ## Real OCR runtime
 

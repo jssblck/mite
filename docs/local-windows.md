@@ -44,6 +44,12 @@ The doctor command reports missing files and probes the GPU:
 cargo run -- doctor
 ```
 
+Optional INT8 variants of the detector/recognizer can be generated locally
+from the eval submodule and enabled per model (`runtime.int8_detector` /
+`runtime.int8_recognizer`, or `--int8` on any command); see
+`docs/models.md` for how they are produced and the eval-gate expectations
+before adopting them.
+
 ## Running the overlay
 
 Find the target window, then watch it:

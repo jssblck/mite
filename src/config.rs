@@ -58,7 +58,26 @@ pub enum ResizeFilter {
 pub struct RuntimeConfig {
     pub backend: RuntimeBackend,
     pub fp16: bool,
+    /// Run the explicit-QDQ INT8 detector variant (the `-int8` sibling of the
+    /// configured detector path, produced by `scripts/quantize-models.py`).
+    /// TensorRT builds mixed INT8/FP16 engines from it, picking the fastest
+    /// precision per layer.
+    pub int8_detector: bool,
+    /// Same as `int8_detector`, for the primary recognizer. The optional
+    /// fallback recognizer is unaffected (it always runs FP32).
+    pub int8_recognizer: bool,
     pub engine_cache_dir: PathBuf,
+}
+
+impl RuntimeConfig {
+    /// Whether `kind_is_detector` selects an INT8 model under this runtime.
+    pub fn int8_for(&self, detector: bool) -> bool {
+        if detector {
+            self.int8_detector
+        } else {
+            self.int8_recognizer
+        }
+    }
 }
 
 impl Default for RuntimeConfig {
@@ -66,9 +85,22 @@ impl Default for RuntimeConfig {
         Self {
             backend: RuntimeBackend::NvidiaTensorRtThenCuda,
             fp16: true,
+            int8_detector: false,
+            int8_recognizer: false,
             engine_cache_dir: PathBuf::from("cache/engines"),
         }
     }
+}
+
+/// The `-int8` sibling of a model path: `models/foo.onnx` ->
+/// `models/foo-int8.onnx`.
+pub fn int8_model_path(path: &Path) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("onnx");
+    path.with_file_name(format!("{stem}-int8.{extension}"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,6 +334,14 @@ impl Default for OverlayConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn int8_model_path_derives_sibling() {
+        assert_eq!(
+            int8_model_path(Path::new("models/pp-ocrv5-mobile-det.onnx")),
+            PathBuf::from("models/pp-ocrv5-mobile-det-int8.onnx")
+        );
+    }
 
     #[test]
     fn default_config_round_trips() {
