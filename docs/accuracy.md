@@ -1,178 +1,231 @@
 # Character Accuracy
 
-Where mite's text accuracy comes from, where it currently stands, and why it
-stops where it does. Latency and runtime mechanics live in
-`docs/architecture.md` and `docs/performance.md`; eval metadata policy lives in
-`docs/eval-metadata.md`. This document is about getting the *characters* right.
+How accurately mite reads Japanese text off the screen, why the pipeline is
+built the way it is, and where the limits are. The first section is for
+users; the rest is for people working on the code. Latency and runtime
+mechanics live in `docs/architecture.md` and `docs/performance.md`; the
+dictionary-label policy lives in `docs/eval-metadata.md`.
 
-## Current state
+## For users: how much should you trust what mite shows you?
 
-Measured on the private eval corpus (414 labeled real 4K captures, scored
-0.35 detection / 0.40 characters / 0.25 metadata):
+Mite reads the text in your game window with on-device OCR (optical
+character recognition), then looks the words up in a dictionary. OCR is very
+good but not perfect, so it helps to know what its mistakes look like.
+
+Measured against several hundred hand-checked real 4K game screenshots:
+
+- About **94 of every 100 text lines are read perfectly**, character for
+  character.
+- Counting individual characters, roughly **1 in 80 is wrong or missing**.
+- Mistakes are not evenly spread. They concentrate in **small text** (tiny
+  stat numbers, fine print), **faint text** (grey-on-grey, text on
+  see-through panels), and **decorated text** (stylized titles, glowing or
+  blurred captions). Ordinary dialogue and menu text is read very reliably.
+
+When a misread happens, it usually shows up in one of two ways:
+
+- **The word shows as unknown** (no dictionary entry). A wrong character
+  usually breaks the word, and mite prefers showing "unknown" over guessing.
+  This failure is visible, which is the safer kind.
+- **The popup shows a real word that does not fit the context.** This is the
+  misleading kind, and it is rarer: it needs the misread to accidentally
+  spell a different real word. Glyph pairs that look nearly identical
+  (katakana カ and the kanji 力, katakana ニ and the kanji 二) cause most of
+  these, and the pipeline already corrects the common cases by context.
+
+A practical rule of thumb: **if a definition seems unrelated to what is
+happening on screen, suspect the reading before you suspect your Japanese.**
+Hover the word again after the text re-renders, or check a neighboring line;
+transient misreads usually do not repeat. Be most skeptical of tiny or
+decorated text, and most trusting of plain dialogue.
+
+One more honesty note: even when every character is read correctly, choosing
+*which* dictionary entry to show involves judgment calls (Japanese allows
+several valid analyses of the same text). Mite always picks one stable,
+commonly taught interpretation rather than the most exotic one; that policy
+is documented in `docs/eval-metadata.md`.
+
+## What the pipeline does
+
+Each stage exists to protect a specific kind of accuracy:
+
+1. **Capture** delivers native-resolution frames. Nothing downstream can
+   recover pixels lost here, so nothing is scaled before OCR.
+2. **Detection** (PP-OCRv5 mobile) finds text-line boxes at native 4K and
+   runs twice per frame: a standard pass, and a pass over a local-contrast
+   transform of the frame that makes faint glyphs on translucent panels
+   visible to the detector. Candidates from both passes are deduplicated and
+   filtered for plausibility. Dense menu screens contain more real text
+   lines than any fixed cap, so when the box cap binds it drops the
+   lowest-confidence boxes — a full panel of real text can never silently
+   vanish because of where it sits on screen.
+3. **Recognition** crops each detected line from the full-resolution frame
+   with half-a-line-height of margin. The detector's probability map tends
+   to under-box weak edge glyphs (a trailing 。, an opening bracket); the
+   margin lets the recognizer read them anyway, while the reported box stays
+   the detector's so geometry remains stable.
+4. **Shape rescue** handles the diamond bullets ◇ and ◆, which the games use
+   as real text but which are absent from the recognizer's character set. A
+   geometric classifier (diamond mass profile, linear taper toward the tips,
+   all four vertices present, crisp edges, text on the same row) synthesizes
+   them from boxes the recognizer returned empty. The gates exist to reject
+   look-alikes: blurred buttons, reticle icons, oversized map decorations.
+5. **Normalization** repairs the recognizer's systematic confusions; the
+   standing rules are described below.
+6. **Filtering** removes what should never have been boxed: background
+   decals, microscopic pseudo-text, logo marks. Merge rules rejoin lines the
+   detector splits at mid-line pauses (……, ——) and at short wrapped tails.
+7. **Word analysis** (line grouping, dictionary segmentation) sits
+   downstream but is coupled to character accuracy: wrapped-line joining
+   requires dictionary evidence that a word crosses the line break, so one
+   wrong character can prevent a join and cost several word lookups. This
+   coupling is why character accuracy is the highest-leverage number in the
+   whole system: a character error costs roughly three times its face value
+   once word-level effects are counted.
+8. **Optional second opinion**: `models.fallback_recognizer_path` can load
+   the heavier PP-OCRv5 server recognizer for lines the primary reads with
+   low confidence. It is off by default; see "Approaches tried and
+   rejected" for why it does not earn its cost on the eval corpus.
+
+## Standing design rules
+
+These are the rules the pipeline follows and the reasoning behind them.
+They hold regardless of who is editing the code; change them only with
+fresh corpus measurements (see "How accuracy changes are validated").
+
+- **Detect at native resolution; never trade pixels for speed on the
+  detection path.** Recall on small glyphs is bought with optimization
+  elsewhere (see `docs/performance.md`), not by shrinking the input. When a
+  downscaled detector path is explicitly configured, it uses area-averaging
+  resampling, which preserves thin strokes that bicubic filtering aliases
+  away.
+- **Recognition crops always come from the full-resolution frame**, whatever
+  the detector saw.
+- **Contextual orthography rules fix only impossible readings.** Each rule
+  encodes a glyph confusion the recognizer makes systematically, applied
+  only in contexts where one reading essentially cannot occur in Japanese:
+  a kanji look-alike between two katakana is the katakana (ハーモ二ー →
+  ハーモニー); katakana ヘ before hiragana is the particle へ; full-size
+  ヨ/ユ between a palatalizable kana and more katakana is the small glyph
+  (シヨック → ショック); ASCII !?() become full-width inside Japanese text;
+  simplified-Chinese sibling glyphs map to their Japanese forms. Rules that
+  would need to guess between two plausible readings do not belong here.
+- **Correction literals encode glyph confusions in word contexts, never
+  screen content.** An entry's search string must be a misread that cannot
+  occur in correct text, and its replacement an ordinary word or curated
+  domain term (圧カ → 圧力, マッブ → マップ, 乗山 → 乗霄山). Entries that
+  reconstruct what a particular screen says are forbidden; see "The
+  overfitting boundary".
+- **Noise floors are calibrated with margins, and are corpus-derived.**
+  Legitimate short ASCII labels (HP, Lv.1, x5) recognize well above the
+  floor that removes decal junk, and no real Japanese line in the corpus is
+  near the microtext height floor. These constants encode facts about one
+  game's UI; they are the first thing to re-verify if mite targets another
+  game.
+- **TensorRT optimization profiles are part of measured behavior.**
+  Rebuilding an engine with a different dynamic-shape profile changes
+  kernel selection and shifts detection output slightly but measurably,
+  with no code change. Treat profile constants as frozen; re-baseline the
+  corpus if they must move.
+- **Domain terms are curated, narrow, and exact** (`dictionary/mod.rs`).
+  They exist so game-specific names neither fragment into misleading
+  dictionary pieces nor get invented where the evidence is thin.
+
+## How accuracy changes are validated
+
+The private `eval\` submodule holds the labeled corpus; aggregate scoring
+weighs detection 0.35, characters 0.40, word metadata 0.25. Any
+accuracy-affecting change runs:
+
+1. the iteration subset (`eval-subset\`, copied captures, fast), then
+2. the full corpus (`cargo run -- eval-corpus`, ~25 minutes), then
+3. a per-detection diff between the before/after report directories.
+
+`scripts/analyze-eval-failures.ts` and `scripts/attribute-eval-loss.ts`
+aggregate failures and attribute the loss in aggregate points by cause.
+Subset results alone are never trusted — subset gains have inverted at
+corpus scale. Label corrections go exclusively through the evidence-gated
+tools (`examples/audit_label_bounds.rs`, `examples/relabel_eval_tokens.rs`)
+and every change is recorded with its evidence in `eval/LABEL-CHANGES.md`.
+
+## Approaches tried and rejected
+
+These were each implemented (or configured), measured on the corpus, and
+rejected. They are recorded so future work does not re-try them blindly.
+The per-run reports live under `target\eval\` during a campaign and the
+implementations are recoverable from git history.
+
+| Approach | Why it seems attractive | Why it fails here |
+|---|---|---|
+| Server detection / recognition models (FP16 and FP32), whole-corpus | Bigger models read hard text better in general | Scores at or below mobile on this corpus; FP16 additionally overflows. See the co-evolution note below |
+| Per-line server-recognizer fallback on low-confidence lines | Pay the big model only where the small one struggles | Score-neutral; kept as a default-off option for use outside the corpus |
+| Contrast-stretch retry of low-confidence lines | Faint panels compress the luminance range the model trained on | Model confidence is not a reliable quality signal across preprocessing changes; ungated it also revives junk past the noise filters |
+| Lexicon-guided CTC decoding (runner-up glyph swaps adjudicated by the dictionary) | Recovers near-tie misreads the greedy decoder discards | Net zero to slightly negative; the labels already encode this reader's choices on ambiguous glyphs |
+| Detector box growth / crop-extension geometry (several variants) | Boxes measurably under-cover edge glyphs | Label bounds were drawn around this detector's behavior; every geometric change loses more bounds credit than it gains in text |
+| Super-native (1.5x) detection input | Small isolated glyphs get more pixels | Box geometry shifts against labels; the widened TensorRT profile alone perturbs scores |
+| Detector threshold / morphology-radius tuning | Cheap knobs | Within noise at best; closing radii merge neighboring UI elements |
+| Bicubic upscaling of small recognition crops | Sharper input for tiny text | The model expects its training-time resampling; sharper input reads slightly worse |
+
+The unifying finding: **the eval labels co-evolved with this reader.**
+Annotators accepted the pipeline's output wherever it matched the pixels,
+so on genuinely ambiguous glyphs the labels record what this pipeline
+reads. Changing how ambiguous pixels are read — a different model, decoder,
+or preprocessing — moves those reads in both directions and nets roughly
+zero against these labels, even when the change is a genuine improvement in
+the abstract. Real gains against this corpus come from the other side:
+recovering text the pipeline missed entirely, and fixing labels that are
+provably wrong.
+
+## The overfitting boundary
+
+The eval score could be pushed higher in ways that would make the tool no
+better — or worse — for users. Two are explicitly off-limits:
+
+- **Capture-specific correction literals.** Hundreds of entries
+  reconstructing individual screens' text would raise the eval score while
+  teaching the pipeline nothing general. The correction file's standard
+  (glyph confusions in word contexts only) is the line.
+- **Regenerating labels from pipeline output.** This maximizes the score by
+  construction and destroys the corpus's value as ground truth. Labels
+  change only with proof: pixel measurements, sibling-capture evidence, or
+  documented convention alignment, all logged in `eval/LABEL-CHANGES.md`.
+
+Past this boundary, raising the eval number and raising real accuracy stop
+being the same project. The residual gap (see the snapshot below)
+decomposes into recognizer capability on faint and tiny glyphs, small
+box-geometry disagreements inside the eval's own tolerance design, and a
+thin tail of one-off misreads — none of which post-processing can fix
+honestly.
+
+## The path to higher accuracy
+
+The honest route runs through the model, not more post-processing:
+
+1. **Fine-tune the recognizer on synthetic Japanese game text.** Render
+   dictionary vocabulary and game-style strings in game-adjacent fonts over
+   captured-background crops, with the degradations that actually hurt:
+   translucency compositing, low contrast, sub-20 px glyph sizes, bloom and
+   depth-of-field blur. Train with PaddleOCR's maintained recognizer
+   recipe, export via paddle2onnx, rebuild the TensorRT engine. This is the
+   only lever aimed at the largest residual pot. Expect some label churn
+   where labels encode the old reader's choices; re-audit those through
+   `examples/relabel_eval_tokens.rs` rather than hand-editing.
+2. **A detector fine-tune** for isolated single glyphs (a lone ン or く on
+   its own wrapped line), if those misses still matter afterward.
+3. **Tolerance-model re-annotation** — deriving per-label bounds tolerance
+   from measured detector jitter instead of hand-drawn margins — only as a
+   deliberate, documented change to the eval contract.
+
+Budget honestly: the recognizer fine-tune is a synthetic-data pipeline plus
+GPU-days of training for an expected 1.5–2 aggregate points. Smaller
+efforts have all been measured and do not close the gap.
+
+## Measurement snapshot
+
+2026-06-09, 414-capture corpus, 8,282 labeled lines:
 
 ```text
 aggregate 96.18% | detection 96.08% | characters 98.73% | metadata 92.26%
-(2026-06-09; up from 91.08% / 90.89% / 93.77% / 87.04% at the campaign start)
+lines read perfectly: 94.0%
+line error rate, small text (<22 px): 8.7% | normal text: 5.8%
 ```
-
-Character accuracy is the highest-leverage number of the three: a single wrong
-character shifts every later token span in that line, so each character error
-also costs roughly three tokens of metadata credit. Improving recognition pays
-about 3x its face value; this is why most of the machinery below exists.
-
-## What the pipeline does, from an accuracy standpoint
-
-1. **Capture** delivers native-resolution frames; nothing downstream ever
-   upscales lost pixels back.
-2. **Detection** (PP-OCRv5 mobile, TensorRT FP16) runs at native 4K — small
-   glyphs are not sacrificed to a downscale — and runs **twice**: the standard
-   pass, plus a pass over a local-contrast luminance image (integral-image
-   high-pass) that recovers faint text on translucent panels and grey-on-grey
-   UI. Component boxes come from scanline connected components; candidates
-   from both passes are deduped, plausibility-filtered, and capped at 256
-   boxes with lowest-confidence-first truncation (never screen-position
-   truncation: dense menus really do have 100+ real lines, and dropping the
-   bottom of the screen was once the single largest accuracy loss).
-3. **Recognition** crops each detected line from the *full-resolution* frame
-   with 0.5x-line-height padding — the detector's probability map routinely
-   clips a weak edge glyph (trailing 。/：, leading brackets), and the margin
-   lets the recognizer read what the detector under-boxed without moving the
-   scored box. Crops are batch-recognized at the model's 48 px input height
-   and greedily CTC-decoded with per-glyph positions.
-4. **Shape rescue** synthesizes ◇/◆ from empty-text near-square boxes via a
-   geometric classifier (L1-ball mass, linear taper toward the tips,
-   vertex/edge presence, crisp-edge sharpness). These bullets are real,
-   labeled UI glyphs that the recognizer can never emit because they are not
-   in the PP-OCR charset.
-5. **Normalization** (`ort_engine/text.rs`, `text_corrections.rs`) repairs the
-   recognizer's systematic confusions; see the next section.
-6. **Filtering** (`ocr.rs`) drops what the detector should not have boxed:
-   confidence floors, an ASCII-microtext rule, a short-ASCII confidence floor,
-   a CJK microtext floor, id-like numeric noise, the TM logo mark. Merge rules
-   rejoin lines the detector split at mid-line pauses (……, ——) and two-glyph
-   wrapped tails (ム。 + continuation).
-7. **Block analysis and the dictionary matrix** (`text_blocks.rs`,
-   `dictionary/mod.rs`) sit downstream of character accuracy but are coupled
-   to it: wrapped-line joining is gated on dictionary evidence, so a single
-   misread character can prevent a join (基づ + く表示 fails if く is lost)
-   and cascade into many token-level losses.
-8. **Optional second opinion**: `models.fallback_recognizer_path` can load the
-   PP-OCRv5 server recognizer (FP32) for lines the mobile model reads below
-   0.75 confidence, accepting its read only above 0.92. Measured score-neutral
-   on the eval corpus (see "Why we stop here"), shipped default-off.
-
-## The accuracy levers, and why each exists
-
-Roughly in pipeline order. Every lever was either measured to pay on the eval
-corpus or inherited from earlier measured work; several near-misses that did
-*not* pay are listed in the next section.
-
-- **Native-4K dual-pass detection.** Recall on small and faint text. The
-  low-contrast pass costs a second detector inference but its image build now
-  overlaps the primary pass's GPU time.
-- **Area-averaging downscale** for the optional low-resolution detector path:
-  integrates all source detail, so thin strokes survive a shrink that bicubic
-  would alias.
-- **Score-ranked box cap.** A safety valve that can no longer silently delete
-  panels.
-- **0.5h recognition crop padding** with guards that keep pad-region junk from
-  moving scored boxes or triggering the box-adjust heuristics.
-- **Charset-gap shape rescue** for ◇/◆, gated hard enough (taper, vertices,
-  edges, sharpness, same-row text) that blurred buttons, reticle icons, and
-  oversized decorations are all rejected.
-- **Contextual orthography rules**, each encoding a glyph confusion the
-  recognizer makes systematically and a context where one reading is
-  essentially impossible: kanji/katakana lookalikes between katakana
-  (ハーモ二ー -> ハーモニー), katakana ヘ before hiragana is the particle へ,
-  full-size ヨ/ユ after a palatalizable kana before more katakana is the small
-  glyph (シヨック -> ショック), ASCII !?() become full-width in Japanese
-  context, a lone digit after sentence-final 。 at line end is a neighboring
-  list number, simplified-Chinese sibling glyphs map to the Japanese forms
-  (齐 -> 斉, 测 -> 測, ...).
-- **Word-level confusion-pair literals** (`text_corrections.rs`): corrections
-  whose search string is a misread that cannot occur in correct text and whose
-  replacement is an ordinary word or curated domain term (圧カ -> 圧力,
-  マッブ -> マップ, 乗山 -> 乗霄山). This file predates the current pipeline
-  and its standard is deliberate: a literal must encode a *glyph confusion in
-  a word context*, never reconstruct the content of a specific screen.
-- **Data-calibrated noise floors.** Legitimate short ASCII labels (HP, Lv.1,
-  x5) recognize at 0.88+ while decal junk tops out at 0.86; no labeled
-  Japanese line is under 15 px. The floors (0.87, 13.5 px) sit inside those
-  margins. They are calibrated on this corpus and are the first constants to
-  re-check if mite ever targets a second game.
-- **Pinned TensorRT optimization profiles.** Rebuilding the detector engine
-  with a wider dynamic-shape profile changes kernel tactic selection and
-  measurably perturbs detection (~0.3 aggregate points) with no code change.
-  Profiles are part of measured behavior; treat them as frozen and re-baseline
-  if they must move.
-- **The measurement loop itself.** Every accuracy-affecting change runs the
-  eval subset (`eval-subset\`, seconds) and then the full corpus
-  (`eval-corpus`, ~25 min), with per-detection A/B diffs between report
-  directories. `scripts/analyze-eval-failures.ts` and
-  `scripts/attribute-eval-loss.ts` attribute the loss in aggregate points by
-  cause; subset gains have flipped sign at corpus scale more than once, so a
-  subset result alone is never trusted.
-
-## Why we stop here (the overfitting boundary)
-
-The remaining ~3.8 points decompose into three pots, and the legitimate
-tooling for each is exhausted:
-
-1. **Recognizer capability on hard pixels** (~1.5-2 points including the
-   metadata cascade): faint translucent-panel garbles, sub-20 px glyph soup.
-   This is the mobile model's ceiling, not a post-processing problem.
-2. **Box-geometry noise inside the eval's own tolerance design** (~0.9):
-   detector boxes and human-drawn label bounds disagree by fractions of a
-   glyph in ways both defensible. Pixel-band auditing already corrected every
-   label that was *provably* wrong (41 of them; see `eval/LABEL-CHANGES.md`).
-3. **A diffuse one-off misread tail** across 360+ captures.
-
-Seventeen measured experiments say the remaining levers do not pay, and the
-reason is structural: **the eval labels co-evolved with this reader.**
-Annotators accepted the pipeline's output wherever it matched the pixels, so
-on genuinely ambiguous glyphs the labels encode what *this* pipeline reads.
-Any change to how ambiguous pixels are read — server detection or recognition
-(FP16 and FP32), per-line server fallback, contrast-stretch retries, bicubic
-crop upscaling, 1.5x super-native detection, six crop/box geometry variants,
-and a lexicon-adjudicated CTC runner-up swap (built, unit-tested, measured,
-reverted) — shifts those reads in both directions and nets approximately zero
-against these labels.
-
-What *would* move the number is exactly what we refuse to do:
-
-- **Capture-specific correction literals.** A few hundred entries
-  reconstructing individual screens' text would push the eval score up
-  without making mite read anything better. The correction file's standard
-  (glyph confusions in word contexts only) is the line; entries that crossed
-  it were removed even at a small measured cost.
-- **Regenerating labels from runtime output.** This maximizes the score by
-  construction and destroys the eval's value as ground truth.
-
-In short: past this point, raising the eval number and raising real accuracy
-stop being the same project.
-
-## Next steps if 99% becomes worth it
-
-The honest path runs through the model, not more post-processing:
-
-1. **Fine-tune the PP-OCRv5 mobile recognizer on synthetic Japanese game
-   text.** Render JMdict vocabulary and game-style strings in game-adjacent
-   fonts over captured-background crops, with the degradations that actually
-   hurt: translucency compositing, low contrast, sub-20 px sizes, bloom and
-   depth-of-field blur. Fine-tune in PaddleOCR (the rec training recipe is
-   maintained), export through paddle2onnx, and rebuild the TensorRT engine.
-   This attacks pot 1 directly — the only pot big enough to reach 99%.
-   Validation must be the full-corpus A/B with per-detection diffs, expecting
-   some label churn where labels encode the old reader's choices on ambiguous
-   pixels (re-audit those through `examples/relabel_eval_tokens.rs` rather
-   than hand-editing).
-2. **A detector fine-tune or successor** for isolated single glyphs (ン, く as
-   a wrapped line by itself) if pot 2's misses matter after step 1.
-3. **Tolerance-model re-annotation** only if box-geometry noise must fall:
-   re-derive per-label `bounds_tolerance` from measured detector jitter
-   instead of hand-drawn margins. This changes the eval contract, so it is a
-   deliberate, documented decision — not a tuning knob.
-
-A useful budget estimate: the recognizer fine-tune is GPU-days of training
-plus a synthetic-data pipeline, against an expected 1.5-2 point gain. Nothing
-smaller closes the gap; everything smaller has been measured.
