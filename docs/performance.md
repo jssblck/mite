@@ -1,7 +1,13 @@
 # Performance Evidence
 
-Mite latency changes should be tied to measured p50/p95/p99 results from the
-same target window and model/runtime configuration before and after the change.
+Mite aims to put definitions on screen fast enough that the wait is never
+noticeable, while leaving most of the graphics card free for the game. For
+users, the practical summary is in the Reference Numbers section at the
+bottom: a typical full read of a 4K frame takes about a fifth of a second.
+The rest of this page is the working rule for people changing the code.
+
+Latency changes should be tied to measured p50/p95/p99 results from the same
+target window and model/runtime configuration before and after the change.
 The goal is not a ceremony-heavy benchmark suite; it is to keep performance
 claims honest and make regressions visible.
 

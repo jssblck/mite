@@ -25,9 +25,10 @@ cargo metadata --format-version 1 --locked
 
 ## OCR Models And Character Dictionary
 
-Mite's default OCR assets are downloaded by `scripts\download-models.ps1` from
-RapidAI/RapidOCR's published PP-OCRv5 ONNX model set. The repository does not
-commit these runtime model files; they are installed into `models\`.
+Mite's default OCR assets are downloaded by
+`scripts\bootstrap-dev.ps1 -ModelsOnly` from RapidAI/RapidOCR's published
+PP-OCRv5 ONNX model set. The repository does not commit these runtime model
+files; they are installed into `models\`.
 
 - Upstream project: RapidAI/RapidOCR
 - Homepage: https://github.com/RapidAI/RapidOCR
@@ -41,16 +42,16 @@ The default downloaded assets are:
 - `pp-ocrv5-mobile-rec.onnx`
 - `pp-ocrv5-dict.txt`
 
-Optional PP-OCRv5 server models can be downloaded manually as described in
-`docs\models.md` and `README.md`; those files are also runtime artifacts under
-`models\`.
+Optional PP-OCRv5 server models can be downloaded with
+`scripts\bootstrap-dev.ps1 -ModelsOnly -IncludeServerModels` as described in
+`docs\models.md`; those files are also runtime artifacts under `models\`.
 
 ## ONNX Runtime And NVIDIA Runtime Libraries
 
 Mite uses ONNX Runtime through the Rust `ort` crate. ONNX Runtime provider
 libraries and NVIDIA TensorRT/CUDA/cuDNN runtime DLLs are not committed to this
-repository. `scripts\install-gpu-runtime.ps1` stages redistributable runtime DLLs
-into `.gpu-runtime\bin` for local use and build-time copying.
+repository. `scripts\bootstrap-dev.ps1 -GpuRuntimeOnly` stages redistributable
+runtime DLLs into `.gpu-runtime\bin` for local use and build-time copying.
 
 Review the upstream NVIDIA and ONNX Runtime license terms before redistributing
 any staged binary runtime artifacts.

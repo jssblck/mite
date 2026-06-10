@@ -16,6 +16,19 @@ diagnostics, evals, and developer tooling.
 > webpages, browser-native tools such as Yomitan, Yomichan, or 10ten are usually
 > the better fit.
 
+## How well does it read?
+
+Measured against several hundred hand-checked 4K game screenshots, about 94 of
+every 100 text lines are read perfectly, and roughly 1 character in 80 is wrong
+or missing. Mistakes concentrate in tiny, faint, or heavily stylized text;
+ordinary dialogue and menus are read very reliably. When a misread does happen,
+it usually shows up as an "unknown" word rather than a wrong definition. What
+the mistakes look like in practice, and how much to trust a popup, is covered
+in [docs/accuracy.md](docs/accuracy.md).
+
+On the reference NVIDIA setup, a fresh full-screen read of a 4K game frame
+takes about a fifth of a second, so definitions feel immediate.
+
 ## Status
 
 Mite is local-first and optimized for Windows/NVIDIA systems. The reference path
@@ -96,14 +109,22 @@ cargo run -- clean-images [--dry-run]
 
 ## Documentation
 
-- [Developer setup](scripts/bootstrap-dev.ps1)
-- [Local Windows usage](docs/local-windows.md)
-- [Architecture](docs/architecture.md)
-- [Model setup and provenance](docs/models.md)
-- [Performance evidence guide](docs/performance.md)
-- [Pure-GPU exploration notes](docs/future/pure-gpu.md)
-- [Third-party notices](THIRD_PARTY_NOTICES.md)
-- [Model manifest](model-manifest.json)
+- [Local Windows usage](docs/local-windows.md) — setup, running the overlay,
+  capture troubleshooting.
+- [Character accuracy](docs/accuracy.md) — how accurate the OCR is, why, and
+  where the limits are. Start here if you want to know whether to trust a popup.
+- [Architecture](docs/architecture.md) — runtime boundaries, GPU pipeline, and
+  latency.
+- [Model setup and provenance](docs/models.md) — the OCR models and their
+  trade-offs.
+- [Performance evidence guide](docs/performance.md) — how latency claims are
+  measured, with current reference numbers.
+- [Eval metadata policy](docs/eval-metadata.md) — which dictionary
+  interpretation mite teaches when several are valid.
+- [Pure-GPU exploration notes](docs/future/pure-gpu.md) — exploratory, not
+  scheduled.
+- [Third-party notices](THIRD_PARTY_NOTICES.md) and
+  [model manifest](model-manifest.json)
 - [Agent guidance](AGENTS.md)
 
 ## Development

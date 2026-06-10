@@ -79,10 +79,11 @@ cargo run -- eval-corpus --root eval --out target\eval\corpus-summary.json --out
 ```
 
 Use `eval` against manually labeled real captures as the OCR plus dictionary
-regression guard. Use `watch
---metrics-interval-secs` or `--hud` as the latency acceptance loop. A full 4K pass
-on the TensorRT path should stay near the documented ~100 ms p95 on the reference
-NVIDIA setup; watch p95/p99, not just averages.
+regression guard. Use `watch --metrics-interval-secs` or `--hud` as the latency
+acceptance loop. On the default native-4K TensorRT path a typical full 4K pass
+should stay near ~200 ms p95 (~270 ms p99 on the densest menu frames); the
+optional low-res detector path runs ~100 ms p95. Current reference numbers live
+in `docs/performance.md`. Watch p95/p99, not just averages.
 
 ## Local Artifacts
 

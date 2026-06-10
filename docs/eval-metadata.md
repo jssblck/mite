@@ -1,5 +1,13 @@
 # Eval Metadata Policy
 
+Japanese often allows more than one valid way to split and define the same
+sentence - is である one word or two? Is して a verb or a connector here?
+When several analyses are defensible, mite always teaches the same one: the
+stable, commonly taught interpretation a learner can act on, with nuance left
+to notes. This page is the rulebook for those choices. If you have ever
+wondered why mite's popup picked a particular dictionary entry, the answer is
+here or in the in-code decision matrix this page governs.
+
 Mite's eval labels are not only OCR correctness fixtures. They also encode the
 lookup behavior the overlay should present to a Japanese learner. That makes
 metadata labels part of the product contract: a passing eval should mean the

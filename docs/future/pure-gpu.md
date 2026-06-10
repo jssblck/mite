@@ -8,11 +8,14 @@ conclusion is at the bottom.
 
 ## Why this document exists
 
-After the TensorRT work (see `docs/architecture.md`), a full 4K OCR pass is
-~100 ms p95 live (~55 ms for the controlled detect+recognize on a fixed frame).
-The remaining CPU work in the pipeline is small and mostly parallelized, so the
-question came up: is it worth making the pipeline *fully* GPU-resident, and is it
-even possible?
+After the TensorRT work (see `docs/architecture.md`), the remaining CPU work
+in the pipeline is small and mostly parallelized, so the question came up: is
+it worth making the pipeline *fully* GPU-resident, and is it even possible?
+The arithmetic below was done on the low-res 1920 detector configuration
+(~100 ms p95 live, ~55 ms controlled detect+recognize). The native-4K default
+that shipped later spends *more* time in model inference (~200 ms p95
+typical), which strengthens this document's conclusion: inference, not CPU
+glue, is the wall.
 
 Short answer: **possible — yes, it's a proven pattern; faster — yes, but only
 ~15–25% on mean latency today, bounded by model inference.** It becomes clearly
@@ -31,8 +34,10 @@ Current flow (`wgc_capture.rs` -> `ort_engine/mod.rs`):
 4. Detect: `area_downscale` (CPU, parallel) → `nchw_tensor` (CPU, parallel) →
    `Tensor::from_array` (host) → `session.run` (ORT uploads host→device, runs,
    copies output device→host).
-5. Detector postprocessing: `detect_components_from_probability_map` (CPU flood
-   fill) produces box rects.
+5. Detector postprocessing: `detect_components_from_probability_map` (CPU
+   scanline union-find) produces box rects. The optional local-contrast
+   second detection pass builds its input image on a CPU worker thread
+   overlapped with the primary detector inference.
 6. Recognize: `crop_text_line` cuts boxes from the full-res host frame → resize →
    host tensor → `session.run`.
 7. CTC decode (CPU, parallel) → text → lookup/overlay (CPU, Win32).
@@ -59,7 +64,7 @@ proven; the question is build cost vs. payoff.
 | capture | readback 4K BGRA→RGB | keep the WGC D3D11 texture on-device; no readback |
 | preprocess | `area_downscale` + `nchw_tensor` (~10 ms) | one fused kernel: BGRA→RGB + resize + NCHW-normalize (sub-ms) |
 | detect | host tensor → ORT (host→device upload) | TensorRT with input **I/O-bound** to the device buffer |
-| det. postproc | `detect_components_from_probability_map` (CPU) | GPU connected-components, **or** read back only the small prob map |
+| det. postproc | `detect_components_from_probability_map` (CPU union-find, a few ms) | GPU connected-components, **or** read back only the small prob map |
 | crop | `crop_text_line` per box on full-res host image | GPU gather + batched-resize kernel producing the padded NCHW batch on-device |
 | recognize | host tensor → ORT | TensorRT, device I/O bound |
 | CTC decode | CPU argmax over timesteps×classes | GPU argmax; transfer back only the index sequences |
@@ -100,7 +105,9 @@ interop complexity once.
 
 ## Is it faster? The arithmetic
 
-Controlled detect+recognize ≈ 55 ms = inference ~41 ms (det 8 + rec 33) + CPU glue
+(Measured on the low-res 1920 configuration; the native-4K default has an even
+larger inference share, so the conclusion only gets stronger.) Controlled
+detect+recognize ≈ 55 ms = inference ~41 ms (det 8 + rec 33) + CPU glue
 ~14 ms (resize 8 + tensor 2 + components 2 + crop 2). Full residency removes the
 ~14 ms of glue plus the readback/upload copies — call it ~15–20 ms.
 

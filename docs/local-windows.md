@@ -1,5 +1,11 @@
 # Local Windows Usage
 
+This page gets mite running on your PC and explains the day-to-day commands.
+The short version: run one setup script, then point `watch` at your game
+window. Everything past "Running the overlay" is reference material for
+diagnosing capture problems, measuring latency, and checking accuracy - you
+do not need it to use the tool.
+
 ## Setup
 
 ```powershell
@@ -74,10 +80,13 @@ cargo run -- watch --hud                       # on-screen per-stage time-series
 cargo run -- watch --metrics-interval-secs 5   # aggregated p50/p95/p99 (capture/detect/recognize/analyze/present) to stderr
 ```
 
-A full 4K pass should sit around ~100 ms p95 on the reference NVIDIA setup.
-Watch the p95/p99, not just the mean - tail spikes are what make the overlay feel bad. Use
-`--no-smoothing` to force a full detect+recognize every pass (disables the
-stable-scene reuse) when measuring worst-case latency.
+On the default native-4K path, a typical full 4K pass sits around ~200 ms p95
+on the reference NVIDIA setup, with ~270 ms p99 on the densest menu screens;
+the optional low-resolution detector path (see the detector sizing note below)
+runs ~100 ms p95. Watch the p95/p99, not just the mean - tail spikes are what
+make the overlay feel bad. Use `--no-smoothing` to force a full
+detect+recognize every pass (disables the stable-scene reuse) when measuring
+worst-case latency. Current reference numbers live in `docs/performance.md`.
 
 ### OCR/lookup accuracy check
 
@@ -153,12 +162,9 @@ text, bounds, tolerance, notes, and ignored-region reasons. For labels, applying
 text or bounds rebuilds character boxes and token metadata through the same
 JMdict/Lindera path used by the runtime. Raw detections and unexpected diff rows
 have an `Adopt` action that drafts a new valid label from Mite's OCR output.
-When a bundle is open, `Left`/`Up` selects the previous bundle in the same
-collection folder and `Right`/`Down` selects the next one. At the first or last
-bundle in a folder, arrow navigation does nothing. `Undo`/`Redo` buttons and
-`Ctrl+Z`/`Ctrl+Y` walk the edit history for the currently open bundle. The
-history is discarded when you navigate away after confirming unsaved changes,
-but saving keeps the history available so you can undo, save again, or redo.
+Arrow keys step between bundles in the same collection folder, and
+`Undo`/`Redo` (`Ctrl+Z`/`Ctrl+Y`) walk the edit history for the open bundle;
+saving keeps that history available, while navigating away discards it.
 
 Useful flags:
 
