@@ -37,8 +37,9 @@ dictionary segmentation, or overlay presentation.
   and data that need explicit attribution or license awareness.
 - `eval\AGENTS.md` documents the private eval data submodule and how to manually
   load the data-specific annotation skill when that submodule is initialized.
-- `LICENSE` is the repository license. `CLAUDE.md` is intentionally only a
-  compatibility pointer to this file so agent guidance does not drift.
+- `LICENSE` is the repository license. `CLAUDE.md` files are intentionally bare
+  `@AGENTS.md` imports of their sibling so agent guidance does not drift
+  between agent surfaces; keep all real guidance in the `AGENTS.md` files.
 
 ## Build, Test, And Run
 
