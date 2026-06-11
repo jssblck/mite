@@ -167,13 +167,13 @@ fn merge_adjacent_recognized_fragments(mut items: Vec<RecognizedText>) -> Vec<Re
     let mut merged = Vec::with_capacity(items.len());
     let mut iter = items.into_iter().peekable();
     while let Some(mut current) = iter.next() {
-        while iter
-            .peek()
-            .is_some_and(|next| should_merge_adjacent_fragments(&current, next))
-        {
-            let next = iter
-                .next()
-                .expect("peek confirmed an adjacent recognized fragment");
+        while let Some(next) = iter.peek() {
+            if !should_merge_adjacent_fragments(&current, next) {
+                break;
+            }
+            let Some(next) = iter.next() else {
+                break;
+            };
             current = merge_recognized_pair(current, next);
         }
         merged.push(current);

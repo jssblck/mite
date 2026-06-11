@@ -77,6 +77,7 @@ pub fn sort_recognized_reading_order(items: &mut [RecognizedText]) {
 
 pub fn analyze_recognized_lines(dict: &Dictionary, items: &[RecognizedText]) -> Vec<AnalyzedLine> {
     let blocks = group_text_blocks(dict, items);
+    let block_count = blocks.len();
     let mut analyzed = vec![None; items.len()];
 
     for (block_id, block) in blocks.into_iter().enumerate() {
@@ -103,9 +104,17 @@ pub fn analyze_recognized_lines(dict: &Dictionary, items: &[RecognizedText]) -> 
         }
     }
 
+    let mut missing = 0usize;
     analyzed
         .into_iter()
-        .map(|line| line.expect("every recognized line is assigned to a block"))
+        .enumerate()
+        .map(|(item_index, line)| {
+            line.unwrap_or_else(|| {
+                let block_id = block_count + missing;
+                missing += 1;
+                analyze_single_line(dict, items[item_index].clone(), block_id)
+            })
+        })
         .collect()
 }
 
@@ -120,6 +129,28 @@ fn block_line_ranges(lines: &[&str]) -> Vec<TextSpan> {
             span
         })
         .collect()
+}
+
+fn analyze_single_line(dict: &Dictionary, item: RecognizedText, block_id: usize) -> AnalyzedLine {
+    let block_text = item.text.clone();
+    let block_tokens = dict.analyze_line(&block_text);
+    let block_span = TextSpan::new(0, block_text.chars().count());
+    let block_token_spans = token_spans(&block_text, &block_tokens);
+    let mut line_tokens = project_tokens_to_lines(
+        &block_text,
+        &block_tokens,
+        &block_token_spans,
+        &[block_span],
+    );
+    let tokens = line_tokens.pop().unwrap_or_default();
+    AnalyzedLine {
+        item,
+        block_id,
+        block_text,
+        block_span,
+        block_tokens,
+        tokens,
+    }
 }
 
 #[derive(Debug)]

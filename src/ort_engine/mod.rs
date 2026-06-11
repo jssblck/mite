@@ -278,19 +278,23 @@ impl OcrEngine for OrtOcrEngine {
                 )?;
                 let (enhanced_input, low_tensor) = low_input_thread
                     .join()
-                    .expect("local contrast build panicked");
+                    .map_err(|_| anyhow::anyhow!("local contrast build panicked"))?;
                 let primary_components = scope.spawn(move || -> Result<Vec<ScoredRect>> {
                     let (_, primary_map) = primary_value.try_extract_tensor::<f32>()?;
                     Ok(prof("det.primary.components", || {
                         candidates_from_probability_map(
-                            primary_map,
-                            map_w,
-                            map_h,
-                            padded_size,
-                            content_size,
-                            frame_size,
-                            config,
-                            primary_cfg,
+                            ProbabilityMap {
+                                data: primary_map,
+                                width: map_w,
+                                height: map_h,
+                            },
+                            DetectorPostprocess {
+                                input_size: padded_size,
+                                content_size,
+                                frame_size,
+                                config,
+                                pass_config: primary_cfg,
+                            },
                         )
                     }))
                 });
@@ -304,7 +308,7 @@ impl OcrEngine for OrtOcrEngine {
                 )?;
                 let mut candidates = primary_components
                     .join()
-                    .expect("primary postprocessing panicked")?;
+                    .map_err(|_| anyhow::anyhow!("primary postprocessing panicked"))??;
                 candidates.extend(low);
                 Ok(candidates)
             })?
@@ -450,10 +454,13 @@ impl OcrEngine for OrtOcrEngine {
             rescue_shape_glyphs(frame_image, &mut results)
         });
 
-        Ok(results
-            .into_iter()
-            .map(|result| result.expect("every box produces a recognition result"))
-            .collect())
+        let mut recognized = Vec::with_capacity(results.len());
+        for (index, result) in results.into_iter().enumerate() {
+            recognized.push(
+                result.with_context(|| format!("recognizer produced no result for box {index}"))?,
+            );
+        }
+        Ok(recognized)
     }
 }
 
@@ -1228,14 +1235,18 @@ fn detect_candidate_rects_with_tensor(
     let (map, map_w, map_h) = extract_probability_map(&outputs)?;
     Ok(prof(&format!("{label}.components"), || {
         candidates_from_probability_map(
-            map,
-            map_w,
-            map_h,
-            input_image.padded_size,
-            input_image.content_size(),
-            frame_size,
-            config,
-            pass_config,
+            ProbabilityMap {
+                data: map,
+                width: map_w,
+                height: map_h,
+            },
+            DetectorPostprocess {
+                input_size: input_image.padded_size,
+                content_size: input_image.content_size(),
+                frame_size,
+                config,
+                pass_config,
+            },
         )
     }))
 }
@@ -1286,21 +1297,29 @@ fn extract_probability_map<'a>(
     Ok((data, dims[3], dims[2]))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn candidates_from_probability_map(
-    data: &[f32],
-    map_w: usize,
-    map_h: usize,
+struct ProbabilityMap<'a> {
+    data: &'a [f32],
+    width: usize,
+    height: usize,
+}
+
+struct DetectorPostprocess<'a> {
     input_size: Size,
     content_size: Size,
     frame_size: Size,
-    config: &PipelineConfig,
+    config: &'a PipelineConfig,
     pass_config: DetectorPassConfig,
+}
+
+fn candidates_from_probability_map(
+    map: ProbabilityMap<'_>,
+    context: DetectorPostprocess<'_>,
 ) -> Vec<ScoredRect> {
+    let pass_config = context.pass_config;
     let mut candidates = detect_components_from_probability_map(
-        data,
-        map_w,
-        map_h,
+        map.data,
+        map.width,
+        map.height,
         pass_config.probability_threshold,
         pass_config.min_component_area,
         pass_config.close_radius_px,
@@ -1316,8 +1335,8 @@ fn candidates_from_probability_map(
     });
 
     let map_size = Size::new(
-        u32::try_from(map_w).unwrap_or(u32::MAX),
-        u32::try_from(map_h).unwrap_or(u32::MAX),
+        u32::try_from(map.width).unwrap_or(u32::MAX),
+        u32::try_from(map.height).unwrap_or(u32::MAX),
     );
     candidates
         .into_iter()
@@ -1325,10 +1344,10 @@ fn candidates_from_probability_map(
         .filter_map(|candidate| {
             let rect = scale_detector_map_rect_to_frame(
                 candidate.rect,
-                input_size,
-                content_size,
+                context.input_size,
+                context.content_size,
                 map_size,
-                frame_size,
+                context.frame_size,
             )?;
             Some(ScoredRect {
                 rect,
@@ -1336,7 +1355,9 @@ fn candidates_from_probability_map(
                 pass: pass_config.pass,
             })
         })
-        .filter(|candidate| is_plausible_text_rect(candidate.rect, frame_size, config))
+        .filter(|candidate| {
+            is_plausible_text_rect(candidate.rect, context.frame_size, context.config)
+        })
         .collect()
 }
 
@@ -1681,7 +1702,9 @@ fn run_recognizer_batches_pipelined(
         }
         drop(pack_rx);
         drop(decode_tx);
-        let decoded = decoder.join().expect("recognizer decode thread panicked");
+        let decoded = decoder
+            .join()
+            .map_err(|_| anyhow::anyhow!("recognizer decode thread panicked"))?;
         session_result?;
         decoded
     })?;
@@ -2060,12 +2083,13 @@ fn detect_components_from_probability_map(
             });
             parent.push(id);
         }
-        let current_row = row_start..runs.len();
+        let current_row_start = row_start;
+        let current_row_end = runs.len();
 
         // Union with 4-connected overlapping runs of the previous row. Both
         // run lists are sorted by start column; sweep them together.
         let mut above = previous_row.start;
-        for current in current_row.clone() {
+        for current in current_row_start..current_row_end {
             let (cur_start, cur_end) = (runs[current].start, runs[current].end);
             while above < previous_row.end && runs[above].end <= cur_start {
                 above += 1;
@@ -2083,7 +2107,7 @@ fn detect_components_from_probability_map(
                 probe += 1;
             }
         }
-        previous_row = current_row;
+        previous_row = current_row_start..current_row_end;
     }
 
     // Fold runs into per-root accumulators.

@@ -118,7 +118,8 @@ auditing captures.
 
 ## Architecture Map
 
-- `src/main.rs`: CLI dispatch. Keep it thin; one handler per subcommand.
+- `src/main.rs`: binary startup and tracing initialization only.
+- `src/cli.rs`: Clap CLI dispatch and one handler per subcommand.
 - `src/config.rs`: config schema and defaults. Validate boundaries here rather
   than spreading guard logic through runtime code.
 - `src/capture/mod.rs`, `src/capture/window.rs`, `src/capture/image_probe.rs`,

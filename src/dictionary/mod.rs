@@ -957,7 +957,9 @@ impl Dictionary {
         let mut tokens = Vec::new();
         let mut end = count;
         while end > 0 {
-            let (start, token) = back[end].take().expect("every position is reachable");
+            let Some((start, token)) = back[end].take() else {
+                return vec![unknown_surface_token(line.to_string())];
+            };
             tokens.push(token);
             end = start;
         }
@@ -979,7 +981,7 @@ impl Dictionary {
     /// JMdict entry that isn't a grammatical false-merge.
     fn node(&self, morphemes: &[Morpheme], start: usize, end: usize) -> Option<(f32, Token)> {
         let slice = &morphemes[start..end];
-        let last = slice.last().expect("span is non-empty");
+        let last = slice.last()?;
         let surface = span_surface(slice);
 
         if let Some(token) = self.polite_past_auxiliary_token(slice, &surface) {
@@ -1126,7 +1128,7 @@ impl Dictionary {
         slice: &[Morpheme],
         surface: &str,
     ) -> Option<Resolution<'a>> {
-        let last = slice.last().expect("span is non-empty");
+        let last = slice.last()?;
         let major = last.major_pos();
         if !matches!(major, LinderaPos::Verb | LinderaPos::Adjective)
             || span_direct_entries_match_lindera_pos(self, slice, surface, major)
@@ -1360,9 +1362,7 @@ impl Dictionary {
         let mut tokens = Vec::new();
         while let Some(step) = path.step {
             tokens.push(step.token);
-            path = best[step.previous]
-                .clone()
-                .expect("resegment path is linked");
+            path = best[step.previous].clone()?;
         }
         tokens.reverse();
         Some(tokens)
@@ -2631,7 +2631,9 @@ fn canonical_particle_gloss(surface: &str) -> Option<&'static str> {
 }
 
 fn canonical_particle_token(surface: &str) -> Token {
-    let gloss = canonical_particle_gloss(surface).expect("known canonical particle");
+    let Some(gloss) = canonical_particle_gloss(surface) else {
+        return unknown_surface_token(surface.to_string());
+    };
     Token {
         surface: surface.to_string(),
         dictionary_form: surface.to_string(),
@@ -4795,7 +4797,9 @@ fn numeric_counter_split_index(surface: &str) -> Option<usize> {
     let mut saw_digit = false;
     let mut split = 0usize;
     while chars.peek().is_some_and(|(_, ch)| ch.is_ascii_digit()) {
-        let (index, ch) = chars.next().expect("peeked digit");
+        let Some((index, ch)) = chars.next() else {
+            break;
+        };
         saw_digit = true;
         split = index + ch.len_utf8();
     }
@@ -5027,7 +5031,9 @@ fn span_surface(slice: &[Morpheme]) -> String {
 /// A span's fused form with only the last morpheme deinflected to its base form
 /// (e.g. 食べ + ました → 食べる, but the leading morphemes stay as surface).
 fn span_lemma(slice: &[Morpheme]) -> String {
-    let (last, head) = slice.split_last().expect("span is non-empty");
+    let Some((last, head)) = slice.split_last() else {
+        return String::new();
+    };
     head.iter()
         .map(|m| m.surface.as_str())
         .chain(std::iter::once(last.base_form.as_str()))

@@ -475,12 +475,17 @@ impl Worker {
             && !target_changed
             && self.smoothing.last_full.elapsed() < MAX_REUSE
             && self.smoothing.cached.is_some();
-        let source = &mut self.capture.as_mut().expect("capture prepared above").1;
+        let frame_probe = self
+            .smoothing
+            .anchor
+            .as_ref()
+            .map(|anchor| anchor.probe().clone());
+        let source = self.capture_source_mut()?;
         let delivery = {
             let _span = tracing::info_span!("capture").entered();
-            match (probe_eligible, &self.smoothing.anchor) {
+            match (probe_eligible, frame_probe.as_ref()) {
                 (true, Some(anchor)) => source
-                    .next_frame_or_unchanged(anchor.probe())
+                    .next_frame_or_unchanged(anchor)
                     .context("failed to capture frame")?,
                 _ => FrameDelivery::Frame(source.next_frame().context("failed to capture frame")?),
             }
@@ -491,7 +496,7 @@ impl Worker {
                     .smoothing
                     .cached
                     .clone()
-                    .expect("probe eligibility requires a cached detection");
+                    .context("probe reuse was selected without cached detection")?;
                 // Enter the skipped stages as empty spans so the metrics/HUD
                 // reflect the reuse (≈0 ms) instead of carrying stale durations.
                 drop(tracing::info_span!("detect").entered());
@@ -623,7 +628,7 @@ impl Worker {
 
     fn capture_frame(&mut self, window_id: u32) -> Result<(Frame, bool)> {
         let target_changed = self.prepare_capture(window_id)?;
-        let source = &mut self.capture.as_mut().expect("capture source set above").1;
+        let source = self.capture_source_mut()?;
         // Each stage is wrapped in a `tracing` span named after the stage; the
         // `StageTimingLayer` times them and feeds the watch HUD's latency graph
         // without any timing values being threaded through these calls.
@@ -632,6 +637,13 @@ impl Worker {
             source.next_frame().context("failed to capture frame")?
         };
         Ok((frame, target_changed))
+    }
+
+    fn capture_source_mut(&mut self) -> Result<&mut Box<dyn FrameSource + Send>> {
+        self.capture
+            .as_mut()
+            .map(|(_, source)| source)
+            .context("capture source was not initialized")
     }
 }
 

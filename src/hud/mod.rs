@@ -260,8 +260,11 @@ impl LatencyHud {
         if self.history.len() < 2 {
             return 0.0;
         }
-        let first = self.history.front().expect("len >= 2").0;
-        let last = self.history.back().expect("len >= 2").0;
+        let (Some(first), Some(last)) = (self.history.front(), self.history.back()) else {
+            return 0.0;
+        };
+        let first = first.0;
+        let last = last.0;
         let span = last.saturating_duration_since(first).as_secs_f32();
         if span <= 0.0 {
             return 0.0;

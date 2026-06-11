@@ -13,7 +13,8 @@ adjacent recognized lines into text blocks -> segment those blocks into
 dictionary words -> project the words back to visible line spans -> draw a
 translucent, click-through overlay you can hover to define. The vision path is
 built around replaceable boundaries so policy can be tested without live
-hardware.
+hardware. The binary entry point stays thin: `main.rs` initializes tracing and
+hands off to `cli.rs`, where Clap parsing and command handlers live.
 
 ## Boundaries
 

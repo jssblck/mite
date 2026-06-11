@@ -376,7 +376,9 @@ impl WindowsGraphicsCapture {
                 });
             }
         }
-        Ok(self.session.as_mut().expect("WGC session set above"))
+        self.session
+            .as_mut()
+            .context("WGC session was not initialized")
     }
 
     fn capture_with_session(&mut self, probe: Option<&FrameProbe>) -> Result<FrameDelivery> {

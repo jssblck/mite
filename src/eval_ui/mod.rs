@@ -9,7 +9,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use anyhow::{Context, Result, bail};
@@ -104,7 +104,7 @@ impl ServerState {
         })
     }
 
-    fn dictionary(&self) -> Result<MutexGuard<'_, Option<Dictionary>>> {
+    fn with_dictionary<T>(&self, f: impl FnOnce(&Dictionary) -> Result<T>) -> Result<T> {
         let mut guard = self
             .dict
             .lock()
@@ -112,10 +112,11 @@ impl ServerState {
         if guard.is_none() {
             *guard = Some(Dictionary::load(&self.lexicon)?);
         }
-        Ok(guard)
+        let dictionary = guard.as_ref().context("dictionary was not initialized")?;
+        f(dictionary)
     }
 
-    fn engine(&self) -> Result<MutexGuard<'_, Option<Box<dyn OcrEngine + Send>>>> {
+    fn with_engine<T>(&self, f: impl FnOnce(&mut dyn OcrEngine) -> Result<T>) -> Result<T> {
         let mut guard = self
             .engine
             .lock()
@@ -123,7 +124,8 @@ impl ServerState {
         if guard.is_none() {
             *guard = Some(build_ocr_engine(&self.config.runtime, &self.config.models)?);
         }
-        Ok(guard)
+        let engine = guard.as_mut().context("OCR engine was not initialized")?;
+        f(&mut **engine)
     }
 
     fn resolve_existing(&self, rel: &str) -> Result<PathBuf> {
@@ -217,33 +219,25 @@ impl ServerState {
     }
 
     fn synthesize_detection(&self, draft: DraftDetectionRequest) -> Result<ExpectedDetection> {
-        let dict = self.dictionary()?;
-        let dict = dict
-            .as_ref()
-            .expect("dictionary guard contains a dictionary after initialization");
-        eval::draft_expected_detection(
-            dict,
-            draft.id,
-            draft.text,
-            draft.bounds,
-            draft.bounds_tolerance,
-            draft.notes,
-        )
+        self.with_dictionary(|dict| {
+            eval::draft_expected_detection(
+                dict,
+                draft.id,
+                draft.text,
+                draft.bounds,
+                draft.bounds_tolerance,
+                draft.notes,
+            )
+        })
     }
 
     fn run_detections(&self, bundle_rel: &str) -> Result<DetectionRunResponse> {
         let image_path = self.resolve_bundle_image(bundle_rel)?;
-        let result = {
-            let dict = self.dictionary()?;
-            let dict = dict
-                .as_ref()
-                .expect("dictionary guard contains a dictionary after initialization");
-            let mut engine = self.engine()?;
-            let engine = engine
-                .as_mut()
-                .expect("engine guard contains an engine after initialization");
-            eval::ocr_lookup_image(&mut **engine, &self.config.pipeline, dict, &image_path)?
-        };
+        let result = self.with_dictionary(|dict| {
+            self.with_engine(|engine| {
+                eval::ocr_lookup_image(engine, &self.config.pipeline, dict, &image_path)
+            })
+        })?;
         let label_path = label_path_for_image(&image_path)?;
         let report = if label_path.exists() {
             let spec = eval::load_eval_spec(&label_path)?;

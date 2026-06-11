@@ -281,10 +281,11 @@ impl WindowCaptureSession {
             }
         }
         if slot.fresh {
-            let staging = slot
-                .staging
-                .as_ref()
-                .expect("a fresh frame implies the staging texture exists");
+            let Some(staging) = slot.staging.as_ref() else {
+                slot.fresh = false;
+                slot.delivered = 0;
+                bail!("fresh WGC frame had no staging texture");
+            };
             let stamp = slot.stamped;
             let stats = CaptureStats {
                 frames_delivered: slot.delivered,
@@ -541,7 +542,9 @@ fn ensure_staging<'a>(
             height,
         });
     }
-    Ok(cache.as_ref().expect("staging texture was just ensured"))
+    cache
+        .as_ref()
+        .context("staging texture was not initialized")
 }
 
 /// GPU-side copy of the captured frame into the reused staging texture. Cheap
@@ -636,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn bgra_probe_sampling_matches_rgb_probe_evaluation() {
+    fn bgra_probe_sampling_matches_rgb_probe_evaluation() -> Result<()> {
         // A probe evaluated on the raw BGRA staging buffer must produce the
         // same luma samples as evaluating on the converted RGB image, so the
         // capture-side fast path and the worker-side fallback agree.
@@ -654,7 +657,8 @@ mod tests {
             }
         }
         let rgb = bgra_to_rgb(&source, width, height, row_pitch);
-        let image = RgbImage::from_raw(width as u32, height as u32, rgb).unwrap();
+        let image = RgbImage::from_raw(width as u32, height as u32, rgb)
+            .context("RGB probe image buffer did not match dimensions")?;
 
         let points: Vec<(u32, u32)> = vec![(0, 0), (6, 4), (3, 2), (6, 0), (0, 4)];
         let expected: Vec<u8> = points
@@ -673,5 +677,6 @@ mod tests {
 
         assert_eq!(sample_bgra_probe(&source, row_pitch, &probe), expected);
         assert!(probe.matches_rgb(&image));
+        Ok(())
     }
 }
