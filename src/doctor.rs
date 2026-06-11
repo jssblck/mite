@@ -270,7 +270,7 @@ fn required_gpu_dlls(backend: RuntimeBackend) -> Vec<&'static str> {
             .copied()
             .collect(),
         RuntimeBackend::Cuda => CUDA_DLLS.to_vec(),
-        RuntimeBackend::Mock | RuntimeBackend::DirectMl | RuntimeBackend::OpenVino => Vec::new(),
+        RuntimeBackend::Fixture | RuntimeBackend::DirectMl | RuntimeBackend::OpenVino => Vec::new(),
     }
 }
 
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn gpu_runtime_requirements_follow_backend() {
-        assert!(required_gpu_dlls(RuntimeBackend::Mock).is_empty());
+        assert!(required_gpu_dlls(RuntimeBackend::Fixture).is_empty());
         assert_eq!(
             required_gpu_dlls(RuntimeBackend::Cuda),
             vec![

@@ -372,7 +372,7 @@ pub fn build_ocr_engine(
     models: &ModelConfig,
 ) -> Result<Box<dyn OcrEngine + Send>> {
     match config.backend {
-        RuntimeBackend::Mock => Ok(Box::new(MockOcrEngine::default())),
+        RuntimeBackend::Fixture => Ok(Box::new(FixtureOcrEngine::default())),
         RuntimeBackend::NvidiaTensorRtThenCuda
         | RuntimeBackend::Cuda
         | RuntimeBackend::DirectMl
@@ -592,11 +592,11 @@ impl StableIdAllocator {
 }
 
 #[derive(Debug, Default)]
-pub struct MockOcrEngine {
+pub struct FixtureOcrEngine {
     stable_ids: StableIdAllocator,
 }
 
-impl OcrEngine for MockOcrEngine {
+impl OcrEngine for FixtureOcrEngine {
     fn detect(&mut self, frame: &Frame, config: &PipelineConfig) -> Result<Vec<TextBox>> {
         let proxy = frame
             .size
@@ -634,7 +634,7 @@ impl OcrEngine for MockOcrEngine {
             .iter()
             .map(|text_box| RecognizedText {
                 text_box: text_box.clone(),
-                text: format!("mock text {}:{}", frame.content_epoch, text_box.id),
+                text: format!("fixture text {}:{}", frame.content_epoch, text_box.id),
                 confidence: 0.88,
                 reused: false,
                 char_centers: Vec::new(),

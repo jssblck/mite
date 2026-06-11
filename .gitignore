@@ -5,6 +5,7 @@
 /.gpu-runtime
 /.venv-models
 /.env
+/.codex
 
 # Local scratch copy of private eval captures for fast iteration; the private
 # data must never land in this repository.

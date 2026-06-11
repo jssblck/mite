@@ -1,0 +1,169 @@
+version: 1
+
+rules:
+  - name: no-first-party-mocks
+    description: Block first-party mocking patterns in Rust code.
+    message: "First-party mocking is banned in Mite. Use real data, deterministic fixtures, or a service-level double for an external service, then retry."
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "src/**/*.rs"
+        content:
+          - kind: Regex
+            pattern: '(?m)#\s*\[\s*automock\s*\]|\bmockall\b|\bMock[A-Z][A-Za-z0-9_]*\b'
+      - hook: PreToolUse
+        tool: Edit
+        file: "src/**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: '(?m)#\s*\[\s*automock\s*\]|\bmockall\b|\bMock[A-Z][A-Za-z0-9_]*\b'
+      - hook: PreToolUse
+        tool: Write
+        file: "examples/**/*.rs"
+        content:
+          - kind: Regex
+            pattern: '(?m)#\s*\[\s*automock\s*\]|\bmockall\b|\bMock[A-Z][A-Za-z0-9_]*\b'
+      - hook: PreToolUse
+        tool: Edit
+        file: "examples/**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: '(?m)#\s*\[\s*automock\s*\]|\bmockall\b|\bMock[A-Z][A-Za-z0-9_]*\b'
+      - hook: PreToolUse
+        tool: Write
+        file: "build.rs"
+        content:
+          - kind: Regex
+            pattern: '(?m)#\s*\[\s*automock\s*\]|\bmockall\b|\bMock[A-Z][A-Za-z0-9_]*\b'
+      - hook: PreToolUse
+        tool: Edit
+        file: "build.rs"
+        new_content:
+          - kind: Regex
+            pattern: '(?m)#\s*\[\s*automock\s*\]|\bmockall\b|\bMock[A-Z][A-Za-z0-9_]*\b'
+
+  - name: no-mockall-dependency
+    description: Keep first-party Rust tests off mockall.
+    message: "Do not add mockall to Mite. Test behavior with data, fixtures, or service-level doubles, then retry."
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "Cargo.toml"
+        content:
+          - kind: Regex
+            pattern: '(?m)^\s*mockall\s*='
+      - hook: PreToolUse
+        tool: Edit
+        file: "Cargo.toml"
+        new_content:
+          - kind: Regex
+            pattern: '(?m)^\s*mockall\s*='
+
+  - name: keep-doctests-enabled
+    description: Mite keeps executable doctests because the project is not large enough to disable them for build time.
+    message: "Do not disable doctests in Mite. Keep examples executable, then retry."
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "Cargo.toml"
+        content:
+          - kind: Regex
+            pattern: '(?m)^\s*doctest\s*=\s*false\b'
+      - hook: PreToolUse
+        tool: Edit
+        file: "Cargo.toml"
+        new_content:
+          - kind: Regex
+            pattern: '(?m)^\s*doctest\s*=\s*false\b'
+
+  - name: no-cargo-integration-test-crates
+    description: Mite is an internal app; prefer src tests and data-driven evals over Cargo integration crates.
+    message: "Do not add Cargo integration test crates for Mite. Put the test in src with a data-driven check helper, or change the documented policy first, then retry."
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "tests/**/*.rs"
+        content:
+          - kind: Regex
+            pattern: '(?s).+'
+      - hook: PreToolUse
+        tool: Edit
+        file: "tests/**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: '(?s).+'
+
+  - name: no-sleep-based-tests
+    description: Tests should preserve causality with join handles, receivers, or observable side channels.
+    message: "Do not use sleep-based synchronization in tests. Expose a join handle, receiver, or observable side channel, then retry."
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "tests/**/*.rs"
+        content:
+          - kind: Regex
+            pattern: '(thread::sleep|std::thread::sleep|tokio::time::sleep)'
+      - hook: PreToolUse
+        tool: Edit
+        file: "tests/**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: '(thread::sleep|std::thread::sleep|tokio::time::sleep)'
+
+  - name: no-inline-always
+    description: "#[inline(always)] needs measured evidence and is denied by clippy as well."
+    message: "Do not add #[inline(always)]. Measure first and prefer normal #[inline], #[cold], or no attribute, then retry."
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "src/**/*.rs"
+        content:
+          - kind: Regex
+            pattern: '#\s*\[\s*inline\s*\(\s*always\s*\)\s*\]'
+      - hook: PreToolUse
+        tool: Edit
+        file: "src/**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: '#\s*\[\s*inline\s*\(\s*always\s*\)\s*\]'
+      - hook: PreToolUse
+        tool: Write
+        file: "examples/**/*.rs"
+        content:
+          - kind: Regex
+            pattern: '#\s*\[\s*inline\s*\(\s*always\s*\)\s*\]'
+      - hook: PreToolUse
+        tool: Edit
+        file: "examples/**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: '#\s*\[\s*inline\s*\(\s*always\s*\)\s*\]'
+      - hook: PreToolUse
+        tool: Write
+        file: "build.rs"
+        content:
+          - kind: Regex
+            pattern: '#\s*\[\s*inline\s*\(\s*always\s*\)\s*\]'
+      - hook: PreToolUse
+        tool: Edit
+        file: "build.rs"
+        new_content:
+          - kind: Regex
+            pattern: '#\s*\[\s*inline\s*\(\s*always\s*\)\s*\]'
+
+  - name: architecture-doc-no-local-links
+    description: Architecture docs name files and types without fragile local Markdown links.
+    message: "Do not add local Markdown code links in docs/architecture.md. Name the file, module, or type in text, then retry."
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "docs/architecture.md"
+        content:
+          - kind: Regex
+            pattern: '\[[^\]]+\]\((?:\.{0,2}/|docs/|src/|examples/|scripts/)[^)]+\)'
+      - hook: PreToolUse
+        tool: Edit
+        file: "docs/architecture.md"
+        new_content:
+          - kind: Regex
+            pattern: '\[[^\]]+\]\((?:\.{0,2}/|docs/|src/|examples/|scripts/)[^)]+\)'

@@ -97,3 +97,12 @@ OCR and lookup behavior. They are private data, stored separately from this
 source repository and separate from the runtime model and dictionary downloads.
 Do not publish, mirror, or redistribute the eval submodule without an explicit
 review of the captured images, labels, and upstream content in those captures.
+
+## Repo-Local Agent Skills
+
+The repository vendors `leonardomso/rust-skills` under
+`.agents\skills\rust-skills` for agent guidance during development.
+
+- Upstream project: https://github.com/leonardomso/rust-skills
+- Vendored commit: `89910e8585331dabbecd400ae132b4070ecf24af`
+- License: MIT

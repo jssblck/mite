@@ -59,7 +59,7 @@ hardware.
   compact labels), synthesizes the diamond bullets that PP-OCR's character set
   lacks via a gated geometric classifier, and can consult an optional heavier
   fallback recognizer on low-confidence lines (`docs/models.md`).
-  `MockOcrEngine` backs unit tests. `StableIdAllocator` assigns
+  `FixtureOcrEngine` backs deterministic UI smoke tests. `StableIdAllocator` assigns
   cross-frame-stable box ids so a box that stays put is not treated as new
   each frame.
 - `interactive::Worker` (`interactive/mod.rs`, `interactive/smoothing.rs`):

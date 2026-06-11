@@ -75,7 +75,7 @@ fn main() -> Result<()> {
         config.runtime.backend = match backend.to_string_lossy().as_ref() {
             "cuda" => RuntimeBackend::Cuda,
             "trt" | "tensorrt" => RuntimeBackend::NvidiaTensorRtThenCuda,
-            "cpu" | "mock" => RuntimeBackend::Mock,
+            "fixture" => RuntimeBackend::Fixture,
             other => panic!("unknown MITE_BACKEND {other}"),
         };
     }

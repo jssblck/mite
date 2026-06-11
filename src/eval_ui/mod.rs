@@ -36,7 +36,7 @@ pub struct EvalUiOptions {
     pub lexicon: PathBuf,
     pub host: String,
     pub port: u16,
-    pub mock_ocr: bool,
+    pub fixture_ocr: bool,
     pub min_iou: f32,
 }
 
@@ -83,8 +83,8 @@ impl ServerState {
         } else {
             AppConfig::default()
         };
-        if options.mock_ocr {
-            config.runtime.backend = RuntimeBackend::Mock;
+        if options.fixture_ocr {
+            config.runtime.backend = RuntimeBackend::Fixture;
         }
         let eval_root = options.eval_root;
         fs::create_dir_all(&eval_root)

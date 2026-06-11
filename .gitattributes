@@ -7,3 +7,5 @@
 .gitattributes text eol=lf
 .gitmodules text eol=lf
 *.md text eol=lf
+.agents/** text eol=lf
+.nudge*.yaml text eol=lf

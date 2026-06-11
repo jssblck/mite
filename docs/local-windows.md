@@ -176,11 +176,11 @@ Useful flags:
 
 ```powershell
 cargo run --bin eval-ui -- --eval-root eval\collection-name
-cargo run --bin eval-ui -- --mock-ocr
+cargo run --bin eval-ui -- --fixture-ocr
 cargo run --bin eval-ui -- --port 0
 ```
 
-`--mock-ocr` uses deterministic fake boxes for UI smoke tests. Leave it off when
+`--fixture-ocr` uses deterministic fixture boxes for UI smoke tests. Leave it off when
 you need real raw detections or label-vs-Mite diffs.
 
 ### Filing concrete issues

@@ -18,11 +18,23 @@ function Invoke-Step {
 
     Write-Host ""
     Write-Host "==> $Name"
+    $global:LASTEXITCODE = 0
     & $Body
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Name failed with exit code $LASTEXITCODE"
+    }
 }
 
 Invoke-Step "cargo fmt --check" {
     cargo fmt --check
+}
+
+Invoke-Step "nudge check" {
+    $nudgePaths = @("Cargo.toml", "src", "docs", "examples", "build.rs")
+    if (Test-Path -LiteralPath (Join-Path $root "tests")) {
+        $nudgePaths += "tests"
+    }
+    nudge check @nudgePaths
 }
 
 Invoke-Step "cargo test" {

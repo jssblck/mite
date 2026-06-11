@@ -106,7 +106,7 @@ pub fn int8_model_path(path: &Path) -> PathBuf {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeBackend {
-    Mock,
+    Fixture,
     NvidiaTensorRtThenCuda,
     Cuda,
     DirectMl,

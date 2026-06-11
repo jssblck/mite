@@ -23,9 +23,9 @@ struct Cli {
     /// Port for the local UI server. Use 0 to ask the OS for a free port.
     #[arg(long, default_value_t = 8765)]
     port: u16,
-    /// Use the built-in mock OCR engine for UI development and smoke tests.
+    /// Use the built-in fixture OCR engine for UI development and smoke tests.
     #[arg(long)]
-    mock_ocr: bool,
+    fixture_ocr: bool,
     /// Minimum IoU for strict eval matching; tolerant bounds jitter can also match.
     #[arg(long, default_value_t = 0.50)]
     min_iou: f32,
@@ -40,7 +40,7 @@ fn main() -> Result<()> {
         lexicon: cli.lexicon,
         host: cli.host,
         port: cli.port,
-        mock_ocr: cli.mock_ocr,
+        fixture_ocr: cli.fixture_ocr,
         min_iou: cli.min_iou,
     })
 }
