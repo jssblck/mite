@@ -5,7 +5,7 @@ models/pp-ocrv5-mobile-rec-int8.onnx via onnxruntime static quantization,
 calibrated on real captures from the private eval/ submodule so activation
 ranges match deployment inputs (game frames, not natural photos).
 
-TensorRT 10 deprecates implicit INT8 calibration tables; explicit Q/DQ models
+TensorRT 10+ deprecates implicit INT8 calibration tables; explicit Q/DQ models
 are the supported path, and the TensorRT EP builds INT8 engines from them
 directly (mite enables this with runtime.int8 = true).
 

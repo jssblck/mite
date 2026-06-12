@@ -126,7 +126,8 @@ is wired end to end with a graceful fallback chain **TensorRT -> CUDA -> CPU**
 
 TensorRT and CUDA need NVIDIA runtime DLLs next to the binary; ORT ships only
 the provider shims. Run `scripts\bootstrap-dev.ps1 -GpuRuntimeOnly` once to
-fetch pinned TensorRT 10 / CUDA 12 / cuDNN 9 wheels into `.gpu-runtime\bin`.
+fetch pinned `tensorrt-cu12`, CUDA 12, and cuDNN 9 wheels into
+`.gpu-runtime\bin`.
 `build.rs` stages that cache into the active Cargo profile output dir on every
 build, so debug and release binaries get the same provider DLL dependencies.
 

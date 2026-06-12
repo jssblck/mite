@@ -300,14 +300,18 @@ function Install-GpuRuntime {
     $runtimeBin = Join-Path $runtimeRoot "bin"
     $manifestPath = Join-Path $runtimeRoot "manifest.json"
     $packages = @(
+        # ORT 2.0.0-rc.12 imports nvinfer_10.dll directly; TensorRT 11 wheels
+        # only ship nvinfer_11.dll, so use the newest compatible 10.x wheel.
         "tensorrt-cu12==10.16.1.11",
         "nvidia-cuda-runtime-cu12==12.9.79",
         "nvidia-cuda-nvrtc-cu12==12.9.86",
         "nvidia-cublas-cu12==12.9.2.10",
-        "nvidia-cudnn-cu12==9.22.0.52"
+        "nvidia-cudnn-cu12==9.23.1.3"
     )
 
     New-Item -ItemType Directory -Path $runtimeBin -Force | Out-Null
+    Get-ChildItem -LiteralPath $runtimeBin -Filter "*.dll" -File -ErrorAction SilentlyContinue |
+        Remove-Item -Force
 
     if (-not (Test-Path $python)) {
         Write-Host "Creating model/runtime venv at $venv ..."

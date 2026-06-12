@@ -14,10 +14,10 @@
       "local_path": "models/jmdict-eng.json",
       "archive": {
         "format": "zip",
-        "url": "https://github.com/scriptin/jmdict-simplified/releases/download/3.6.2%2B20260518145612/jmdict-eng-3.6.2%2B20260518145612.json.zip",
+        "url": "https://github.com/scriptin/jmdict-simplified/releases/download/3.6.2%2B20260608153333/jmdict-eng-3.6.2%2B20260608153333.json.zip",
         "member_glob": "jmdict-eng-*.json"
       },
-      "sha256": null,
+      "sha256": "5fd4dd96bb2ef2795ffa3cb42e067cb624d67659ead9b0aa99f8425bacc98ecb",
       "license": "CC-BY-SA-4.0",
       "attribution": "JMdict/EDICT dictionary data, © Electronic Dictionary Research and Development Group (EDRDG), via scriptin/jmdict-simplified (CC BY-SA 4.0)."
     }
