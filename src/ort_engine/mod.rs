@@ -359,7 +359,7 @@ impl OcrEngine for OrtOcrEngine {
                 .par_iter()
                 .enumerate()
                 .map(|(index, text_box)| -> Result<RecCrop> {
-                    let crop = crop_text_line(frame_image, text_box.rect)?;
+                    let crop = crop_text_line(frame_image, text_box.rect);
                     let resized = resize_for_recognizer(&crop);
                     let bounds =
                         crop_bounds(frame_image.width(), frame_image.height(), text_box.rect);
@@ -2298,9 +2298,9 @@ fn crop_bounds(image_w: u32, image_h: u32, rect: Rect) -> CropBounds {
     }
 }
 
-fn crop_text_line(image: &RgbImage, rect: Rect) -> Result<RgbImage> {
+fn crop_text_line(image: &RgbImage, rect: Rect) -> RgbImage {
     let bounds = crop_bounds(image.width(), image.height(), rect);
-    Ok(imageops::crop_imm(image, bounds.x, bounds.y, bounds.width, bounds.height).to_image())
+    imageops::crop_imm(image, bounds.x, bounds.y, bounds.width, bounds.height).to_image()
 }
 
 /// Map the per-raw-character x-centres onto the normalized text by walking both

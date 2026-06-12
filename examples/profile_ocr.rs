@@ -79,7 +79,9 @@ fn main() -> Result<()> {
             other => panic!("unknown MITE_BACKEND {other}"),
         };
     }
-    apply_pipeline_env_overrides(&mut config.pipeline);
+    let mut pipeline = config.pipeline.into_inner();
+    apply_pipeline_env_overrides(&mut pipeline);
+    config.pipeline = pipeline.parse()?;
     println!(
         "runtime backend: {:?}  fp16: {}",
         config.runtime.backend, config.runtime.fp16

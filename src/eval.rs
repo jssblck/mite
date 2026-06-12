@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 use std::fs;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -360,7 +361,6 @@ pub fn run_eval_corpus(
         }
 
         let spec = load_eval_spec(&bundle.labels)?;
-        validate_eval_spec(&spec)?;
         let result = ocr_lookup_image(&mut *engine, &config.pipeline, &dict, &bundle.image)?;
         let report = score_ocr_lookup(
             &bundle.image,
@@ -478,6 +478,28 @@ pub struct EvalSpec {
     pub ignored: Vec<IgnoredText>,
     #[serde(default)]
     pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct CheckedEvalSpec(EvalSpec);
+
+impl CheckedEvalSpec {
+    pub fn get(&self) -> &EvalSpec {
+        &self.0
+    }
+
+    pub fn into_inner(self) -> EvalSpec {
+        self.0
+    }
+}
+
+impl Deref for CheckedEvalSpec {
+    type Target = EvalSpec;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -661,7 +683,6 @@ pub fn run_eval(
     options: EvalOptions,
 ) -> Result<EvalReport> {
     let spec = load_eval_spec(eval_path)?;
-    validate_eval_spec(&spec)?;
 
     let result = run_ocr_lookup(config, image, lexicon)?;
     Ok(score_ocr_lookup(
@@ -680,21 +701,22 @@ pub fn run_eval(
 pub fn score_ocr_lookup(
     image: &Path,
     eval_path: &Path,
-    spec: &EvalSpec,
+    spec: &CheckedEvalSpec,
     result: &OcrLookupResult,
     min_iou: f32,
 ) -> EvalReport {
     score_eval(image, eval_path, spec, result, min_iou)
 }
 
-pub fn load_eval_spec(path: &Path) -> Result<EvalSpec> {
+pub fn load_eval_spec(path: &Path) -> Result<CheckedEvalSpec> {
     let raw = fs::read_to_string(path)
         .with_context(|| format!("failed to read eval labels {}", path.display()))?;
-    serde_json::from_str(&raw)
-        .with_context(|| format!("failed to parse eval labels {}", path.display()))
+    let spec = serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse eval labels {}", path.display()))?;
+    parse_eval_spec(spec).with_context(|| format!("invalid eval labels {}", path.display()))
 }
 
-pub fn validate_eval_spec(spec: &EvalSpec) -> Result<()> {
+pub fn parse_eval_spec(spec: EvalSpec) -> Result<CheckedEvalSpec> {
     if spec.schema != 1 {
         bail!("unsupported eval schema {}; expected 1", spec.schema);
     }
@@ -720,7 +742,7 @@ pub fn validate_eval_spec(spec: &EvalSpec) -> Result<()> {
             bail!("detection {} has non-positive bounds", detection.id);
         }
         if let Some(tolerance) = detection.bounds_tolerance {
-            validate_bounds_tolerance(&detection.id, tolerance)?;
+            parse_bounds_tolerance(&detection.id, tolerance)?;
         }
         for (index, ch) in detection.characters.iter().enumerate() {
             if ch.text.chars().count() != 1 {
@@ -861,7 +883,7 @@ pub fn validate_eval_spec(spec: &EvalSpec) -> Result<()> {
         }
     }
 
-    Ok(())
+    Ok(CheckedEvalSpec(spec))
 }
 
 /// Build one valid manual detection from a text string and a bounding rectangle.
@@ -895,7 +917,7 @@ pub fn draft_expected_detection(
         bail!("detection {id} has non-positive bounds");
     }
     if let Some(tolerance) = bounds_tolerance {
-        validate_bounds_tolerance(&id, tolerance)?;
+        parse_bounds_tolerance(&id, tolerance)?;
     }
 
     let chars = text.chars().map(|ch| ch.to_string()).collect::<Vec<_>>();
@@ -940,7 +962,7 @@ pub fn draft_expected_detection(
         tokens: expected_tokens,
         notes,
     };
-    validate_eval_spec(&EvalSpec {
+    parse_eval_spec(EvalSpec {
         schema: 1,
         image: None,
         source_capture: None,
@@ -1083,7 +1105,10 @@ fn expected_token_from_token(
     }
 }
 
-fn validate_bounds_tolerance(detection_id: &str, tolerance: BoundsTolerance) -> Result<()> {
+fn parse_bounds_tolerance(
+    detection_id: &str,
+    tolerance: BoundsTolerance,
+) -> Result<BoundsTolerance> {
     for (field, value) in [
         ("x", tolerance.x),
         ("y", tolerance.y),
@@ -1098,13 +1123,13 @@ fn validate_bounds_tolerance(detection_id: &str, tolerance: BoundsTolerance) -> 
             );
         }
     }
-    Ok(())
+    Ok(tolerance)
 }
 
 fn score_eval(
     image: &Path,
     eval_path: &Path,
-    spec: &EvalSpec,
+    spec: &CheckedEvalSpec,
     result: &OcrLookupResult,
     min_iou: f32,
 ) -> EvalReport {
@@ -1913,6 +1938,10 @@ mod tests {
         }
     }
 
+    fn checked_spec(spec: EvalSpec) -> CheckedEvalSpec {
+        parse_eval_spec(spec).unwrap()
+    }
+
     fn water_result(text: &str, rect: Rect) -> OcrLookupResult {
         let token = token("水", "水", entry(&["水"], &["みず"], "n", &["water"]));
         OcrLookupResult {
@@ -1979,7 +2008,7 @@ mod tests {
     fn validation_rejects_character_text_drift() {
         let mut spec = water_spec();
         spec.detections[0].characters[0].text = "氷".to_string();
-        let error = validate_eval_spec(&spec).unwrap_err().to_string();
+        let error = parse_eval_spec(spec).unwrap_err().to_string();
         assert!(error.contains("characters do not exactly spell text"));
     }
 
@@ -1987,7 +2016,7 @@ mod tests {
     fn validation_rejects_token_surface_drift() {
         let mut spec = water_spec();
         spec.detections[0].tokens[0].surface = "氷".to_string();
-        let error = validate_eval_spec(&spec).unwrap_err().to_string();
+        let error = parse_eval_spec(spec).unwrap_err().to_string();
         assert!(error.contains("does not match character span"));
     }
 
@@ -2000,7 +2029,7 @@ mod tests {
             width: 6.0,
             height: 6.0,
         });
-        let error = validate_eval_spec(&spec).unwrap_err().to_string();
+        let error = parse_eval_spec(spec).unwrap_err().to_string();
         assert!(error.contains("bounds_tolerance.x"));
     }
 
@@ -2098,6 +2127,7 @@ mod tests {
             }],
         };
 
+        let spec = checked_spec(spec);
         let report = score_ocr_lookup(
             Path::new("image.png"),
             Path::new("eval.json"),
@@ -2113,8 +2143,7 @@ mod tests {
 
     #[test]
     fn perfect_manual_label_scores_full_credit() {
-        let spec = water_spec();
-        validate_eval_spec(&spec).unwrap();
+        let spec = checked_spec(water_spec());
         let result = water_result("水", rect(10.0, 20.0, 30.0, 40.0));
         let report = score_eval(
             Path::new("image.png"),
@@ -2133,6 +2162,7 @@ mod tests {
         let mut spec = water_spec();
         spec.detections[0].bounds = rect(10.0, 20.0, 30.0, 10.0);
         spec.detections[0].characters[0].bounds = rect(10.0, 20.0, 30.0, 10.0);
+        let spec = checked_spec(spec);
         let result = water_result("水", rect(10.0, 24.0, 30.0, 10.0));
         let report = score_eval(
             Path::new("image.png"),
@@ -2149,7 +2179,7 @@ mod tests {
 
     #[test]
     fn moderate_bounds_drift_gets_partial_detection_credit() {
-        let spec = water_spec();
+        let spec = checked_spec(water_spec());
         let result = water_result("水", rect(20.0, 20.0, 30.0, 40.0));
         let report = score_eval(
             Path::new("image.png"),
@@ -2175,6 +2205,7 @@ mod tests {
             height: 6.0,
         });
         spec.detections[0].characters[0].bounds = rect(10.0, 20.0, 30.0, 10.0);
+        let spec = checked_spec(spec);
         let result = water_result("水", rect(10.0, 28.0, 30.0, 10.0));
         let report = score_eval(
             Path::new("image.png"),
@@ -2190,7 +2221,7 @@ mod tests {
 
     #[test]
     fn text_mismatch_reports_character_difference() {
-        let spec = water_spec();
+        let spec = checked_spec(water_spec());
         let result = water_result("氷", rect(10.0, 20.0, 30.0, 40.0));
         let report = score_eval(
             Path::new("image.png"),
@@ -2209,7 +2240,7 @@ mod tests {
 
     #[test]
     fn unmatched_detection_scores_zero_for_detection_and_text() {
-        let spec = water_spec();
+        let spec = checked_spec(water_spec());
         let result = water_result("水", rect(500.0, 500.0, 30.0, 40.0));
         let report = score_eval(
             Path::new("image.png"),
@@ -2225,7 +2256,7 @@ mod tests {
 
     #[test]
     fn unexpected_actual_detection_penalizes_scores() {
-        let spec = water_spec();
+        let spec = checked_spec(water_spec());
         let result = two_line_result(
             "水",
             rect(10.0, 20.0, 30.0, 40.0),
@@ -2253,6 +2284,7 @@ mod tests {
             reason: "background label".to_string(),
             bounds: Some(rect(100.0, 20.0, 50.0, 20.0)),
         });
+        let spec = checked_spec(spec);
         let result = two_line_result(
             "水",
             rect(10.0, 20.0, 30.0, 40.0),
@@ -2293,7 +2325,7 @@ mod tests {
 
     #[test]
     fn corpus_totals_weight_underlying_denominators() {
-        let spec = water_spec();
+        let spec = checked_spec(water_spec());
         let perfect = score_eval(
             Path::new("image-1.png"),
             Path::new("eval-1.json"),

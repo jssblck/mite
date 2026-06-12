@@ -167,3 +167,85 @@ rules:
         new_content:
           - kind: Regex
             pattern: '\[[^\]]+\]\((?:\.{0,2}/|docs/|src/|examples/|scripts/)[^)]+\)'
+
+  - name: no-validator-shaped-rust-apis
+    description: Boundary checks must parse weak inputs into proof-carrying types instead of returning Result<()>.
+    message: "Do not add validator-shaped Rust APIs. Return a parsed/refined type that downstream code must consume, then retry."
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "src/**/*.rs"
+        content:
+          - kind: Regex
+            pattern: '(?m)\b(?:pub(?:\([^)]*\))?\s+)?fn\s+(?:validate|parse)[A-Za-z0-9_]*\s*\([^)]*\)\s*->\s*(?:anyhow::)?Result\s*<\s*\(\s*\)\s*>'
+      - hook: PreToolUse
+        tool: Edit
+        file: "src/**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: '(?m)\b(?:pub(?:\([^)]*\))?\s+)?fn\s+(?:validate|parse)[A-Za-z0-9_]*\s*\([^)]*\)\s*->\s*(?:anyhow::)?Result\s*<\s*\(\s*\)\s*>'
+      - hook: PreToolUse
+        tool: Write
+        file: "examples/**/*.rs"
+        content:
+          - kind: Regex
+            pattern: '(?m)\b(?:pub(?:\([^)]*\))?\s+)?fn\s+(?:validate|parse)[A-Za-z0-9_]*\s*\([^)]*\)\s*->\s*(?:anyhow::)?Result\s*<\s*\(\s*\)\s*>'
+      - hook: PreToolUse
+        tool: Edit
+        file: "examples/**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: '(?m)\b(?:pub(?:\([^)]*\))?\s+)?fn\s+(?:validate|parse)[A-Za-z0-9_]*\s*\([^)]*\)\s*->\s*(?:anyhow::)?Result\s*<\s*\(\s*\)\s*>'
+      - hook: PreToolUse
+        tool: Write
+        file: "build.rs"
+        content:
+          - kind: Regex
+            pattern: '(?m)\b(?:pub(?:\([^)]*\))?\s+)?fn\s+(?:validate|parse)[A-Za-z0-9_]*\s*\([^)]*\)\s*->\s*(?:anyhow::)?Result\s*<\s*\(\s*\)\s*>'
+      - hook: PreToolUse
+        tool: Edit
+        file: "build.rs"
+        new_content:
+          - kind: Regex
+            pattern: '(?m)\b(?:pub(?:\([^)]*\))?\s+)?fn\s+(?:validate|parse)[A-Za-z0-9_]*\s*\([^)]*\)\s*->\s*(?:anyhow::)?Result\s*<\s*\(\s*\)\s*>'
+
+  - name: no-public-transparent-domain-newtypes
+    description: Public tuple wrappers around primitive/string/path values are names, not type safety.
+    message: "Do not add a public transparent domain newtype. Use a private field plus a parser/smart constructor, or use a type alias if this is only a label, then retry."
+    on:
+      - hook: PreToolUse
+        tool: Write
+        file: "src/**/*.rs"
+        content:
+          - kind: Regex
+            pattern: '(?m)^\s*pub\s+struct\s+[A-Z][A-Za-z0-9_]*(?:Id|Name|Path|Text|Key|Token|Config)\s*\(\s*pub\s+(?:String|PathBuf|u64|u32|usize|i64|i32|bool)\s*\)\s*;'
+      - hook: PreToolUse
+        tool: Edit
+        file: "src/**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: '(?m)^\s*pub\s+struct\s+[A-Z][A-Za-z0-9_]*(?:Id|Name|Path|Text|Key|Token|Config)\s*\(\s*pub\s+(?:String|PathBuf|u64|u32|usize|i64|i32|bool)\s*\)\s*;'
+      - hook: PreToolUse
+        tool: Write
+        file: "examples/**/*.rs"
+        content:
+          - kind: Regex
+            pattern: '(?m)^\s*pub\s+struct\s+[A-Z][A-Za-z0-9_]*(?:Id|Name|Path|Text|Key|Token|Config)\s*\(\s*pub\s+(?:String|PathBuf|u64|u32|usize|i64|i32|bool)\s*\)\s*;'
+      - hook: PreToolUse
+        tool: Edit
+        file: "examples/**/*.rs"
+        new_content:
+          - kind: Regex
+            pattern: '(?m)^\s*pub\s+struct\s+[A-Z][A-Za-z0-9_]*(?:Id|Name|Path|Text|Key|Token|Config)\s*\(\s*pub\s+(?:String|PathBuf|u64|u32|usize|i64|i32|bool)\s*\)\s*;'
+      - hook: PreToolUse
+        tool: Write
+        file: "build.rs"
+        content:
+          - kind: Regex
+            pattern: '(?m)^\s*pub\s+struct\s+[A-Z][A-Za-z0-9_]*(?:Id|Name|Path|Text|Key|Token|Config)\s*\(\s*pub\s+(?:String|PathBuf|u64|u32|usize|i64|i32|bool)\s*\)\s*;'
+      - hook: PreToolUse
+        tool: Edit
+        file: "build.rs"
+        new_content:
+          - kind: Regex
+            pattern: '(?m)^\s*pub\s+struct\s+[A-Z][A-Za-z0-9_]*(?:Id|Name|Path|Text|Key|Token|Config)\s*\(\s*pub\s+(?:String|PathBuf|u64|u32|usize|i64|i32|bool)\s*\)\s*;'

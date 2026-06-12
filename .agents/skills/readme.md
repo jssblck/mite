@@ -1,9 +1,10 @@
 # Repo-Local Rust Skills
 
-This directory contains two Rust guidance sources:
+This directory contains three Rust guidance sources:
 
 - `rust-skills/`: installed from `leonardomso/rust-skills` at commit `89910e8585331dabbecd400ae132b4070ecf24af`.
 - `rust100k-*`: Mite-specific skills derived from Matklad's Rust100k article index at https://matklad.github.io/2021/09/05/Rust100k.html.
+- `parse-dont-validate/` and `names-are-not-type-safety/`: Mite-specific skills derived from Alexis King's articles at https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/ and https://lexi-lambda.github.io/blog/2020/11/01/names-are-not-type-safety/.
 
 ## Conflict Decisions
 
@@ -32,6 +33,8 @@ Nudge is intentionally strict for high-confidence file-pattern policies:
 - New Cargo integration test crates are blocked.
 - Doctests are not disabled.
 - `mockall`, `#[automock]`, and first-party `Mock*` Rust identifiers are rejected.
+- New `validate*` or `parse*` Rust APIs returning `Result<()>` are rejected; boundary checks must return refined data.
+- Public transparent primitive/string/path tuple wrappers with domain-label names are rejected; use private fields plus parser/smart constructors, or a type alias.
 - `#[inline(always)]` is rejected unless the policy is deliberately changed after measurement.
 - `docs/architecture.md` rejects fragile local Markdown links.
 
@@ -39,9 +42,11 @@ Cargo/Clippy config enforces what fits Rust-native tooling:
 
 - `Cargo.toml` keeps explicit Clippy lint groups.
 - `clippy::inline_always` is denied.
+- `clippy::unnecessary_wraps` is denied to catch functions that claim fallibility or value production without needing it.
 
 Some decisions remain review rules because they require context or absence checks that do not fit pure Nudge/Cargo/Clippy config:
 
 - Inline test modules are reported as warnings. Migrate them to sibling `tests.rs` files when the relevant tests are touched.
 - `docs/architecture.md` must keep its required sections and important boundary terms.
 - Public generic and `impl Trait` functions are allowed for Mite today, but should be revisited if build-time evidence changes.
+- Whether a wrapper type is useful still needs review when the invariant cannot be seen from the declaration alone.

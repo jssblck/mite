@@ -15,10 +15,9 @@ use super::{
     REC_MIN_WIDTH, REC_OPT_WIDTH,
 };
 
-pub(super) fn ensure_ort() -> Result<()> {
+pub(super) fn ensure_ort() {
     static INIT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let _ = INIT.get_or_init(|| ort::init().with_name("mite").commit());
-    Ok(())
 }
 
 /// Which model a session is for; selects the TensorRT optimization-profile shape
@@ -49,7 +48,7 @@ pub(super) fn commit_session(
     runtime: &RuntimeConfig,
     kind: ModelKind,
 ) -> Result<Session> {
-    ensure_ort()?;
+    ensure_ort();
 
     let label = kind.label();
     let try_trt = matches!(runtime.backend, RuntimeBackend::NvidiaTensorRtThenCuda);

@@ -60,7 +60,7 @@ struct CaptureMeta<'a> {
 /// Write a debug capture folder and return its path.
 pub fn write_capture(input: &CaptureInput) -> Result<PathBuf> {
     let captured_unix_ms = unix_ms();
-    let dir = captures_dir()?.join(format!("{CAPTURE_DIR_PREFIX}{captured_unix_ms}"));
+    let dir = captures_dir().join(format!("{CAPTURE_DIR_PREFIX}{captured_unix_ms}"));
     fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
 
     let underlying = dir.join(UNDERLYING_IMAGE_NAME);
@@ -124,11 +124,11 @@ fn composite(frame: &RgbImage, overlay_w: i32, overlay_h: i32, bgra: &[u8]) -> R
     out
 }
 
-fn captures_dir() -> Result<PathBuf> {
+fn captures_dir() -> PathBuf {
     let base = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    Ok(base.join(CAPTURE_ROOT_DIR).join(CAPTURE_SUBDIR))
+    base.join(CAPTURE_ROOT_DIR).join(CAPTURE_SUBDIR)
 }
 
 #[cfg(test)]

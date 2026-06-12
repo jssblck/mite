@@ -1,15 +1,15 @@
 use std::fs;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct AppConfig {
     pub runtime: RuntimeConfig,
     pub models: ModelConfig,
-    pub pipeline: PipelineConfig,
+    pub pipeline: CheckedPipelineConfig,
     pub overlay: OverlayConfig,
 }
 
@@ -18,13 +18,12 @@ impl AppConfig {
         let path = path.as_ref();
         let raw = fs::read_to_string(path)
             .with_context(|| format!("failed to read config {}", path.display()))?;
-        let config: AppConfig = toml::from_str(&raw)
-            .with_context(|| format!("failed to parse config {}", path.display()))?;
-        config
-            .pipeline
-            .validate()
-            .with_context(|| format!("invalid pipeline config in {}", path.display()))?;
-        Ok(config)
+        Self::parse_toml(&raw).with_context(|| format!("invalid config {}", path.display()))
+    }
+
+    pub fn parse_toml(raw: &str) -> Result<Self> {
+        let raw_config: RawAppConfig = toml::from_str(raw).context("failed to parse config")?;
+        raw_config.parse()
     }
 
     pub fn write_default(path: impl AsRef<Path>) -> Result<()> {
@@ -35,6 +34,26 @@ impl AppConfig {
                 .with_context(|| format!("failed to create {}", parent.display()))?;
         }
         fs::write(path, text).with_context(|| format!("failed to write {}", path.display()))
+    }
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default)]
+struct RawAppConfig {
+    runtime: RuntimeConfig,
+    models: ModelConfig,
+    pipeline: PipelineConfig,
+    overlay: OverlayConfig,
+}
+
+impl RawAppConfig {
+    fn parse(self) -> Result<AppConfig> {
+        Ok(AppConfig {
+            runtime: self.runtime,
+            models: self.models,
+            pipeline: self.pipeline.parse().context("invalid pipeline config")?,
+            overlay: self.overlay,
+        })
     }
 }
 
@@ -192,12 +211,42 @@ pub struct PipelineConfig {
     pub detector_contrast_stretch: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct CheckedPipelineConfig(PipelineConfig);
+
+impl CheckedPipelineConfig {
+    pub fn get(&self) -> &PipelineConfig {
+        &self.0
+    }
+
+    pub fn into_inner(self) -> PipelineConfig {
+        self.0
+    }
+}
+
+impl Deref for CheckedPipelineConfig {
+    type Target = PipelineConfig;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Default for CheckedPipelineConfig {
+    fn default() -> Self {
+        PipelineConfig::default()
+            .parse()
+            .expect("default pipeline config must parse")
+    }
+}
+
 impl PipelineConfig {
     /// Reject values that are nonsensical or would only fail deep in the
     /// pipeline: fractions outside `[0, 1]`, a zero downscale, or a min long
-    /// side above the max. Called by [`AppConfig::load`] so a bad config fails
-    /// fast at the boundary with a clear message.
-    pub fn validate(&self) -> Result<()> {
+    /// side above the max. Returns a checked wrapper so callers preserve that
+    /// proof instead of discarding it.
+    pub fn parse(self) -> Result<CheckedPipelineConfig> {
         for (name, value) in [
             (
                 "detector_probability_threshold",
@@ -261,7 +310,7 @@ impl PipelineConfig {
                 self.detector_unclip_ratio
             );
         }
-        Ok(())
+        Ok(CheckedPipelineConfig(self))
     }
 
     /// Detector input long side for a frame whose native long side is `native`.
@@ -346,7 +395,7 @@ mod tests {
     #[test]
     fn default_config_round_trips() {
         let text = toml::to_string_pretty(&AppConfig::default()).unwrap();
-        let decoded: AppConfig = toml::from_str(&text).unwrap();
+        let decoded = AppConfig::parse_toml(&text).unwrap();
         assert_eq!(
             decoded.runtime.backend,
             RuntimeBackend::NvidiaTensorRtThenCuda
@@ -357,26 +406,26 @@ mod tests {
 
     #[test]
     fn load_rejects_out_of_range_pipeline_values() {
-        assert!(PipelineConfig::default().validate().is_ok());
+        assert!(PipelineConfig::default().parse().is_ok());
 
         let bad_ratio = PipelineConfig {
             min_recognition_confidence: 1.5,
             ..PipelineConfig::default()
         };
-        assert!(bad_ratio.validate().is_err());
+        assert!(bad_ratio.parse().is_err());
 
         let inverted = PipelineConfig {
             detector_min_long_side: 4000,
             detector_max_long_side: 1920,
             ..PipelineConfig::default()
         };
-        assert!(inverted.validate().is_err());
+        assert!(inverted.parse().is_err());
 
         let zero_downscale = PipelineConfig {
             detector_downscale: 0.0,
             ..PipelineConfig::default()
         };
-        assert!(zero_downscale.validate().is_err());
+        assert!(zero_downscale.parse().is_err());
     }
 
     #[test]

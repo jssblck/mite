@@ -34,3 +34,4 @@ complexity = { level = "warn", priority = -1 }
 perf = { level = "warn", priority = -1 }
 style = { level = "warn", priority = -1 }
 inline_always = "deny"
+unnecessary_wraps = "deny"

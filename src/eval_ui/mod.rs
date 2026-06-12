@@ -152,7 +152,7 @@ impl ServerState {
     fn resolve_bundle_image(&self, bundle_rel: &str) -> Result<PathBuf> {
         let bundle_path = self.resolve_existing(bundle_rel)?;
         ensure_eval_bundle(&bundle_path)?;
-        find_bundle_image(&bundle_path)?.with_context(|| {
+        find_bundle_image(&bundle_path).with_context(|| {
             format!(
                 "{} does not contain underlying.png/jpg",
                 bundle_path.display()
@@ -186,7 +186,7 @@ impl ServerState {
         } else {
             default_eval_spec(&image_path)?
         };
-        let validation_error = eval::validate_eval_spec(&spec)
+        let validation_error = eval::parse_eval_spec(spec.clone())
             .err()
             .map(|error| error.to_string());
         let raw = serde_json::to_string_pretty(&spec)?;
@@ -213,8 +213,8 @@ impl ServerState {
                 spec.source_capture = Some("capture.json".to_string());
             }
         }
-        eval::validate_eval_spec(&spec)?;
-        artifact::write_json_pretty(&label_path, &spec)?;
+        let spec = eval::parse_eval_spec(spec)?;
+        artifact::write_json_pretty(&label_path, spec.get())?;
         self.load_label(bundle_rel)
     }
 
@@ -241,7 +241,6 @@ impl ServerState {
         let label_path = label_path_for_image(&image_path)?;
         let report = if label_path.exists() {
             let spec = eval::load_eval_spec(&label_path)?;
-            eval::validate_eval_spec(&spec)?;
             Some(eval::score_ocr_lookup(
                 &image_path,
                 &label_path,
@@ -570,7 +569,7 @@ struct DetectionRunResponse {
 
 fn scan_eval_bundles(root: &Path, rel_dir: &Path, bundles: &mut Vec<BundleEntry>) -> Result<()> {
     let dir = root.join(rel_dir);
-    if let Some(image_path) = find_bundle_image(&dir)? {
+    if let Some(image_path) = find_bundle_image(&dir) {
         bundles.push(summarize_bundle(root, &dir, &image_path)?);
         return Ok(());
     }
@@ -593,12 +592,8 @@ fn summarize_bundle(root: &Path, bundle_path: &Path, image_path: &Path) -> Resul
     let label_path = label_path_for_image(image_path)?;
     let capture_path = image_path.with_file_name("capture.json");
     let (detection_count, ignored_count, label_error) = if label_path.exists() {
-        match eval::load_eval_spec(&label_path).and_then(|spec| {
-            let counts = (spec.detections.len(), spec.ignored.len());
-            eval::validate_eval_spec(&spec)?;
-            Ok(counts)
-        }) {
-            Ok((detections, ignored)) => (detections, ignored, None),
+        match eval::load_eval_spec(&label_path) {
+            Ok(spec) => (spec.detections.len(), spec.ignored.len(), None),
             Err(error) => (0, 0, Some(error.to_string())),
         }
     } else {
@@ -695,17 +690,17 @@ fn ensure_eval_bundle(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn find_bundle_image(bundle_path: &Path) -> Result<Option<PathBuf>> {
+fn find_bundle_image(bundle_path: &Path) -> Option<PathBuf> {
     if !bundle_path.is_dir() {
-        return Ok(None);
+        return None;
     }
     for name in ["underlying.png", "underlying.jpg", "underlying.jpeg"] {
         let image_path = bundle_path.join(name);
         if image_path.is_file() {
-            return Ok(Some(image_path));
+            return Some(image_path);
         }
     }
-    Ok(None)
+    None
 }
 
 fn image_content_type(path: &Path) -> &'static str {

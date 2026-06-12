@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use mite::dictionary::Dictionary;
-use mite::eval::{EvalSpec, ExpectedToken, draft_expected_tokens, validate_eval_spec};
+use mite::eval::{EvalSpec, ExpectedToken, draft_expected_tokens, parse_eval_spec};
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -137,7 +137,7 @@ fn main() -> Result<()> {
             rewritten += 1;
         }
         if changed {
-            validate_eval_spec(&spec)
+            parse_eval_spec(spec.clone())
                 .with_context(|| format!("rewritten spec invalid: {}", path.display()))?;
             if apply {
                 fs::write(&path, serde_json::to_string_pretty(&spec)? + "\n")?;
