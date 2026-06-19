@@ -116,6 +116,19 @@ in this source repository. When that work is needed, manually load
 `eval\.agents\skills\build-mite-eval-from-image\SKILL.md` before labeling or
 auditing captures.
 
+## Private Eval Disclosure
+
+Private eval data may contain third-party IP content. Do not mention private
+corpus names, game/product/source names, collection directory names, capture
+contents, screenshots, transcribed visible text, character or place names, or
+other IP-bearing details in public-facing artifacts such as PR titles, PR
+descriptions, issues, commit messages, release notes, docs, or chat summaries.
+Use neutral terms such as "private eval corpus" or "private eval data" and keep
+validation evidence to non-sensitive command outcomes, aggregate counts, and
+pass/fail status. Local file paths and commands that include private corpus
+directory names may be used in private terminal workflows, but redact or
+generalize them before publishing.
+
 ## Architecture Map
 
 - `src/main.rs`: binary startup and tracing initialization only.
