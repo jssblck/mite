@@ -23,6 +23,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use mite::dictionary::Dictionary;
@@ -152,7 +153,9 @@ fn main() -> Result<()> {
         if apply { "" } else { " [dry run]" }
     );
     if apply && rewritten > 0 {
-        let header = "\n## 2026-06-09 — token arrays aligned to the documented matrix\n\n\
+        let date = current_utc_date()?;
+        let header = format!(
+            "\n## {date} - token arrays aligned to the documented matrix\n\n\
             The corpus labeled the same constructions two ways in different\n\
             annotation passes (merged vs split copula, split vs fused truncated\n\
             titles, split vs single-value dates, bracket-fused fragments). The\n\
@@ -162,16 +165,41 @@ fn main() -> Result<()> {
             token structure already matched and that differ only in glosses,\n\
             POS lists, or furigana shape are mechanical refreshes to the\n\
             current JMdict snapshot and popup rules. Curator annotation notes\n\
-            on unchanged-span tokens were preserved.\n\n";
+            on unchanged-span tokens were preserved.\n\n"
+        );
         fs::write(
             "eval/LABEL-CHANGES.md",
-            fs::read_to_string("eval/LABEL-CHANGES.md").unwrap_or_default() + header + &log,
+            fs::read_to_string("eval/LABEL-CHANGES.md").unwrap_or_default() + &header + &log,
         )?;
         println!("logged to eval/LABEL-CHANGES.md");
     } else {
         print!("{log}");
     }
     Ok(())
+}
+
+fn current_utc_date() -> Result<String> {
+    let days = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_secs()
+        / 86_400;
+    let (year, month, day) = civil_date_from_unix_days(days as i64);
+    Ok(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+fn civil_date_from_unix_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if month <= 2 { 1 } else { 0 };
+    (year, month, day)
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {

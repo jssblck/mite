@@ -756,6 +756,43 @@ const DOMAIN_UNKNOWN_TERMS: &[&str] = &[
     "機...",
     "鋭...",
     "1回",
+    "帝江号",
+    "オーリレン",
+    "行舟",
+    "清波砦",
+    "緋珀",
+    "O.M.V.",
+    "景玉谷",
+    "赫結",
+    "アブリー",
+    "アルデリア",
+    "ポグラニチニク",
+    "ラストライト",
+    "アーツ",
+    "橘杏咲",
+    "深潜",
+    "赤晶玉",
+    "付術",
+    "2回目",
+    "5段",
+    "サンドリーフ",
+    "シトローム",
+    "基核",
+    "宏山選剣局",
+    "中闇石",
+    "1回目",
+    "2段",
+    "アスタロン",
+    "ウルフガード",
+    "クラヴェンガー",
+    "グレーリリ",
+    "セシュカ",
+    "フローライト",
+    "蕎花",
+    "赤纓",
+    "切骨",
+    "文明地帯協定",
+    "狼の血",
 ];
 
 /// A single dictionary sense: its parts of speech and English glosses.
@@ -4732,7 +4769,7 @@ fn unknown_surface_token(surface: String) -> Token {
 }
 
 fn source_pos_for_unknown_surface(surface: &str) -> Option<LinderaPos> {
-    is_ascii_abbreviation_surface(surface).then_some(LinderaPos::Other)
+    (surface == "O.M.V." || is_ascii_abbreviation_surface(surface)).then_some(LinderaPos::Other)
 }
 
 fn is_ascii_abbreviation_surface(surface: &str) -> bool {
@@ -5478,6 +5515,25 @@ mod tests {
         let wing_comet = dict.analyze_line("ウィングコメット");
         assert_eq!(wing_comet[0].surface, "ウィングコメット");
         assert!(!wing_comet[0].is_known());
+    }
+
+    #[test]
+    fn merges_additional_exact_domain_unknown_terms() {
+        let dict = Dictionary::from_entries(vec![
+            entry(&["帝"], &["みかど"], "n", &["emperor"]),
+            entry(&["江"], &["え"], "n", &["inlet"]),
+            entry(&["号"], &["ごう"], "n", &["number"]),
+            entry(&["回"], &["かい"], "ctr", &["counter"]),
+            entry(&["目"], &["め"], "n", &["ordinal"]),
+        ]);
+
+        let ship = dict.analyze_line("帝江号選択");
+        assert_eq!(ship[0].surface, "帝江号");
+        assert!(!ship[0].is_known());
+
+        let second_time = dict.analyze_line("2回目");
+        assert_eq!(second_time[0].surface, "2回目");
+        assert!(!second_time[0].is_known());
     }
 
     #[test]
@@ -6782,6 +6838,14 @@ mod tests {
 
         assert!(!token.is_known());
         assert_eq!(token.source_pos, Some(LinderaPos::Other));
+
+        let dotted = unknown_surface_token("O.M.V.".to_string());
+        assert!(!dotted.is_known());
+        assert_eq!(dotted.source_pos, Some(LinderaPos::Other));
+
+        let mixed_dotted = unknown_surface_token("B.1.N.G.O.".to_string());
+        assert!(!mixed_dotted.is_known());
+        assert_eq!(mixed_dotted.source_pos, None);
     }
 
     #[test]
