@@ -1,0 +1,38 @@
+---
+/*
+  Section heading: a constrained-width title with an optional lede paragraph.
+  Pass the heading via the `title` slot (so it can carry the みて term) and the
+  optional lede as default slotted content.
+*/
+interface Props {
+  id?: string;
+}
+const { id } = Astro.props;
+const hasLede = Astro.slots.has("default");
+---
+
+<div class="section-head" id={id}>
+  <h2 class="section-head-title"><slot name="title" /></h2>
+  {
+    hasLede && (
+      <p class="measure section-head-lede">
+        <slot />
+      </p>
+    )
+  }
+</div>
+
+<style>
+  .section-head {
+    max-width: 42rem;
+  }
+  .section-head-title {
+    font-size: clamp(1.85rem, 4vw, 2.75rem);
+    font-weight: 700;
+  }
+  .section-head-lede {
+    margin: 1.25rem 0 0;
+    font-size: 1.125rem;
+    color: var(--color-ink-2);
+  }
+</style>

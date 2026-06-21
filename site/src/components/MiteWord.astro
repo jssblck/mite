@@ -1,0 +1,21 @@
+---
+/*
+  Plain みて in the Japanese face, with an accessible name of "Mite". Use inside
+  already-interactive elements (the logo link, the Get button) where the
+  definition popover cannot nest a second hover target.
+*/
+interface Props {
+  class?: string;
+}
+const { class: className } = Astro.props;
+---
+
+<span lang="ja" role="img" aria-label="Mite" class={`font-jp ${className ?? ""}`}>
+  みて
+</span>
+
+<style>
+  .font-jp {
+    font-family: var(--font-jp);
+  }
+</style>

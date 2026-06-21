@@ -1,0 +1,32 @@
+{
+  "short_name": "Mite",
+  "name": "Mite: read Japanese where it lives",
+  "description": "Local, low-latency OCR overlay for reading Japanese in games, visual novels, and Windows apps.",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any"
+    },
+    {
+      "src": "favicon.ico",
+      "sizes": "32x32",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#141519",
+  "background_color": "#141519"
+}

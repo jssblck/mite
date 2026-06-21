@@ -1,0 +1,294 @@
+---
+import Footer from "../components/Footer.astro";
+import Header from "../components/Header.astro";
+import Icon from "../components/Icon.astro";
+import MiteTerm from "../components/MiteTerm.astro";
+import MiteText from "../components/MiteText.astro";
+import MiteWord from "../components/MiteWord.astro";
+import { GITHUB_URL, RELEASES_URL, SITE_DESCRIPTION } from "../data/sentences";
+import Base from "../layouts/Base.astro";
+
+const FAQ_TITLE = "Mite FAQ: private, local Japanese OCR for Windows";
+---
+
+<Base title={FAQ_TITLE} description={SITE_DESCRIPTION}>
+  <Header />
+  <main class="container faq">
+    <div class="faq-inner">
+      <a href="/" class="mono faq-back">
+        <Icon name="arrow-left" size={16} /> Back to home
+      </a>
+      <h1 class="faq-title">Questions, answered plainly.</h1>
+      <p class="measure faq-lede">
+        What <MiteTerm /> is, where it runs, and what it does and does not do. No
+        hedging.
+      </p>
+
+      <div class="prose-mite faq-groups">
+        <section>
+          <h2 class="tick-label faq-group-title">Privacy and trust</h2>
+          <dl class="faq-list">
+            <div class="faq-item">
+              <dt class="faq-q"><MiteText text="Is Mite really fully local?" /></dt>
+              <dd class="measure faq-a">
+                Yes. Capture, OCR, segmentation, and dictionary lookup all run on
+                your machine. There is no cloud OCR and no network round-trip:
+                nothing about what you are reading is sent off the device.
+                Because <MiteTerm /> is open source under AGPL-3.0, you can read the
+                code and confirm it yourself.
+              </dd>
+            </div>
+            <div class="faq-item">
+              <dt class="faq-q"><MiteText text="Is it free and open source?" /></dt>
+              <dd class="measure faq-a">
+                Both. <MiteTerm /> is licensed AGPL-3.0. The capture path, the OCR
+                models, the segmentation, and the lookup are all open to read,
+                audit, and build on.
+              </dd>
+            </div>
+          </dl>
+        </section>
+
+        <section>
+          <h2 class="tick-label faq-group-title">Where it runs</h2>
+          <dl class="faq-list">
+            <div class="faq-item">
+              <dt class="faq-q">
+                <MiteText text="Which platforms does Mite support?" />
+              </dt>
+              <dd class="measure faq-a">
+                <MiteTerm /> is Windows-first (Windows 10 and 11) and optimized for
+                NVIDIA hardware. It is not built for macOS or Linux. The overlay is
+                a native Win32 layer, so the experience is specific to Windows.
+              </dd>
+            </div>
+            <div class="faq-item">
+              <dt class="faq-q"><MiteText text="Do I need an NVIDIA GPU?" /></dt>
+              <dd class="measure faq-a">
+                An NVIDIA GPU is recommended for the fastest path. <MiteTerm /> uses
+                TensorRT where it can, falls back to CUDA, and falls back again to
+                CPU, so it runs without a dedicated GPU, just not as quickly as the
+                reference numbers.
+              </dd>
+            </div>
+            <div class="faq-item">
+              <dt class="faq-q"><MiteText text="Which apps does it work with?" /></dt>
+              <dd class="measure faq-a">
+                <MiteTerm /> captures the pixels of a target window, so it does not
+                need any cooperation from the app it reads. That covers native
+                games, visual novels, manga and comic readers, and video (paused or
+                live). If Windows can put it on screen, <MiteTerm /> can read it.
+              </dd>
+            </div>
+          </dl>
+        </section>
+
+        <section>
+          <h2 class="tick-label faq-group-title">Speed and accuracy</h2>
+          <dl class="faq-list">
+            <div class="faq-item">
+              <dt class="faq-q"><MiteText text="How fast is it?" /></dt>
+              <dd class="measure faq-a">
+                On the reference NVIDIA setup, a fresh full-screen read of a 4K game
+                frame takes about a fifth of a second (roughly 200 ms at p95 on the
+                native TensorRT path). In practice the definition is there before
+                you have finished looking. Your hardware sets the exact number.
+              </dd>
+            </div>
+            <div class="faq-item">
+              <dt class="faq-q"><MiteText text="How accurate is the OCR?" /></dt>
+              <dd class="measure faq-a">
+                Measured against several hundred hand-checked 4K screenshots, about
+                94 of every 100 text lines are read perfectly, and roughly one
+                character in eighty is wrong or missing. Mistakes concentrate in
+                tiny, faint, or heavily stylized text; ordinary dialogue and menus
+                read very reliably.
+              </dd>
+            </div>
+            <div class="faq-item">
+              <dt class="faq-q">
+                <MiteText text="What happens when it gets a character wrong?" />
+              </dt>
+              <dd class="measure faq-a">
+                When a misread happens, it usually shows up as an unknown word
+                rather than a confident wrong definition, so the tool fails
+                honestly. You can trust that a definition <MiteTerm /> shows is a
+                definition it actually found.
+              </dd>
+            </div>
+          </dl>
+        </section>
+
+        <section>
+          <h2 class="tick-label faq-group-title">What it does</h2>
+          <dl class="faq-list">
+            <div class="faq-item">
+              <dt class="faq-q">
+                <MiteText text="Does Mite translate whole sentences?" />
+              </dt>
+              <dd class="measure faq-a">
+                No, and that is on purpose. <MiteTerm /> is a reading aid, not a
+                machine translator. It gives you the reading, the dictionary form,
+                English glosses, inflection notes, and furigana for each word, so
+                you keep reading the Japanese yourself instead of replacing it with
+                English.
+              </dd>
+            </div>
+            <div class="faq-item">
+              <dt class="faq-q">
+                <MiteText text="How is this different from Yomitan or 10ten?" />
+              </dt>
+              <dd class="measure faq-a">
+                Those are excellent browser extensions, and for ordinary web pages
+                they are the better fit: they read the page's own text directly.
+                <MiteTerm />'s niche is everything outside the browser: native games,
+                visual novels, and apps a browser extension can never reach. Use the
+                right tool for where the text is.
+              </dd>
+            </div>
+            <div class="faq-item">
+              <dt class="faq-q">
+                <MiteText text="Will the overlay get in the way of the game?" />
+              </dt>
+              <dd class="measure faq-a">
+                The overlay is layered and click-through. It does not steal focus or
+                interrupt game input: your clicks and keys pass straight through to
+                the game. <MiteTerm /> sits unnoticed until you want a reading, then
+                gets out of the way.
+              </dd>
+            </div>
+            <div class="faq-item">
+              <dt class="faq-q"><MiteText text="What is it built on?" /></dt>
+              <dd class="measure faq-a">
+                PP-OCRv5 detection and recognition models run through ONNX Runtime;
+                Lindera segments the recognized text into words; and definitions
+                come from JMdict, ordered by JPDB frequency so the most likely
+                meaning leads.
+              </dd>
+            </div>
+          </dl>
+        </section>
+
+        <section>
+          <h2 class="tick-label faq-group-title">Getting it</h2>
+          <dl class="faq-list">
+            <div class="faq-item">
+              <dt class="faq-q"><MiteText text="How do I install Mite?" /></dt>
+              <dd class="measure faq-a">
+                <MiteTerm /> is open source, and the canonical setup path is the
+                repository's bootstrap script: clone the repo, run <code
+                  class="mono faq-code">bootstrap-dev.ps1</code> once in PowerShell,
+                and you are reading. See <a
+                  href={GITHUB_URL}
+                  target="_blank"
+                  rel="noreferrer">the GitHub repository</a> for the full quick
+                start.
+              </dd>
+            </div>
+          </dl>
+        </section>
+      </div>
+
+      <div class="faq-cta">
+        <a href={GITHUB_URL} class="btn btn-primary" target="_blank" rel="noreferrer">
+          <Icon name="github" size={16} /> View on GitHub
+        </a>
+        <a href={RELEASES_URL} class="btn btn-ghost" target="_blank" rel="noreferrer">
+          Get <MiteWord />
+        </a>
+      </div>
+    </div>
+  </main>
+  <Footer />
+</Base>
+
+<style>
+  .faq {
+    padding-block: 4rem;
+  }
+  .faq-inner {
+    max-width: 48rem;
+    margin-inline: auto;
+  }
+  .faq-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--color-muted);
+    transition: color 0.16s var(--ease-out);
+  }
+  .faq-back:hover {
+    color: var(--color-ink);
+  }
+  .faq-title {
+    margin-top: 1.5rem;
+    font-size: clamp(2.25rem, 5vw, 3.25rem);
+    font-weight: 800;
+  }
+  .faq-lede {
+    margin-top: 1.25rem;
+    font-size: 1.125rem;
+    color: var(--color-ink-2);
+  }
+  .faq-groups {
+    margin-top: 3.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 3.5rem;
+  }
+  .faq-group-title {
+    margin: 0 0 1.5rem;
+  }
+  .faq-list {
+    margin: 0;
+  }
+  .faq-item {
+    border-top: 1px solid var(--color-line);
+    padding-block: 1.5rem;
+  }
+  .faq-q {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+  .faq-a {
+    margin: 0.625rem 0 0;
+    color: var(--color-ink-2);
+  }
+  .faq-code {
+    color: var(--color-ink);
+  }
+  .faq-cta {
+    margin-top: 4rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    border-top: 1px solid var(--color-line);
+    padding-top: 2.5rem;
+  }
+
+  /* Prose link treatment, scoped to the FAQ body. */
+  .prose-mite {
+    color: var(--color-ink-2);
+  }
+  .prose-mite a {
+    color: var(--color-accent-2);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    text-decoration-color: color-mix(
+      in oklch,
+      var(--color-accent) 40%,
+      transparent
+    );
+  }
+  .prose-mite a:hover {
+    text-decoration-color: var(--color-accent);
+  }
+
+  @media (min-width: 640px) {
+    .faq {
+      padding-block: 6rem;
+    }
+  }
+</style>

@@ -1,0 +1,56 @@
+---
+import { type Sentence, type Word, segText } from "../data/sentences";
+import DefinePopup from "./DefinePopup.astro";
+import Ruby from "./Ruby.astro";
+
+/*
+  A pure-CSS mock of Mite's click-through overlay: per-word grammar highlights
+  with hover / focus definition popups. No JavaScript drives the interaction.
+*/
+interface Props {
+  sentence: Sentence;
+}
+const { sentence } = Astro.props;
+
+// Group trailing punctuation (non-definable tokens) with the word it follows so
+// a lone "。" or "、" can never wrap onto its own line. Each group is one
+// non-breaking flex unit; the line still wraps between groups.
+const groups: { word: Word; index: number }[][] = [];
+sentence.words.forEach((word, index) => {
+  const isPunctuation = !word.define;
+  if (isPunctuation && groups.length > 0) {
+    groups[groups.length - 1].push({ word, index });
+  } else {
+    groups.push([{ word, index }]);
+  }
+});
+
+const labelFor = (word: Word): string | undefined =>
+  word.define ? `${segText(word.define.dict)}: ${word.define.gloss}` : undefined;
+---
+
+<p class="overlay-line" lang="ja">
+  {
+    groups.map((group) => (
+      <span class="word-group">
+        {group.map(({ word, index }) =>
+          !word.define ? (
+            <span class={`word pos-${word.pos}`}>{word.segs[0].base}</span>
+          ) : (
+            <button
+              type="button"
+              class={`word pos-${word.pos}`}
+              data-active={index === sentence.active ? "true" : undefined}
+              aria-label={labelFor(word)}
+            >
+              <span class="word-text" aria-hidden="true">
+                <Ruby segs={word.segs} />
+              </span>
+              <DefinePopup word={word} />
+            </button>
+          ),
+        )}
+      </span>
+    ))
+  }
+</p>
