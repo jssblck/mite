@@ -1,0 +1,24 @@
+---
+import type { Seg } from "../data/sentences";
+
+// Renders a segment list with furigana (rt) sitting on top of each kanji group,
+// centered per segment. Used for both the in-line sentence words and the popup
+// dictionary headword, so they read identically to the app.
+interface Props {
+  segs: Seg[];
+}
+const { segs } = Astro.props;
+---
+
+{
+  segs.map((seg) =>
+    seg.rt ? (
+      <ruby>
+        {seg.base}
+        <rt>{seg.rt}</rt>
+      </ruby>
+    ) : (
+      <span>{seg.base}</span>
+    ),
+  )
+}

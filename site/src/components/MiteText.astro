@@ -1,0 +1,29 @@
+---
+import MiteTerm from "./MiteTerm.astro";
+
+/*
+  Render a plain copy string with every "Mite" (and the possessive "Mite's")
+  shown as the self-defining みて term. Lets string-typed content (the data-driven
+  rows and lists) reuse the same treatment as hand-written markup without
+  sprinkling components through the data.
+*/
+interface Props {
+  text: string;
+}
+const { text } = Astro.props;
+const parts = text.split(/(Mite's|Mite)/g);
+---
+
+{
+  parts.map((part) =>
+    part === "Mite" ? (
+      <MiteTerm />
+    ) : part === "Mite's" ? (
+      <Fragment>
+        <MiteTerm />'s
+      </Fragment>
+    ) : (
+      part
+    ),
+  )
+}

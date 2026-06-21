@@ -1,0 +1,471 @@
+/*
+  Mite: global reset, base typography, and the shared classes used across more
+  than one component (buttons, the container, the part-of-speech color channel,
+  Japanese/furigana typography, the overlay demo, and on-load motion).
+
+  Component-specific layout lives in each .astro file's scoped <style>. Anything
+  here is genuinely shared.
+*/
+@import "./tokens.css";
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+  overflow-x: clip;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow-x: clip;
+  background-color: var(--color-bg);
+  color: var(--color-ink-2);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.6;
+  font-feature-settings: "ss01", "cv01";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: oklch(0.83 0.115 78 / 0.28);
+  color: var(--color-ink);
+}
+
+/* Focus: the instrument highlighting where you are */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--color-ink);
+  text-wrap: balance;
+  letter-spacing: -0.02em;
+  line-height: 1.04;
+  margin: 0;
+}
+
+p {
+  text-wrap: pretty;
+}
+
+/* Thin custom scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-2) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-line-2);
+  border-radius: 99px;
+  border: 3px solid var(--color-bg);
+}
+
+/* ----------------------------------------------------------------------------
+   Typography helpers
+---------------------------------------------------------------------------- */
+
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum", "zero";
+}
+
+/* Eyebrow used as a deliberate, single brand system: a calibration-style
+   label with a leading tick. Reserved for major section heads, not every block. */
+.tick-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+.tick-label::before {
+  content: "";
+  width: 1.25rem;
+  height: 1px;
+  background: var(--color-accent);
+}
+
+.measure {
+  max-width: 65ch;
+}
+
+/* ----------------------------------------------------------------------------
+   Buttons
+---------------------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  height: 2.875rem;
+  padding: 0 1.25rem;
+  border-radius: var(--radius);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition:
+    background-color 0.18s var(--ease-out),
+    border-color 0.18s var(--ease-out),
+    color 0.18s var(--ease-out),
+    transform 0.18s var(--ease-out);
+  white-space: nowrap;
+}
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn-primary {
+  background: var(--color-ink);
+  color: oklch(0.16 0.01 256);
+}
+.btn-primary:hover {
+  background: #fff;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--color-ink);
+  border-color: var(--color-line-2);
+}
+.btn-ghost:hover {
+  background: var(--color-surface);
+  border-color: var(--color-muted);
+}
+
+/* ----------------------------------------------------------------------------
+   Layout primitives
+---------------------------------------------------------------------------- */
+
+.container {
+  width: 100%;
+  max-width: 76rem;
+  margin-inline: auto;
+  padding-inline: clamp(1.25rem, 5vw, 2.5rem);
+}
+
+/* Calibration grid: a faint instrument backdrop, kept well below text
+   contrast so it never competes with content. */
+.grid-bg {
+  background-image:
+    linear-gradient(to right, oklch(0.97 0 0 / 0.025) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(0.97 0 0 / 0.025) 1px, transparent 1px);
+  background-size: 64px 64px;
+  -webkit-mask-image: radial-gradient(
+    ellipse 80% 70% at 50% 0%,
+    #000 0%,
+    transparent 75%
+  );
+  mask-image: radial-gradient(ellipse 80% 70% at 50% 0%, #000 0%, transparent 75%);
+}
+
+/* ----------------------------------------------------------------------------
+   Part-of-speech color utilities (product demonstration contexts only)
+---------------------------------------------------------------------------- */
+
+.pos-particle {
+  --pos: var(--pos-particle);
+  --pos-soft: var(--pos-particle-soft);
+}
+.pos-noun {
+  --pos: var(--pos-noun);
+  --pos-soft: var(--pos-noun-soft);
+}
+.pos-verb {
+  --pos: var(--pos-verb);
+  --pos-soft: var(--pos-verb-soft);
+}
+.pos-adjective {
+  --pos: var(--pos-adjective);
+  --pos-soft: var(--pos-adjective-soft);
+}
+.pos-adverb {
+  --pos: var(--pos-adverb);
+  --pos-soft: var(--pos-adverb-soft);
+}
+.pos-other {
+  --pos: var(--pos-other);
+  --pos-soft: var(--pos-other-soft);
+}
+
+/* ----------------------------------------------------------------------------
+   Japanese typography + furigana
+---------------------------------------------------------------------------- */
+
+ruby {
+  ruby-align: center;
+}
+rt {
+  font-family: var(--font-jp);
+  font-size: 0.5em;
+  font-weight: 500;
+  color: var(--color-muted);
+  letter-spacing: 0;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ----------------------------------------------------------------------------
+   Overlay demo: the centerpiece. A pure-CSS mock of Mite's click-through
+   overlay: per-word grammar highlights + a hover/focus definition popup.
+---------------------------------------------------------------------------- */
+
+.overlay-line {
+  font-family: var(--font-jp);
+  font-weight: 500;
+  font-size: clamp(1.35rem, 5.2vw, 2.75rem);
+  letter-spacing: 0.02em;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: center;
+  row-gap: 0.75rem;
+  margin: 0;
+}
+
+/* One non-breaking unit: a word plus any punctuation that trails it, so a lone
+   "。" or "、" never wraps to its own line. The overlay-line wraps between
+   groups, not inside them. */
+.word-group {
+  display: inline-flex;
+  align-items: flex-end;
+}
+
+.word {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  color: var(--color-ink);
+  cursor: default;
+  padding: 0.05em 0.06em;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  /* The grammar-color channel: a calm underline tint per part of speech. */
+  box-shadow: inset 0 -0.14em 0 -0.02em var(--pos-soft);
+  border-radius: 3px;
+  transition:
+    background-color 0.16s var(--ease-out),
+    box-shadow 0.16s var(--ease-out);
+}
+.word:hover,
+.word:focus-visible,
+.word[data-active="true"] {
+  background: var(--pos-soft);
+  box-shadow: inset 0 -0.14em 0 -0.02em var(--pos);
+  outline: none;
+}
+
+.word-text {
+  display: inline-block;
+  line-height: 1.05;
+}
+
+/* The definition popup */
+.define-pop {
+  position: absolute;
+  bottom: calc(100% + 0.7rem);
+  left: 50%;
+  z-index: var(--z-popup);
+  width: max-content;
+  max-width: min(17rem, calc(100vw - 1.5rem));
+  transform: translate(-50%, 6px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  text-align: left;
+  background: oklch(0.198 0.011 256 / 0.86);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--color-line-2);
+  border-radius: 0.6rem;
+  box-shadow:
+    0 1px 0 0 oklch(0.99 0 0 / 0.04) inset,
+    0 18px 40px -12px oklch(0 0 0 / 0.7);
+  padding: 0.75rem 0.85rem;
+  transition:
+    opacity 0.18s var(--ease-out),
+    transform 0.18s var(--ease-out);
+}
+.word:hover .define-pop,
+.word:focus-visible .define-pop,
+.word[data-active="true"] .define-pop {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+}
+/* When the reader engages any word, retire the default popup so only the
+   hovered/focused definition shows. */
+.overlay-line:hover .word[data-active="true"]:not(:hover) .define-pop,
+.overlay-line:focus-within
+  .word[data-active="true"]:not(:focus-visible)
+  .define-pop {
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, 6px);
+}
+/* arrow */
+.define-pop::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  width: 9px;
+  height: 9px;
+  background: oklch(0.198 0.011 256 / 0.95);
+  border-right: 1px solid var(--color-line-2);
+  border-bottom: 1px solid var(--color-line-2);
+  transform: translate(-50%, -5px) rotate(45deg);
+}
+
+.define-pop > * {
+  display: block;
+}
+.define-dict {
+  font-family: var(--font-jp);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-ink);
+  /* Room for furigana to sit above the kanji without crowding the popup edge. */
+  line-height: 1.15;
+}
+.define-dict ruby {
+  /* Furigana on top of each kanji group, centered, matching the overlay. */
+  ruby-position: over;
+}
+.define-pos {
+  display: inline-block;
+  margin-top: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pos);
+  border: 1px solid color-mix(in oklch, var(--pos) 45%, transparent);
+  background: var(--pos-soft);
+  border-radius: 99px;
+  padding: 0.1rem 0.5rem;
+}
+.define-gloss {
+  margin: 0.5rem 0 0;
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+  line-height: 1.4;
+  color: var(--color-ink-2);
+}
+.define-note {
+  margin: 0.5rem 0 0;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--color-line);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--color-muted);
+}
+.define-note b {
+  color: var(--color-ink-2);
+  font-weight: 600;
+}
+
+/* The brand name みて set inline in prose as a self-defining dictionary term:
+   hovering reveals the same popup the overlay uses. Verb-tinted, since みて is
+   the te-form of 見る. Non-interactive (no action, not a tab stop). */
+.mite-term {
+  position: relative;
+  font-family: var(--font-jp);
+  cursor: help;
+  border-radius: 3px;
+  padding: 0 0.06em;
+  box-shadow: inset 0 -0.11em 0 -0.01em var(--pos-soft);
+  transition:
+    background-color 0.16s var(--ease-out),
+    box-shadow 0.16s var(--ease-out);
+}
+.mite-term:hover {
+  background: var(--pos-soft);
+  box-shadow: inset 0 -0.11em 0 -0.01em var(--pos);
+}
+.mite-term:hover .define-pop {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+}
+
+/* The window/terminal "traffic light" dots, shared by the capture demo and the
+   PowerShell snippet. */
+.capture-dot {
+  width: 0.62rem;
+  height: 0.62rem;
+  border-radius: 99px;
+  background: var(--color-line-2);
+}
+
+/* ----------------------------------------------------------------------------
+   On-load motion: rise choreography. Content is visible by default; animation
+   only enhances where supported.
+---------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(14px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .anim-rise {
+    animation: rise 0.7s var(--ease-out) both;
+  }
+  [data-delay="1"] {
+    animation-delay: 0.06s;
+  }
+  [data-delay="2"] {
+    animation-delay: 0.14s;
+  }
+  [data-delay="3"] {
+    animation-delay: 0.24s;
+  }
+  [data-delay="4"] {
+    animation-delay: 0.36s;
+  }
+  [data-delay="5"] {
+    animation-delay: 0.5s;
+  }
+}

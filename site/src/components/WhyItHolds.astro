@@ -1,0 +1,205 @@
+---
+import Icon from "./Icon.astro";
+import SectionHead from "./SectionHead.astro";
+
+const READOUTS = [
+  {
+    icon: "zap",
+    value: "~200",
+    unit: "ms",
+    label: "p95",
+    desc: "A fresh, full-screen read of a 4K frame on the reference NVIDIA setup (the native TensorRT path). Fast enough to feel instant.",
+  },
+  {
+    icon: "target",
+    value: "94",
+    unit: "/ 100",
+    label: "lines perfect",
+    desc: "Measured against several hundred hand-checked 4K screenshots, about 94 of every 100 text lines are read with zero errors.",
+  },
+  {
+    icon: "scan-text",
+    value: "1",
+    unit: "in 80",
+    label: "characters off",
+    desc: "Roughly one character in eighty is wrong or missing. Errors cluster in tiny, faint, or heavily stylized text. Ordinary dialogue and menus read reliably.",
+  },
+  {
+    icon: "lock",
+    value: "0",
+    unit: "bytes",
+    label: "leave the device",
+    desc: "All OCR and dictionary lookup run locally. No cloud OCR, no network round-trip, nothing sent off your machine.",
+  },
+] as const;
+
+const TRAITS = [
+  {
+    icon: "mouse-pointer-2",
+    t: "Non-intrusive by design",
+    d: "The overlay is layered and click-through. It never steals focus or interrupts game input. It sits unnoticed until you want a reading.",
+  },
+  {
+    icon: "palette",
+    t: "Grammar-aware color",
+    d: "Word-category colors are an information channel tied to grammar, not decoration. Part of speech is legible at a glance.",
+  },
+  {
+    icon: "shield-check",
+    t: "Fails honestly",
+    d: "When a read misses, it usually surfaces as an unknown word rather than a confident wrong definition. You can trust what it shows.",
+  },
+  {
+    icon: "github",
+    t: "Open source",
+    d: "Licensed AGPL-3.0. The capture, the models, the lookup: all of it is open to read, audit, and build on.",
+  },
+] as const;
+---
+
+<section id="why" class="container section why">
+  <SectionHead>
+    <span slot="title"
+      >Built to be trusted in the half-second you give it.</span
+    >
+    A reading tool earns its place on latency and accuracy. A slow or wrong
+    pop-up is worse than none, so these are the numbers that matter.
+  </SectionHead>
+
+  <div class="readouts">
+    {
+      READOUTS.map((r) => (
+        <div class="readout">
+          <Icon name={r.icon} size={20} color="var(--color-accent)" />
+          <div class="readout-row">
+            <span class="readout-value">{r.value}</span>
+            <span class="mono readout-unit">{r.unit}</span>
+          </div>
+          <span class="mono readout-label">{r.label}</span>
+          <p class="readout-desc">{r.desc}</p>
+        </div>
+      ))
+    }
+  </div>
+
+  <div class="traits">
+    {
+      TRAITS.map((t) => (
+        <div class="trait">
+          <span class="trait-icon">
+            <Icon name={t.icon} size={20} />
+          </span>
+          <div>
+            <h3 class="trait-title">{t.t}</h3>
+            <p class="trait-body">{t.d}</p>
+          </div>
+        </div>
+      ))
+    }
+  </div>
+</section>
+
+<style>
+  .section {
+    scroll-margin-top: 6rem;
+    padding-block: 5rem;
+  }
+  .readouts {
+    margin-top: 3.5rem;
+    display: grid;
+    gap: 1rem;
+  }
+  .readout {
+    display: flex;
+    flex-direction: column;
+    border-radius: 0.75rem;
+    border: 1px solid var(--color-line);
+    background: var(--color-bg-2);
+    padding: 1.5rem;
+  }
+  .readout-row {
+    margin-top: 1.25rem;
+    display: flex;
+    align-items: baseline;
+    gap: 0.375rem;
+  }
+  .readout-value {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-feature-settings: "tnum";
+    color: var(--color-ink);
+    letter-spacing: -0.02em;
+    line-height: 1;
+    font-size: 3rem;
+  }
+  .readout-unit {
+    font-size: 1rem;
+    color: var(--color-muted);
+  }
+  .readout-label {
+    margin-top: 0.25rem;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-faint);
+  }
+  .readout-desc {
+    margin: 1rem 0 0;
+    font-size: 0.875rem;
+    color: var(--color-muted);
+  }
+
+  .traits {
+    margin-top: 1rem;
+    display: grid;
+    gap: 1rem;
+  }
+  .trait {
+    display: flex;
+    gap: 1rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--color-line);
+    background: var(--color-bg-2);
+    padding: 1.5rem;
+  }
+  .trait-icon {
+    display: flex;
+    height: 2.5rem;
+    width: 2.5rem;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.5rem;
+    border: 1px solid var(--color-line);
+    background: var(--color-surface);
+    color: var(--color-ink);
+  }
+  .trait-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+  .trait-body {
+    margin: 0.375rem 0 0;
+    font-size: 0.875rem;
+    color: var(--color-muted);
+  }
+
+  @media (min-width: 640px) {
+    .section {
+      padding-block: 7rem;
+    }
+    .readouts {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .traits {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  @media (min-width: 1024px) {
+    .readouts {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+</style>

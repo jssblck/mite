@@ -1,0 +1,115 @@
+---
+import { GITHUB_URL, RELEASES_URL } from "../data/sentences";
+import Icon from "./Icon.astro";
+import MiteWord from "./MiteWord.astro";
+import Wordmark from "./Wordmark.astro";
+
+const NAV = [
+  { href: "/#how", label: "How it works" },
+  { href: "/#why", label: "Accuracy" },
+  { href: "/#fit", label: "Honest fit" },
+  { href: "/faq", label: "FAQ" },
+];
+---
+
+<header class="site-header">
+  <div class="container header-inner">
+    <a href="/" class="brand" aria-label="Mite home">
+      <Wordmark class="brand-mark" />
+    </a>
+
+    <nav class="nav-links" aria-label="Primary">
+      {NAV.map((item) => <a href={item.href}>{item.label}</a>)}
+    </nav>
+
+    <div class="header-actions">
+      <a
+        href={GITHUB_URL}
+        class="gh-icon"
+        aria-label="Mite on GitHub"
+        target="_blank"
+        rel="noreferrer"
+      >
+        <Icon name="github" size={20} />
+      </a>
+      <a
+        href={RELEASES_URL}
+        class="btn btn-primary header-get"
+        target="_blank"
+        rel="noreferrer"
+      >
+        Get <MiteWord />
+      </a>
+    </div>
+  </div>
+</header>
+
+<style>
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: var(--z-sticky);
+    border-bottom: 1px solid var(--color-line);
+    background: var(--color-bg);
+  }
+  .header-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.5rem;
+    height: 4rem;
+  }
+  .brand {
+    font-size: 1.125rem;
+  }
+  .nav-links {
+    display: none;
+    align-items: center;
+    gap: 1.75rem;
+    font-size: 0.875rem;
+    color: var(--color-muted);
+  }
+  .nav-links a {
+    transition: color 0.16s var(--ease-out);
+  }
+  .nav-links a:hover {
+    color: var(--color-ink);
+  }
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .gh-icon {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    height: 2.5rem;
+    width: 2.5rem;
+    border-radius: 0.5rem;
+    color: var(--color-muted);
+    transition:
+      background-color 0.16s var(--ease-out),
+      color 0.16s var(--ease-out);
+  }
+  .gh-icon:hover {
+    background: var(--color-surface);
+    color: var(--color-ink);
+  }
+  .header-get {
+    height: 2.5rem;
+    padding-inline: 1rem;
+    font-size: 0.875rem;
+  }
+
+  @media (min-width: 640px) {
+    .gh-icon {
+      display: inline-flex;
+    }
+  }
+  @media (min-width: 768px) {
+    .nav-links {
+      display: flex;
+    }
+  }
+</style>

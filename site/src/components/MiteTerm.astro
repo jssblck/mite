@@ -1,0 +1,16 @@
+---
+import { MITE_WORD } from "../data/sentences";
+import DefinePopup from "./DefinePopup.astro";
+
+/*
+  The name みて set inline in prose, rendered as a live dictionary term: hovering
+  it reveals the same definition popup the overlay uses, so the brand defines
+  itself. Verb-tinted, since みて is the te-form of 見る. Decorative on purpose:
+  it performs no action and is not a tab stop; assistive tech reads it as "Mite".
+*/
+---
+
+<span class="mite-term pos-verb" role="img" aria-label="Mite">
+  <span lang="ja">みて</span>
+  <DefinePopup word={MITE_WORD} />
+</span>

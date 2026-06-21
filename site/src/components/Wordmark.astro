@@ -1,0 +1,26 @@
+---
+import MiteMark from "./MiteMark.astro";
+import MiteWord from "./MiteWord.astro";
+
+interface Props {
+  class?: string;
+}
+const { class: className } = Astro.props;
+---
+
+<span class={`wordmark ${className ?? ""}`}>
+  <MiteMark size="1.45em" />
+  <MiteWord />
+</span>
+
+<style>
+  .wordmark {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    /* Both the mark (currentColor brackets) and the みて word inherit this. */
+    color: var(--color-ink);
+  }
+</style>

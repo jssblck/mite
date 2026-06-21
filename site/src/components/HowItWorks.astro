@@ -1,0 +1,173 @@
+---
+import Icon from "./Icon.astro";
+import MiteText from "./MiteText.astro";
+import SectionHead from "./SectionHead.astro";
+
+const PIPELINE = [
+  {
+    icon: "crop",
+    title: "Capture",
+    body: "Mite grabs the pixels of the target window: no integration with the game required.",
+    chip: "Win32 capture",
+    pos: "pos-other",
+  },
+  {
+    icon: "scan-text",
+    title: "Read",
+    body: "A detector finds every line; a recognizer reads the characters.",
+    chip: "PP-OCRv5 / ONNX",
+    pos: "pos-noun",
+  },
+  {
+    icon: "boxes",
+    title: "Segment",
+    body: "The recognized line is split into real dictionary words.",
+    chip: "Lindera",
+    pos: "pos-verb",
+  },
+  {
+    icon: "book-open-text",
+    title: "Look up",
+    body: "Each word is matched to definitions, ordered by how common it is.",
+    chip: "JMdict + JPDB",
+    pos: "pos-adjective",
+  },
+  {
+    icon: "layers",
+    title: "Paint",
+    body: "A transparent, click-through overlay draws highlights and hover definitions.",
+    chip: "Win32 layered overlay",
+    pos: "pos-adverb",
+  },
+] as const;
+---
+
+<section id="how" class="how">
+  <div class="container">
+    <SectionHead>
+      <span slot="title">Five stages, on your machine, in about 200 ms.</span>
+      Nothing leaves the device. The whole pipeline runs locally, end to end:
+      capture to definition.
+    </SectionHead>
+
+    <ol class="pipeline">
+      {
+        PIPELINE.map((stage, i) => (
+          <li class={`stage ${stage.pos}`}>
+            <div class="stage-head">
+              <span class="stage-icon">
+                <Icon name={stage.icon} size={18} color="var(--pos)" />
+              </span>
+              <span class="mono stage-num">
+                {String(i + 1).padStart(2, "0")}
+              </span>
+            </div>
+            <h3 class="stage-title">{stage.title}</h3>
+            <p class="stage-body">
+              <MiteText text={stage.body} />
+            </p>
+            <span class={`chip stage-chip ${stage.pos}`}>{stage.chip}</span>
+          </li>
+        ))
+      }
+    </ol>
+
+    <p class="mono fallback-note">
+      <Icon name="cpu" size={16} color="var(--color-accent)" />
+      GPU-accelerated: TensorRT -&gt; CUDA -&gt; CPU, with graceful fallback.
+    </p>
+  </div>
+</section>
+
+<style>
+  .how {
+    scroll-margin-top: 6rem;
+    border-block: 1px solid var(--color-line);
+    background: var(--color-bg-2);
+    padding-block: 5rem;
+  }
+  .pipeline {
+    list-style: none;
+    margin: 3.5rem 0 0;
+    padding: 0;
+    display: grid;
+    gap: 1rem;
+  }
+  .stage {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    border-radius: 0.75rem;
+    border: 1px solid var(--color-line);
+    background: var(--color-bg);
+    padding: 1.25rem;
+  }
+  .stage-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .stage-icon {
+    display: flex;
+    height: 2.25rem;
+    width: 2.25rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.5rem;
+    border: 1px solid var(--color-line);
+    background: var(--color-surface);
+    color: var(--color-ink);
+  }
+  .stage-num {
+    font-size: 0.75rem;
+    color: var(--color-faint);
+  }
+  .stage-title {
+    margin: 0.5rem 0 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+  .stage-body {
+    margin: 0.375rem 0 0;
+    flex: 1;
+    font-size: 0.875rem;
+    color: var(--color-muted);
+  }
+  .chip {
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    line-height: 1.5;
+    color: var(--color-ink);
+    padding: 0.18rem 0.5rem;
+    border-radius: 5px;
+    background: var(--pos-soft);
+    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--pos) 35%, transparent);
+    max-width: 100%;
+    overflow-wrap: break-word;
+  }
+  .stage-chip {
+    margin-top: 1rem;
+    align-self: flex-start;
+  }
+  .fallback-note {
+    margin: 2rem 0 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+    color: var(--color-faint);
+  }
+
+  @media (min-width: 640px) {
+    .how {
+      padding-block: 7rem;
+    }
+  }
+  @media (min-width: 768px) {
+    .pipeline {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 0.75rem;
+    }
+  }
+</style>

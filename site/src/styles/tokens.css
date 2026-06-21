@@ -1,0 +1,62 @@
+/*
+  Mite: design tokens.
+
+  Personality: an invisible precision instrument. Quiet, exact, deferential.
+  Chrome is monochrome (near-black + high-contrast white); the grammar
+  part-of-speech hues appear ONLY where the product is being demonstrated,
+  because in Mite, color is an information channel, not decoration.
+*/
+
+:root {
+  /* Surfaces: cool, near-neutral instrument black */
+  --color-bg: oklch(0.146 0.008 256);
+  --color-bg-2: oklch(0.176 0.009 256);
+  --color-surface: oklch(0.206 0.01 256);
+  --color-surface-2: oklch(0.248 0.011 256);
+  --color-line: oklch(0.305 0.012 256);
+  --color-line-2: oklch(0.42 0.014 256);
+
+  /* Ink ramp: high contrast, AA verified */
+  --color-ink: oklch(0.972 0.004 256);
+  --color-ink-2: oklch(0.868 0.006 256);
+  --color-muted: oklch(0.752 0.012 256);
+  --color-faint: oklch(0.64 0.013 256);
+
+  /* Signature accent: a single restrained amber, the instrument's own light.
+     Used only for focus, live indicators and small interactive accents. */
+  --color-accent: oklch(0.83 0.115 78);
+  --color-accent-2: oklch(0.88 0.1 80);
+  --color-accent-ink: oklch(0.2 0.03 80);
+
+  --font-sans: "Hanken Grotesk", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Cascadia Code", Menlo,
+    Consolas, monospace;
+  --font-jp: "Noto Sans JP", var(--font-sans), sans-serif;
+
+  --radius: 0.5rem;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* z-scale */
+  --z-sticky: 30;
+  --z-popup: 40;
+
+  /* Part-of-speech palette: colorblind-safe amber/blue/green/orange/purple.
+     These are the ONLY hues that leave the chrome, and only in product demos. */
+  --pos-particle: oklch(0.84 0.13 82);
+  --pos-noun: oklch(0.77 0.115 234);
+  --pos-verb: oklch(0.81 0.14 159);
+  --pos-adjective: oklch(0.78 0.155 50);
+  --pos-adverb: oklch(0.77 0.13 305);
+  --pos-other: oklch(0.78 0.01 256);
+
+  --pos-particle-soft: oklch(0.84 0.13 82 / 0.14);
+  --pos-noun-soft: oklch(0.77 0.115 234 / 0.16);
+  --pos-verb-soft: oklch(0.81 0.14 159 / 0.14);
+  --pos-adjective-soft: oklch(0.78 0.155 50 / 0.15);
+  --pos-adverb-soft: oklch(0.77 0.13 305 / 0.16);
+  --pos-other-soft: oklch(0.78 0.01 256 / 0.12);
+
+  color-scheme: dark;
+}
