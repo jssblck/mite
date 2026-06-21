@@ -33,6 +33,13 @@ dictionary segmentation, or overlay presentation.
   labels, including why the concrete interpretation matrix lives in code and how
   to handle ambiguous Japanese lookup cases consistently.
 - `docs/future/pure-gpu.md` is exploratory design context, not committed roadmap.
+- `PRODUCT.md` is the strategic design context for the overlay surface: register
+  (product), users, purpose, the "invisible precision instrument" personality,
+  anti-references, design principles, and accessibility anchors (high-contrast
+  popups, reading-support legibility). Consult it before changing overlay
+  presentation, the popup/HUD palette in `src/win32_overlay/style.rs`, or the
+  hover popup content in `src/hover/`. It is a native Win32 surface; there is no
+  web frontend, so web-oriented design tooling does not apply.
 - `THIRD_PARTY_NOTICES.md` documents third-party software, models, dictionaries,
   and data that need explicit attribution or license awareness.
 - `eval\AGENTS.md` documents the private eval data submodule and how to manually
