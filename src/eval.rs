@@ -506,7 +506,7 @@ impl Deref for CheckedEvalSpec {
 pub struct ExpectedDetection {
     pub id: String,
     pub bounds: Rect,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds_tolerance: Option<BoundsTolerance>,
     pub text: String,
     pub characters: Vec<ExpectedCharacter>,
@@ -2031,6 +2031,19 @@ mod tests {
         });
         let error = parse_eval_spec(spec).unwrap_err().to_string();
         assert!(error.contains("bounds_tolerance.x"));
+    }
+
+    #[test]
+    fn serialization_omits_absent_bounds_tolerance() {
+        let spec = water_spec();
+
+        let serialized = serde_json::to_value(&spec).expect("serialize eval spec");
+        let detection = &serialized["detections"][0];
+
+        assert!(
+            detection.get("bounds_tolerance").is_none(),
+            "absent bounds_tolerance must not serialize as null"
+        );
     }
 
     #[test]
