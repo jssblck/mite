@@ -2,9 +2,10 @@
 
 A small Tauri desktop app that makes Mite installable and usable without a
 terminal. It manages the mite CLI for non-technical users: it installs and
-updates the engine, downloads the recognition models and the optional GPU
-acceleration pack, runs diagnostics, lets you pick a window from a live preview
-grid, and launches `mite watch`.
+updates the engine, downloads the recognition models, detects and guides the
+user through installing NVIDIA's GPU runtime (it never installs those binaries
+itself), runs diagnostics, lets you pick a window from a live preview grid, and
+launches `mite watch`.
 
 The core CLI is unchanged. This app is a manager and launcher around it.
 
@@ -17,23 +18,65 @@ The app owns a single per-user directory, the "mite home", at
 %LOCALAPPDATA%\Mite\
   bin\mite.exe          downloaded from the GitHub release feed
   mite.toml             default config (written via `mite init-config`)
+  app-settings.json     recorded runtime tier + DLL dirs (guided setup writes this)
   models\               detector/recognizer/dict/JMdict/jpdb-freq
   cache\engines\        TensorRT engine cache (CLI writes on first GPU run)
-  .gpu-runtime\bin\      optional GPU DLLs (TensorRT/CUDA/cuDNN)
+  nvidia-runtime\       optional: pip-install NVIDIA wheels here (the app watches it)
   logs\                 per-run CLI output
 ```
 
 Because the mite CLI resolves its config, models, and engine cache relative to
 its working directory, the app launches the CLI with the mite home as the
-current directory and exports `MITE_GPU_RUNTIME_DIR` (also prepended to `PATH`
-so the Windows loader can find the GPU DLLs). No CLI path rewriting is needed.
+current directory. It also prepends the directories where the user's NVIDIA
+runtime was found (recorded by the guided setup) to `PATH` so the Windows loader
+can resolve the DLLs, and passes the recorded tier as `--backend`. No CLI path
+rewriting is needed.
 
-The app downloads everything from the GitHub release feed published by
+The app downloads the CLI and models from the GitHub release feed published by
 `.github/workflows/release.yml`: it reads `release.json` for versions and
-checksums, fetches `mite.exe` and the GPU pack as release assets, and drives the
-model downloads from the release's `model-manifest.json` (the same manifest, URLs,
-and SHA256s that `scripts\bootstrap-dev.ps1` uses). See
-[docs/releases.md](../docs/releases.md).
+checksums, fetches `mite.exe` as a release asset, and drives the model downloads
+from the release's `model-manifest.json` (the same manifest, URLs, and SHA256s
+that `scripts\bootstrap-dev.ps1` uses). It does not download the NVIDIA runtime:
+that is user-installed (see below). See [docs/releases.md](../docs/releases.md).
+
+## NVIDIA runtime setup
+
+Mite's GPU pipeline needs NVIDIA runtime libraries (TensorRT, the CUDA runtime,
+NVRTC, cuBLAS, cuDNN). Because of NVIDIA's license terms, the app does not
+download, host, bundle, or install any NVIDIA binary. Instead it detects what is
+installed, guides the user to install the missing pieces themselves from NVIDIA,
+and records the result so it can launch the CLI with the right options.
+
+The flow:
+
+1. After the core install (CLI, config, models), the app runs `mite doctor
+   --json`, which probes for an NVIDIA GPU (`nvidia-smi`) and searches the system
+   for the required DLLs (`PATH`, the CUDA Toolkit, TensorRT/cuDNN install
+   locations, pip wheel layouts, and `MITE_GPU_RUNTIME_EXTRA_DIRS`). With no
+   NVIDIA GPU it records the CPU tier and never nags.
+2. If an NVIDIA GPU is present but the runtime is incomplete, the app opens a
+   guided screen that lists exactly which components are missing, explains in
+   plain language that these are NVIDIA's software and Mite cannot install them
+   for the user, and walks through installing from NVIDIA: either the official
+   download pages (`developer.nvidia.com`; cuDNN and TensorRT need a free NVIDIA
+   developer account) or the official PyPI wheels (a copy-paste `pip install
+   --target` command with the exact version pins, installing into the watched
+   `nvidia-runtime\` folder).
+3. "Skip for now" explains the consequence based on what is already present: CPU
+   if nothing NVIDIA is installed (much slower, always works), or CUDA-only if
+   the CUDA tier is present but TensorRT is not (roughly 2x slower than
+   TensorRT). While the screen is open it re-checks the dependencies every couple
+   of seconds, so each component checks off live as the user installs it; the
+   "Continue" button enables once the TensorRT tier is complete.
+4. Settings has a "Set up GPU acceleration" / "Re-run GPU setup" action that
+   reopens this same detection-and-guidance flow later, for when the user
+   installs or changes their NVIDIA runtime after first launch.
+5. The detected tier (TensorRT, CUDA-only, or CPU) and the directories the DLLs
+   were found in are recorded in `app-settings.json`. The launcher reads this to
+   choose the `--backend` and the `PATH` the CLI is spawned with. The default
+   `nvidia_tensor_rt_then_cuda` chain auto-degrades to CPU on its own, so the
+   recorded backend is about clear UX (not implying TensorRT is active when only
+   CUDA is present) rather than enabling the fallback.
 
 ## Shared design language
 

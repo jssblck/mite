@@ -22,3 +22,6 @@
 # It is inert here (hooks resolve via core.hooksPath=.githooks) and safe to
 # delete; this guard just keeps it from ever being staged or cluttering status.
 /dev/
+
+# Local design-review hook cache (impeccable). Tooling artifact, not source.
+.impeccable/

@@ -1,19 +1,22 @@
 param(
     [switch]$ModelsOnly,
-    [switch]$GpuRuntimeOnly,
     [switch]$HooksOnly,
     [switch]$EvalDataOnly,
     [switch]$SkipModelDownload,
     [switch]$IncludeServerModels,
-    [switch]$SkipGpuRuntime,
     [switch]$SkipBuild,
     [switch]$SkipDoctor,
     [switch]$SkipHooks,
     [switch]$IncludeEvalData,
-    [switch]$Release,
-    [switch]$SkipDriverCheck,
-    [switch]$SkipTargetStage
+    [switch]$Release
 )
+
+# This script does not install the NVIDIA GPU runtime (TensorRT, CUDA, cuDNN,
+# NVRTC, cuBLAS). Mite never downloads, hosts, bundles, or installs NVIDIA
+# binaries, and that applies to developer tooling too. Install the runtime
+# yourself from NVIDIA (the same components, pinned to the same majors, that the
+# desktop app guides end users to install) and make it discoverable on PATH;
+# `cargo run -- doctor` reports the detected tier. See docs\local-windows.md.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -23,11 +26,11 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
 $focusedModes = @(
-    @($ModelsOnly, $GpuRuntimeOnly, $HooksOnly, $EvalDataOnly) |
+    @($ModelsOnly, $HooksOnly, $EvalDataOnly) |
         Where-Object { $_ }
 )
 if ($focusedModes.Count -gt 1) {
-    throw "Choose at most one focused mode: -ModelsOnly, -GpuRuntimeOnly, -HooksOnly, or -EvalDataOnly."
+    throw "Choose at most one focused mode: -ModelsOnly, -HooksOnly, or -EvalDataOnly."
 }
 
 function Invoke-Step {
@@ -54,16 +57,6 @@ function Assert-Command {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
         throw "$Name was not found on PATH. $InstallHint"
     }
-}
-
-function Assert-NvidiaDriver {
-    Assert-Command "nvidia-smi" "Install or update the NVIDIA display driver, then open a new terminal."
-    $output = & nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader,nounits 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "nvidia-smi failed. Install or repair the NVIDIA display driver before using the NVIDIA runtime backend.`n$output"
-    }
-    Write-Host "NVIDIA driver detected:"
-    $output | ForEach-Object { Write-Host "  $_" }
 }
 
 function Resolve-RepoPath {
@@ -226,169 +219,6 @@ function Install-Models {
     Write-Host "Wrote $lockPath"
 }
 
-function Copy-DllsFrom {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$SourceDir,
-        [Parameter(Mandatory = $true)]
-        [string]$Label,
-        [Parameter(Mandatory = $true)]
-        [string]$RuntimeBin
-    )
-
-    if (-not (Test-Path $SourceDir)) {
-        throw "$Label DLL directory not found at $SourceDir"
-    }
-
-    $files = @(Get-ChildItem -Path $SourceDir -Filter "*.dll" -File -ErrorAction Stop)
-    if (-not $files) {
-        throw "$Label DLL directory contains no DLLs: $SourceDir"
-    }
-
-    foreach ($file in $files) {
-        Copy-Item -LiteralPath $file.FullName -Destination $RuntimeBin -Force
-    }
-
-    Write-Host "Cached $($files.Count) $Label DLL(s) from $SourceDir"
-}
-
-function Copy-DllsFromOptional {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$SourceDir,
-        [Parameter(Mandatory = $true)]
-        [string]$Label,
-        [Parameter(Mandatory = $true)]
-        [string]$RuntimeBin
-    )
-
-    if (Test-Path $SourceDir) {
-        Copy-DllsFrom -SourceDir $SourceDir -Label $Label -RuntimeBin $RuntimeBin
-    }
-}
-
-function Assert-DllsPresent {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string[]]$Names,
-        [Parameter(Mandatory = $true)]
-        [string]$RuntimeBin
-    )
-
-    $missing = @(
-        foreach ($name in $Names) {
-            if (-not (Test-Path (Join-Path $RuntimeBin $name))) {
-                $name
-            }
-        }
-    )
-
-    if ($missing) {
-        throw "GPU runtime cache is missing required DLLs: $($missing -join ', ')"
-    }
-}
-
-function Install-GpuRuntime {
-    Assert-Command "uv" "Install uv, then rerun this script: https://docs.astral.sh/uv/getting-started/installation/"
-    if (-not $SkipDriverCheck) {
-        Assert-NvidiaDriver
-    }
-
-    $venv = Join-Path $root ".venv-models"
-    $python = Join-Path $venv "Scripts\python.exe"
-    $runtimeRoot = Join-Path $root ".gpu-runtime"
-    $runtimeBin = Join-Path $runtimeRoot "bin"
-    $manifestPath = Join-Path $runtimeRoot "manifest.json"
-    $packages = @(
-        # ORT 2.0.0-rc.12 imports nvinfer_10.dll directly; TensorRT 11 wheels
-        # only ship nvinfer_11.dll, so use the newest compatible 10.x wheel.
-        "tensorrt-cu12==10.16.1.11",
-        "nvidia-cuda-runtime-cu12==12.9.79",
-        "nvidia-cuda-nvrtc-cu12==12.9.86",
-        "nvidia-cublas-cu12==12.9.2.10",
-        "nvidia-cudnn-cu12==9.23.1.3"
-    )
-
-    New-Item -ItemType Directory -Path $runtimeBin -Force | Out-Null
-    Get-ChildItem -LiteralPath $runtimeBin -Filter "*.dll" -File -ErrorAction SilentlyContinue |
-        Remove-Item -Force
-
-    if (-not (Test-Path $python)) {
-        Write-Host "Creating model/runtime venv at $venv ..."
-        uv venv --python 3.11 $venv
-    }
-
-    Write-Host "Installing GPU runtime wheels..."
-    uv pip install --python $python $packages
-
-    $sitePackages = Join-Path $venv "Lib\site-packages"
-    $tensorrtLibs = Join-Path $sitePackages "tensorrt_libs"
-    $nvidiaRoot = Join-Path $sitePackages "nvidia"
-
-    Copy-DllsFrom -SourceDir $tensorrtLibs -Label "TensorRT" -RuntimeBin $runtimeBin
-    Copy-DllsFrom -SourceDir (Join-Path $nvidiaRoot "cuda_runtime\bin") -Label "CUDA runtime" -RuntimeBin $runtimeBin
-    Copy-DllsFrom -SourceDir (Join-Path $nvidiaRoot "cuda_nvrtc\bin") -Label "CUDA NVRTC" -RuntimeBin $runtimeBin
-    Copy-DllsFrom -SourceDir (Join-Path $nvidiaRoot "cublas\bin") -Label "cuBLAS" -RuntimeBin $runtimeBin
-    Copy-DllsFrom -SourceDir (Join-Path $nvidiaRoot "cudnn\bin") -Label "cuDNN" -RuntimeBin $runtimeBin
-
-    $knownNvidiaDirs = @("cuda_runtime", "cuda_nvrtc", "cublas", "cudnn")
-    foreach ($dir in Get-ChildItem -Path $nvidiaRoot -Directory -ErrorAction SilentlyContinue) {
-        if ($knownNvidiaDirs -contains $dir.Name) {
-            continue
-        }
-        Copy-DllsFromOptional -SourceDir (Join-Path $dir.FullName "bin") -Label $dir.Name -RuntimeBin $runtimeBin
-    }
-
-    Assert-DllsPresent -RuntimeBin $runtimeBin -Names @(
-        "nvinfer_10.dll",
-        "nvonnxparser_10.dll",
-        "nvinfer_plugin_10.dll",
-        "cudart64_12.dll",
-        "cublas64_12.dll",
-        "cublasLt64_12.dll",
-        "cudnn64_9.dll",
-        "cudnn_ops64_9.dll",
-        "cudnn_cnn64_9.dll"
-    )
-
-    $cachedDlls = Get-ChildItem -Path $runtimeBin -Filter "*.dll" -File |
-        Sort-Object Name |
-        Select-Object -ExpandProperty Name
-
-    if (-not $SkipTargetStage) {
-        $targetDirs = @(
-            (Join-Path $root "target\debug"),
-            (Join-Path $root "target\debug\deps"),
-            (Join-Path $root "target\debug\examples"),
-            (Join-Path $root "target\release"),
-            (Join-Path $root "target\release\deps"),
-            (Join-Path $root "target\release\examples")
-        ) | Where-Object { Test-Path $_ }
-
-        foreach ($dst in $targetDirs) {
-            foreach ($dll in Get-ChildItem -Path $runtimeBin -Filter "*.dll" -File) {
-                Copy-Item -LiteralPath $dll.FullName -Destination $dst -Force
-            }
-            Write-Host "Staged GPU runtime DLLs into $dst"
-        }
-
-        if (-not $targetDirs) {
-            Write-Warning "No Cargo target output dirs found yet. build.rs will stage the cache on the next cargo build."
-        }
-    }
-
-    $manifest = [ordered]@{
-        created_by = "scripts/bootstrap-dev.ps1"
-        runtime_bin = $runtimeBin
-        packages = $packages
-        dll_count = $cachedDlls.Count
-        dlls = $cachedDlls
-    }
-    $manifest | ConvertTo-Json -Depth 4 | Set-Content -Path $manifestPath -Encoding UTF8
-    Write-Host "GPU runtime ready in $runtimeBin"
-    Write-Host "Manifest: $manifestPath"
-}
-
 function Install-Hooks {
     Assert-Command "git" "Install Git for Windows: https://git-scm.com/download/win"
     $gitRoot = git rev-parse --show-toplevel
@@ -422,11 +252,6 @@ if ($ModelsOnly) {
     return
 }
 
-if ($GpuRuntimeOnly) {
-    Invoke-Step "install pinned GPU runtime DLL cache" { Install-GpuRuntime }
-    return
-}
-
 if ($HooksOnly) {
     Invoke-Step "install local git hooks" { Install-Hooks }
     return
@@ -439,13 +264,6 @@ if ($EvalDataOnly) {
 
 Invoke-Step "check required development tools" {
     Assert-CoreDevTools
-    if (-not $SkipGpuRuntime) {
-        Assert-Command "uv" "Install uv, then rerun this script: https://docs.astral.sh/uv/getting-started/installation/"
-        uv --version
-        if (-not $SkipDriverCheck) {
-            Assert-NvidiaDriver
-        }
-    }
 }
 
 Invoke-Step "create local directories" {
@@ -474,13 +292,6 @@ if (-not (Test-Path -LiteralPath "mite.toml")) {
     }
 }
 
-if (-not $SkipGpuRuntime) {
-    Invoke-Step "install pinned GPU runtime DLL cache" { Install-GpuRuntime }
-} else {
-    Write-Host ""
-    Write-Host "Skipping GPU runtime install. The default mite.toml expects NVIDIA TensorRT/CUDA; choose a non-NVIDIA runtime before running doctor/watch."
-}
-
 if (-not $SkipBuild) {
     Invoke-Step "build Mite" {
         if ($Release) {
@@ -491,7 +302,7 @@ if (-not $SkipBuild) {
     }
 }
 
-if (-not $SkipDoctor -and -not $SkipGpuRuntime) {
+if (-not $SkipDoctor) {
     Invoke-Step "run doctor" {
         cargo run -- doctor
     }
@@ -499,7 +310,19 @@ if (-not $SkipDoctor -and -not $SkipGpuRuntime) {
 
 Write-Host ""
 Write-Host "Mite development setup complete."
+Write-Host ""
+Write-Host "The default mite.toml expects the NVIDIA TensorRT/CUDA runtime, which this"
+Write-Host "script does not install. If doctor reports the CPU tier and you have an"
+Write-Host "NVIDIA GPU, install the runtime yourself and re-run doctor (see"
+Write-Host "docs\local-windows.md):"
+Write-Host "  - the CUDA Toolkit and cuDNN from NVIDIA (they add themselves to PATH), or"
+Write-Host "  - the pinned pip wheels (tensorrt-cu12, nvidia-cuda-runtime-cu12,"
+Write-Host "    nvidia-cuda-nvrtc-cu12, nvidia-cublas-cu12, nvidia-cudnn-cu12), with their"
+Write-Host "    wheel bin directories on PATH."
+Write-Host "Without it, choose a non-NVIDIA runtime in mite.toml before running watch."
+Write-Host ""
 Write-Host "Useful next commands:"
+Write-Host "  cargo run -- doctor"
 Write-Host "  cargo run -- list-windows"
 Write-Host "  cargo run -- watch --title `"Target Game`" --auto"
 Write-Host "  .\scripts\precommit.ps1"

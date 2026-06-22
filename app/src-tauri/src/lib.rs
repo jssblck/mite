@@ -1,9 +1,10 @@
 //! Mite desktop app backend.
 //!
 //! Manages a per-user "mite home" directory: installs and updates the mite CLI
-//! from the GitHub release feed, downloads the model/dictionary deps and the
-//! optional GPU acceleration pack, runs diagnostics, drives a live window
-//! picker, and launches/supervises `mite watch`.
+//! from the GitHub release feed, downloads the model/dictionary deps, detects
+//! and guides the user through installing NVIDIA's runtime (Mite never installs
+//! those bytes itself), runs diagnostics, drives a live window picker, and
+//! launches/supervises `mite watch`.
 
 mod cli;
 mod commands;
@@ -11,6 +12,7 @@ mod download;
 mod home;
 mod models;
 mod release;
+mod settings;
 mod status;
 mod watch;
 mod windows;
@@ -40,7 +42,9 @@ pub fn run() {
             commands::check_for_updates,
             commands::install_or_update_cli,
             commands::download_models,
-            commands::download_gpu_pack,
+            commands::detect_runtime,
+            commands::record_runtime,
+            commands::get_settings,
             commands::write_default_config,
             commands::list_windows,
             commands::capture_thumbnail,
@@ -48,6 +52,7 @@ pub fn run() {
             commands::stop_watch,
             commands::is_watching,
             commands::open_mite_home,
+            commands::open_url,
             commands::uninstall_data,
         ])
         .run(tauri::generate_context!())

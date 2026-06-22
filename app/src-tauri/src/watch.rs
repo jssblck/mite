@@ -1,21 +1,22 @@
 //! Launching and supervising the long-running `mite watch` process.
 //!
-//! The child is spawned with the mite home as its working directory and the GPU
-//! runtime dir both exported (`MITE_GPU_RUNTIME_DIR`) and prepended to `PATH`
-//! so the OS loader can resolve the TensorRT/CUDA DLLs. stdout/stderr are
-//! streamed to the UI as `watch-log` events and mirrored to a per-run log file;
-//! process start/exit is reported as `watch-state`.
+//! The child is built by `cli::command()`, which sets the mite home as the
+//! working directory, prepends the recorded NVIDIA runtime directories to `PATH`
+//! so the OS loader can resolve the TensorRT/CUDA DLLs the user installed, and
+//! passes the recorded tier as `--backend`. stdout/stderr are streamed to the
+//! UI as `watch-log` events and mirrored to a per-run log file; process
+//! start/exit is reported as `watch-state`.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::home;
+use crate::{cli, home};
 
 /// The single supervised `watch` child, shared with the reaper thread.
 #[derive(Default)]
@@ -57,21 +58,13 @@ pub fn start(app: &AppHandle, state: &State<WatchState>, opts: WatchOptions) -> 
         anyhow::bail!("watch is already running");
     }
 
-    let exe = home::cli_exe()?;
-    if !exe.exists() {
+    if !home::cli_exe()?.exists() {
         anyhow::bail!("the mite CLI is not installed yet");
     }
-    let home_dir = home::mite_home()?;
-    let gpu = home::gpu_runtime_dir()?;
-    let gpu_str = gpu.to_string_lossy().to_string();
-    let path = std::env::var("PATH").unwrap_or_default();
-    let new_path = if path.is_empty() {
-        gpu_str.clone()
-    } else {
-        format!("{gpu_str};{path}")
-    };
 
-    let mut cmd = Command::new(&exe);
+    // cli::command() applies the home CWD, the NVIDIA runtime PATH, the
+    // CREATE_NO_WINDOW flag, and the recorded `--backend` override.
+    let mut cmd = cli::command()?;
     cmd.arg("watch")
         .arg("--window-id")
         .arg(opts.window_id.to_string());
@@ -85,17 +78,7 @@ pub fn start(app: &AppHandle, state: &State<WatchState>, opts: WatchOptions) -> 
         cmd.arg("--metrics-interval-secs")
             .arg(opts.metrics_interval_secs.to_string());
     }
-    cmd.current_dir(&home_dir)
-        .env("MITE_GPU_RUNTIME_DIR", &gpu)
-        .env("PATH", new_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = cmd.spawn().context("failed to launch mite watch")?;
     let stdout = child.stdout.take().context("missing stdout pipe")?;

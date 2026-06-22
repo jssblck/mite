@@ -122,13 +122,22 @@ pub fn int8_model_path(path: &Path) -> PathBuf {
     path.with_file_name(format!("{stem}-int8.{extension}"))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeBackend {
+    #[value(name = "fixture")]
     Fixture,
+    #[value(name = "nvidia_tensor_rt_then_cuda")]
     NvidiaTensorRtThenCuda,
+    #[value(name = "cuda")]
     Cuda,
+    /// Force the CPU execution provider. The app records this when no usable
+    /// NVIDIA runtime is present so launches do not log TensorRT/CUDA failures.
+    #[value(name = "cpu")]
+    Cpu,
+    #[value(name = "direct_ml")]
     DirectMl,
+    #[value(name = "open_vino")]
     OpenVino,
 }
 

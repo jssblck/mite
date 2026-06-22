@@ -2,12 +2,16 @@ name: Release
 
 # Build and publish mite releases to GitHub Releases.
 #
-# Triggered on version tags (v*). Builds the Windows CLI, the GPU runtime DLL
-# pack, and the Tauri desktop app installer, computes checksums, writes the
-# release.json update feed consumed by the desktop app, then creates a DRAFT
-# GitHub Release whose notes are generated from the pull requests merged since
-# the previous tag (--generate-notes, the "releases as changelog" pattern). The
-# draft is reviewed and published by hand.
+# Triggered on version tags (v*). Builds the Windows CLI and the Tauri desktop
+# app installer, computes checksums, writes the release.json update feed consumed
+# by the desktop app, then creates a DRAFT GitHub Release whose notes are
+# generated from the pull requests merged since the previous tag
+# (--generate-notes, the "releases as changelog" pattern). The draft is reviewed
+# and published by hand.
+#
+# The NVIDIA GPU runtime (TensorRT, CUDA, cuDNN, NVRTC, cuBLAS) is NOT built or
+# shipped here. Mite never redistributes NVIDIA binaries; the desktop app detects
+# what the user installed from NVIDIA and guides the rest. See app/README.md.
 #
 # workflow_dispatch with dry_run builds and packages everything but does not
 # create a release, so the pipeline can be exercised without cutting a tag.
@@ -86,9 +90,6 @@ jobs:
       # Pin the binary's reported --version to the release tag so it is correct
       # regardless of clone depth. build.rs honors this override.
       MITE_VERSION: ${{ needs.prepare.outputs.tag }}
-      # The GPU runtime DLLs ship as their own asset (mite-gpu-runtime-win64.zip),
-      # so do not let build.rs stage them next to the exe in this job.
-      MITE_SKIP_GPU_RUNTIME_STAGE: "1"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -113,51 +114,6 @@ jobs:
         with:
           name: cli
           path: target/release/mite.exe
-          if-no-files-found: error
-          retention-days: 7
-
-  build-gpu-runtime:
-    name: Build GPU runtime pack
-    needs: prepare
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install uv
-        shell: pwsh
-        run: |
-          # bootstrap-dev.ps1 -GpuRuntimeOnly drives uv to fetch the pinned
-          # TensorRT/CUDA/cuDNN wheels and copy their DLLs into .gpu-runtime\bin.
-          python -m pip install --upgrade uv
-
-      - name: Materialize GPU runtime DLL cache
-        shell: pwsh
-        run: |
-          # -SkipDriverCheck because GitHub runners have no NVIDIA GPU; the wheel
-          # download and DLL copy do not need a live driver.
-          pwsh scripts\bootstrap-dev.ps1 -GpuRuntimeOnly -SkipDriverCheck
-
-      - name: Package GPU runtime pack
-        shell: pwsh
-        run: |
-          $bin = ".gpu-runtime\bin"
-          if (-not (Test-Path $bin)) {
-            throw "GPU runtime bin directory not found at $bin; bootstrap-dev.ps1 -GpuRuntimeOnly did not produce the DLL cache."
-          }
-          $dlls = Get-ChildItem -Path $bin -Filter "*.dll" -File
-          if (-not $dlls) {
-            throw "GPU runtime bin directory contains no DLLs: $bin"
-          }
-          # Zip the DLLs at the archive root (the contents of bin, not the bin
-          # folder itself) so consumers extract DLLs directly.
-          Compress-Archive -Path (Join-Path $bin "*") -DestinationPath "mite-gpu-runtime-win64.zip" -Force
-          Write-Host "Packed $($dlls.Count) DLL(s) into mite-gpu-runtime-win64.zip"
-
-      - name: Upload GPU runtime artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: gpu-runtime
-          path: mite-gpu-runtime-win64.zip
           if-no-files-found: error
           retention-days: 7
 
@@ -296,7 +252,7 @@ jobs:
 
   release:
     name: Release
-    needs: [prepare, build-cli, build-gpu-runtime, build-app]
+    needs: [prepare, build-cli, build-app]
     runs-on: windows-latest
     permissions:
       contents: write
@@ -309,12 +265,6 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: cli
-          path: assets
-
-      - name: Download GPU runtime artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: gpu-runtime
           path: assets
 
       - name: Download installer artifact
@@ -390,9 +340,7 @@ jobs:
 
           # Required assets.
           $cliPath = Join-Path $assetsDir "mite.exe"
-          $gpuPath = Join-Path $assetsDir "mite-gpu-runtime-win64.zip"
           if (-not (Test-Path $cliPath)) { throw "Missing required asset: mite.exe" }
-          if (-not (Test-Path $gpuPath)) { throw "Missing required asset: mite-gpu-runtime-win64.zip" }
 
           # The installer is optional while the desktop app is still in
           # development. Pick the first .exe or .msi installer if one exists.
@@ -409,10 +357,6 @@ jobs:
             cli = [ordered]@{
               asset = "mite.exe"
               sha256 = Get-Hash $cliPath
-            }
-            gpuRuntime = [ordered]@{
-              asset = "mite-gpu-runtime-win64.zip"
-              sha256 = Get-Hash $gpuPath
             }
             modelManifest = [ordered]@{
               asset = "model-manifest.json"

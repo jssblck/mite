@@ -20,11 +20,11 @@ diagnostics, evals, and developer tooling.
 
 Most people should use the Mite desktop app. Download the installer from the
 [releases page](https://github.com/jssblck/mite/releases) and run it: the app
-walks you through a one-time setup (it installs the engine, downloads the
-recognition models, and, on NVIDIA GPUs, an optional acceleration pack), then
-lets you pick a window from a live preview grid and start reading. No terminal
-required, and it keeps the engine up to date for you. See
-[app/README.md](app/README.md) for what the app manages.
+walks you through a one-time setup (it installs the engine and downloads the
+recognition models, and on NVIDIA GPUs it guides you through installing NVIDIA's
+GPU runtime for the fast path), then lets you pick a window from a live preview
+grid and start reading. No terminal required, and it keeps the engine up to date
+for you. See [app/README.md](app/README.md) for what the app manages.
 
 The rest of this document covers building from source, the path for developers
 and contributors.
@@ -66,20 +66,24 @@ Run the consolidated developer setup script from PowerShell:
 .\scripts\bootstrap-dev.ps1
 ```
 
-The script checks for Git, Rust, `uv`, and an NVIDIA driver; downloads OCR
-models, JMdict, and JPDB frequency data; installs local Git hooks; creates
-`mite.toml` when missing; installs the pinned TensorRT/CUDA/cuDNN runtime cache;
+The script checks for Git, Rust, and Cargo; downloads OCR models, JMdict, and
+JPDB frequency data; installs local Git hooks; creates `mite.toml` when missing;
 builds Mite; and runs `doctor`.
+
+It does not install the NVIDIA GPU runtime. Mite never downloads, hosts, bundles,
+or installs NVIDIA binaries, and that applies to this developer tooling too. For
+GPU acceleration, install the runtime yourself from NVIDIA (the CUDA Toolkit,
+cuDNN, and TensorRT 10.x) or from the pinned pip wheels, make it discoverable on
+`PATH`, and confirm the tier with `cargo run -- doctor`. See
+[docs/local-windows.md](docs/local-windows.md).
 
 Useful setup modes:
 
 ```powershell
 .\scripts\bootstrap-dev.ps1 -ModelsOnly
 .\scripts\bootstrap-dev.ps1 -ModelsOnly -IncludeServerModels
-.\scripts\bootstrap-dev.ps1 -GpuRuntimeOnly
 .\scripts\bootstrap-dev.ps1 -HooksOnly
 .\scripts\bootstrap-dev.ps1 -EvalDataOnly
-.\scripts\bootstrap-dev.ps1 -SkipGpuRuntime
 ```
 
 Then find a target window and start the overlay:

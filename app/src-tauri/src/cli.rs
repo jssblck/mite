@@ -2,14 +2,16 @@
 //!
 //! All invocations set the working directory to the mite home so the CLI
 //! resolves `mite.toml`, `models\`, and `cache\engines\` exactly as it does for
-//! a developer running it by hand, and point `MITE_GPU_RUNTIME_DIR` at the home
-//! so doctor reports the same GPU pack the app manages.
+//! a developer running it by hand. The launcher also prepends the directories
+//! where the user installed NVIDIA's runtime (recorded by the guided setup) to
+//! `PATH` so the OS loader finds the DLLs, and passes the recorded tier as
+//! `--backend` so the CLI runs at the tier the app detected.
 
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
-use crate::home;
+use crate::{home, settings};
 
 /// Apply Windows process flags that keep a console window from flashing when we
 /// spawn the CLI from a GUI app.
@@ -23,22 +25,36 @@ fn quiet(mut cmd: Command) -> Command {
     cmd
 }
 
-/// A `mite` command pre-configured with the home as CWD and the GPU runtime dir
-/// exported (and prepended to PATH so the OS loader finds the DLLs).
+/// A `mite` command pre-configured with the home as CWD, the recorded NVIDIA
+/// runtime directories prepended to `PATH` (so the OS loader resolves the DLLs
+/// the user installed), and the recorded tier passed as `--backend`.
 pub fn command() -> Result<Command> {
     let exe = home::cli_exe()?;
     let home_dir = home::mite_home()?;
     let gpu = home::gpu_runtime_dir()?;
+    let settings = settings::load();
+
     let mut cmd = quiet(Command::new(exe));
     cmd.current_dir(&home_dir).env("MITE_GPU_RUNTIME_DIR", &gpu);
-    let gpu_str = gpu.to_string_lossy().to_string();
-    let path = std::env::var("PATH").unwrap_or_default();
-    let new_path = if path.is_empty() {
-        gpu_str
+
+    // PATH precedence: the directories where the user's NVIDIA runtime was
+    // found, then the mite-managed runtime dir, then the inherited PATH.
+    let mut prefix: Vec<String> = settings.dll_dirs.clone();
+    prefix.push(gpu.to_string_lossy().to_string());
+    let existing = std::env::var("PATH").unwrap_or_default();
+    let new_path = if existing.is_empty() {
+        prefix.join(";")
     } else {
-        format!("{gpu_str};{path}")
+        format!("{};{}", prefix.join(";"), existing)
     };
     cmd.env("PATH", new_path);
+
+    // Pass the recorded tier as a global backend override so the CLI does not
+    // imply TensorRT is active when only CUDA (or no) runtime is present.
+    if let Some(backend) = settings.backend_flag() {
+        cmd.arg("--backend").arg(backend);
+    }
+
     Ok(cmd)
 }
 
@@ -76,8 +92,9 @@ pub fn doctor_json() -> Result<serde_json::Value> {
 
 /// Write a default `mite.toml` into the home via the CLI's own init-config, so
 /// the config always matches the CLI's current defaults. The default backend is
-/// the TensorRT -> CUDA -> CPU chain, which runs on CPU when no GPU pack is
-/// present and uses the GPU automatically once it is.
+/// the TensorRT -> CUDA -> CPU chain, which runs on CPU when no NVIDIA runtime
+/// is installed and uses the GPU automatically once one is. The launcher passes
+/// an explicit `--backend` from the recorded tier on top of this.
 pub fn write_default_config() -> Result<()> {
     let status = command()?
         .arg("init-config")

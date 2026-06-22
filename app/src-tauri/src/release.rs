@@ -19,8 +19,6 @@ pub const REPO: &str = "jssblck/mite";
 pub struct ReleaseManifest {
     pub version: String,
     pub cli: AssetRef,
-    #[serde(default)]
-    pub gpu_runtime: Option<AssetRef>,
     pub model_manifest: AssetName,
     // The app-shell installer asset. Reserved for signed app self-update, which
     // is the documented follow-up (it needs signing keys); not consumed yet.
@@ -107,15 +105,14 @@ mod tests {
         let json = r#"{
             "version": "v0.1.0",
             "cli": { "asset": "mite.exe", "sha256": "abc" },
-            "gpuRuntime": { "asset": "mite-gpu-runtime-win64.zip", "sha256": "def" },
             "modelManifest": { "asset": "model-manifest.json" },
             "installer": { "asset": "mite-setup.exe", "sha256": "ghi" }
         }"#;
         let manifest: ReleaseManifest = serde_json::from_str(json).unwrap();
         assert_eq!(manifest.version, "v0.1.0");
         assert_eq!(manifest.cli.asset, "mite.exe");
-        assert_eq!(manifest.gpu_runtime.unwrap().sha256, "def");
         assert_eq!(manifest.model_manifest.asset, "model-manifest.json");
+        assert_eq!(manifest.installer.unwrap().sha256, "ghi");
     }
 
     #[test]

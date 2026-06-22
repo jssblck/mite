@@ -54,12 +54,3 @@ pub fn models_ready() -> bool {
     };
     CORE_MODEL_FILES.iter().all(|rel| home.join(rel).exists())
 }
-
-/// True when the optional GPU acceleration pack has been installed. Checks one
-/// TensorRT and one CUDA DLL as a cheap proxy for the full set.
-pub fn gpu_pack_installed() -> bool {
-    let Ok(dir) = gpu_runtime_dir() else {
-        return false;
-    };
-    dir.join("nvinfer_10.dll").exists() && dir.join("cudart64_12.dll").exists()
-}
