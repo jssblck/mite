@@ -365,9 +365,6 @@ impl Default for PipelineConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OverlayConfig {
-    pub enabled: bool,
-    pub click_through: bool,
-    pub show_confidence: bool,
     /// Draw the per-word category underlines (and the hover selection tint). On
     /// by default. When off, the word layer is fully transparent: nothing is
     /// painted over the recognized words, but hover lookups still work (the popup
@@ -383,9 +380,6 @@ pub struct OverlayConfig {
 impl Default for OverlayConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
-            click_through: true,
-            show_confidence: true,
             word_underlines: true,
             furigana: false,
         }
@@ -425,7 +419,6 @@ mod tests {
         let cfg = AppConfig::parse_toml("[overlay]\nfurigana = true\n").unwrap();
         assert!(cfg.overlay.furigana);
         // Other overlay fields keep their defaults.
-        assert!(cfg.overlay.enabled);
         assert!(cfg.overlay.word_underlines);
     }
 
