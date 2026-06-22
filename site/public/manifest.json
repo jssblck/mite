@@ -1,7 +1,7 @@
 {
   "short_name": "Mite",
-  "name": "Mite: read Japanese where it lives",
-  "description": "Local, low-latency OCR overlay for reading Japanese in games, visual novels, and Windows apps.",
+  "name": "Mite: read Japanese right where it appears",
+  "description": "A reading aid for learning Japanese in games, visual novels, and Windows apps.",
   "icons": [
     {
       "src": "favicon.svg",
