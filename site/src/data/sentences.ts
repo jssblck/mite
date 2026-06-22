@@ -16,9 +16,9 @@ export const RELEASES_URL = `${GITHUB_URL}/releases`;
 
 export const SITE_URL = "https://mite.jessica.black";
 export const SITE_NAME = "Mite";
-export const SITE_TAGLINE = "Read Japanese where it lives.";
+export const SITE_TAGLINE = "Read Japanese right where it appears.";
 export const SITE_DESCRIPTION =
-  "Mite is a local, low-latency OCR overlay for reading Japanese in games, visual novels, and other Windows apps. Point at a word and the reading and meaning are already there, on-device, in about 200ms.";
+  "Mite is a reading aid for learning Japanese in games, visual novels, and other Windows apps. Point at a word and the reading and meaning are already there, on-device, in about 200ms.";
 
 export type Pos =
   | "particle"

@@ -55,11 +55,6 @@ const html = `<!doctype html><html><head><meta charset="utf-8">
     font-family: 'Noto Sans JP', sans-serif; font-weight: 700; font-size: 35px;
     letter-spacing: -0.01em; line-height: 1; color: oklch(0.972 0.004 256);
   }
-  .tag {
-    margin-left: auto; font-family: 'Geist Mono', monospace; font-size: 15px;
-    color: oklch(0.752 0.012 256); border: 1px solid oklch(0.305 0.012 256);
-    border-radius: 999px; padding: 8px 16px; letter-spacing: 0.02em;
-  }
 
   /* ---- headline + reading-aid subhead (kept to the left lane so the centered
      popup never collides with it) ---- */
@@ -146,13 +141,6 @@ const html = `<!doctype html><html><head><meta charset="utf-8">
   }
   .pop-note b { color: oklch(0.868 0.006 256); font-weight: 600; }
   .punct { padding: 3px 2px; }
-
-  /* ---- foot: an honest instrument readout + the domain ---- */
-  .foot {
-    display: flex; align-items: center; justify-content: space-between;
-    font-family: 'Geist Mono', monospace; font-size: 18px;
-    color: oklch(0.64 0.013 256); letter-spacing: 0.01em;
-  }
 </style></head>
 <body>
   <div class="top">
@@ -167,11 +155,10 @@ const html = `<!doctype html><html><head><meta charset="utf-8">
       <rect x="7" y="11" width="4" height="2" rx="1" fill="oklch(0.83 0.115 78)"/>
     </svg>
     <span class="brand" lang="ja">みて</span>
-    <span class="tag">reading aid for Japanese</span>
   </div>
 
   <div class="head">
-    <h1>Read the Japanese<br><span class="strong">right where it appears.</span></h1>
+    <h1>Read Japanese<br><span class="strong">right where it appears.</span></h1>
     <p class="lede">A reading aid for Japanese in games and visual novels, on-device in about 200ms.</p>
   </div>
 
@@ -184,11 +171,6 @@ const html = `<!doctype html><html><head><meta charset="utf-8">
           <span class="pop-note"><b>Continuous</b> te-form + iru: in progress.</span>
         </span></span><span class="punct">。</span>
     </span>
-  </div>
-
-  <div class="foot">
-    <span>LOCAL &middot; ON-DEVICE &middot; WINDOWS &middot; AGPL-3.0</span>
-    <span>mite.jessica.black</span>
   </div>
 </body></html>`;
 

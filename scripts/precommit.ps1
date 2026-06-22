@@ -25,45 +25,104 @@ function Invoke-Step {
     }
 }
 
-Invoke-Step "cargo fmt --check" {
-    cargo fmt --check
+# Scope the checks to what actually changed. The marketing site under site\ is an
+# independent Node project that the Rust crate does not depend on (and vice
+# versa), so a site-only commit should not pay for the full Rust suite, and a
+# Rust-only commit should not need Node installed. When the staged list cannot be
+# read (e.g. the script is run by hand outside a commit), run everything.
+$staged = @()
+try {
+    $staged = @(& git diff --cached --name-only --diff-filter=ACMR 2>$null |
+        Where-Object { $_ })
+}
+catch {
+    $staged = @()
 }
 
-Invoke-Step "nudge check" {
-    $nudgePaths = @("Cargo.toml", "src", "docs", "examples", "build.rs")
-    if (Test-Path -LiteralPath (Join-Path $root "tests")) {
-        $nudgePaths += "tests"
-    }
-    nudge check @nudgePaths
-}
+$hasStaged = $staged.Count -gt 0
+$siteStaged = @($staged | Where-Object { $_ -like "site/*" })
+$nonSiteStaged = @($staged | Where-Object { $_ -notlike "site/*" })
 
-Invoke-Step "cargo test" {
-    cargo test
-}
+# Run the Rust checks unless the commit is exclusively site\** changes.
+$runRust = (-not $hasStaged) -or ($nonSiteStaged.Count -gt 0)
+# Run the site checks whenever site\** changed (or when scope is unknown).
+$runSite = (-not $hasStaged) -or ($siteStaged.Count -gt 0)
 
-Invoke-Step "cargo clippy --all-targets -- -D warnings" {
-    cargo clippy --all-targets -- -D warnings
-}
-
-if ($IncludeEval) {
-    $evalRoot = Join-Path $root "eval"
-    $evalFiles = @()
-    if (Test-Path -LiteralPath $evalRoot) {
-        $evalFiles = @(Get-ChildItem -LiteralPath $evalRoot -Recurse -Filter "eval.json" -File)
-    }
-
-    if ($evalFiles.Count -eq 0) {
-        Write-Host ""
-        Write-Host "==> real-image evals"
-        Write-Host "no eval\**\eval.json labels found"
+if ($runRust) {
+    Invoke-Step "cargo fmt --check" {
+        cargo fmt --check
     }
 
-    foreach ($evalFile in $evalFiles) {
-        $image = Join-Path $evalFile.DirectoryName "underlying.png"
-        Invoke-Step "cargo run -- eval --image $image --labels $($evalFile.FullName) --out target\eval\$($evalFile.Directory.Name).json" {
-            cargo run -- eval --image $image --labels $evalFile.FullName --out "target\eval\$($evalFile.Directory.Name).json"
+    Invoke-Step "nudge check" {
+        $nudgePaths = @("Cargo.toml", "src", "docs", "examples", "build.rs")
+        if (Test-Path -LiteralPath (Join-Path $root "tests")) {
+            $nudgePaths += "tests"
+        }
+        nudge check @nudgePaths
+    }
+
+    Invoke-Step "cargo test" {
+        cargo test
+    }
+
+    Invoke-Step "cargo clippy --all-targets -- -D warnings" {
+        cargo clippy --all-targets -- -D warnings
+    }
+
+    if ($IncludeEval) {
+        $evalRoot = Join-Path $root "eval"
+        $evalFiles = @()
+        if (Test-Path -LiteralPath $evalRoot) {
+            $evalFiles = @(Get-ChildItem -LiteralPath $evalRoot -Recurse -Filter "eval.json" -File)
+        }
+
+        if ($evalFiles.Count -eq 0) {
+            Write-Host ""
+            Write-Host "==> real-image evals"
+            Write-Host "no eval\**\eval.json labels found"
+        }
+
+        foreach ($evalFile in $evalFiles) {
+            $image = Join-Path $evalFile.DirectoryName "underlying.png"
+            Invoke-Step "cargo run -- eval --image $image --labels $($evalFile.FullName) --out target\eval\$($evalFile.Directory.Name).json" {
+                cargo run -- eval --image $image --labels $evalFile.FullName --out "target\eval\$($evalFile.Directory.Name).json"
+            }
         }
     }
+}
+else {
+    Write-Host ""
+    Write-Host "==> rust checks skipped (commit only touches site\**)"
+}
+
+if ($runSite) {
+    $siteRoot = Join-Path $root "site"
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Host ""
+        Write-Host "==> site checks skipped (npm not found on PATH)"
+    }
+    elseif (-not (Test-Path -LiteralPath (Join-Path $siteRoot "node_modules"))) {
+        Write-Host ""
+        Write-Host "==> site checks skipped (run 'npm install' in site\ to enable them)"
+    }
+    else {
+        Push-Location $siteRoot
+        try {
+            Invoke-Step "site: astro check" {
+                npm run check
+            }
+            Invoke-Step "site: vitest run" {
+                npm test
+            }
+        }
+        finally {
+            Pop-Location
+        }
+    }
+}
+elseif ($hasStaged) {
+    Write-Host ""
+    Write-Host "==> site checks skipped (no site\** changes staged)"
 }
 
 Write-Host ""

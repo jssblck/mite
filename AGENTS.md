@@ -70,6 +70,11 @@ Local precommit:
 .\scripts\precommit.ps1 -IncludeEval
 ```
 
+`precommit.ps1` scopes itself to the staged changes: the Rust suite (fmt,
+nudge, test, clippy) is skipped when a commit touches only `site\**`, and the
+site checks (`astro check`, `vitest run`) run only when `site\**` changed and
+its `node_modules` is present. Run by hand with nothing staged, it runs both.
+
 First-time Windows setup:
 
 ```powershell
