@@ -1,8 +1,9 @@
 //! `mite watch`: a persistent, yomichan-style OCR overlay.
 //!
 //! While the **Shift** key is held, the foreground window is captured and OCR'd
-//! and each recognized word is drawn as a translucent, POS-coloured highlight.
-//! Hovering the cursor over a word draws a definition popup (with furigana).
+//! and each recognized word is drawn with a POS-coloured underline (and, when
+//! `overlay.furigana` is enabled, furigana above it). Hovering the cursor over a
+//! word draws a definition popup.
 //! Releasing Shift clears the overlay; **Esc** quits.
 //!
 //! Some games intercept Shift while focused, so the trigger never fires. For
@@ -139,6 +140,7 @@ pub fn run_watch(config: &AppConfig, request: &WatchRequest) -> Result<()> {
     if request.hud {
         overlay.enable_hud();
     }
+    overlay.set_furigana_visible(config.overlay.furigana);
 
     println!(
         "watching: hold SHIFT over a window to OCR it, hover a word to look it up, ESC to quit."
@@ -666,8 +668,7 @@ fn update_hover(
 
     let word = &snapshot.words[index];
     let popup = word.known.then(|| Popup {
-        anchor_x: word.rect.x.round() as i32,
-        anchor_y: word.rect.bottom().round() as i32,
+        word_rect: word.rect,
         content: word.content.clone(),
     });
     overlay.set_interaction(Some(index), popup);

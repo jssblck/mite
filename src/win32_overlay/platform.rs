@@ -4,10 +4,11 @@ use std::mem::MaybeUninit;
 use anyhow::{Context, Result};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
-    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateCompatibleDC, CreateDIBSection, CreateFontW,
-    DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, DeleteObject, FF_DONTCARE, FIXED_PITCH,
-    FW_NORMAL, GetDC, HBITMAP, HBRUSH, HFONT, HGDIOBJ, OUT_TT_PRECIS, ReleaseDC, SelectObject,
+    AC_SRC_ALPHA, AC_SRC_OVER, ANTIALIASED_QUALITY, BI_RGB, BITMAPINFO, BITMAPINFOHEADER,
+    BLENDFUNCTION, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateCompatibleDC, CreateDIBSection,
+    CreateFontW, DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, DeleteObject, FF_DONTCARE,
+    FIXED_PITCH, FW_NORMAL, GetDC, HBITMAP, HBRUSH, HFONT, HGDIOBJ, OUT_TT_PRECIS, ReleaseDC,
+    SelectObject,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -116,6 +117,35 @@ pub(super) fn create_font(height: i32, weight: i32) -> HFONT {
             OUT_TT_PRECIS,
             CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            PCWSTR(face.as_ptr()),
+        )
+    }
+}
+
+/// Proportional UI font with *grayscale* antialiasing rather than ClearType.
+///
+/// The always-on overlay furigana is drawn straight onto the transparent
+/// layered surface, where its per-pixel alpha is recovered from the glyph's
+/// grey coverage (see `draw_overlay_glyphs`). ClearType's subpixel colour
+/// fringing would make the three channels disagree and corrupt that recovery, so
+/// grayscale AA (equal channels == coverage) is required here.
+pub(super) fn create_aa_font(height: i32, weight: i32) -> HFONT {
+    let face = wide(FONT_FACE_UI);
+    unsafe {
+        CreateFontW(
+            height,
+            0,
+            0,
+            0,
+            weight,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET,
+            OUT_TT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            ANTIALIASED_QUALITY,
             (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
             PCWSTR(face.as_ptr()),
         )

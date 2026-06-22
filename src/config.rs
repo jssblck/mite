@@ -368,6 +368,10 @@ pub struct OverlayConfig {
     pub enabled: bool,
     pub click_through: bool,
     pub show_confidence: bool,
+    /// Draw furigana above every recognized word, not just in the hover popup.
+    /// Off by default: it is the most intrusive ink the overlay puts over the
+    /// game, so it stays opt-in for learners who want continuous reading support.
+    pub furigana: bool,
 }
 
 impl Default for OverlayConfig {
@@ -376,6 +380,7 @@ impl Default for OverlayConfig {
             enabled: true,
             click_through: true,
             show_confidence: true,
+            furigana: false,
         }
     }
 }
@@ -402,6 +407,16 @@ mod tests {
         );
         assert_eq!(decoded.pipeline.detector_min_long_side, 3840);
         assert_eq!(decoded.pipeline.detector_downscale, 1.0);
+        // Overlay furigana is opt-in: off unless the config turns it on.
+        assert!(!decoded.overlay.furigana);
+    }
+
+    #[test]
+    fn overlay_furigana_parses_when_enabled() {
+        let cfg = AppConfig::parse_toml("[overlay]\nfurigana = true\n").unwrap();
+        assert!(cfg.overlay.furigana);
+        // Other overlay fields keep their defaults.
+        assert!(cfg.overlay.enabled);
     }
 
     #[test]

@@ -31,8 +31,9 @@ A local, low-latency OCR overlay that turns on-screen Japanese into hoverable
 dictionary lookups. It captures the target window, runs PP-OCRv5 detection and
 recognition through ONNX Runtime, segments recognized text into dictionary words
 with Lindera, looks them up in JMdict with JPDB frequency ranking, and paints a
-transparent click-through overlay with per-word highlights and hover
-definitions. Everything runs on the local machine -- no network round-trip,
+transparent click-through overlay with per-word category underlines, optional
+always-on furigana (off by default), and hover definitions. Everything runs on
+the local machine -- no network round-trip,
 no cloud OCR. Success is a full 4K pass staying near ~200 ms p95 while the
 overlay sits unnoticed until the user wants a reading, and the definition that
 appears is the right one.

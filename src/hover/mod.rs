@@ -14,9 +14,11 @@ use crate::script::{is_cjk, is_kana};
 use crate::text_blocks::LineToken;
 
 mod furigana;
+mod pill;
 mod sense;
 
-pub use furigana::{FuriSegment, furigana_segments};
+pub use furigana::{FuriSegment, furigana_segments, surface_furigana};
+pub use pill::pill_label;
 pub use sense::{SenseHint, transitivity_hint};
 
 use furigana::has_kanji;
@@ -199,6 +201,35 @@ fn category_from_pos(pos: &str) -> WordCategory {
     }
 }
 
+/// The portion of a gloss line to display, with the trailing `  (pos)` tag
+/// removed. The structured gloss keeps the tag so the eval guard can score
+/// grammatical class, but the overlay shows the class in the category pill
+/// instead, so the visible gloss is just the meanings. Only a tag introduced by
+/// the two-space [`crate::dictionary`] convention is stripped; parentheticals
+/// that are part of a meaning (single-spaced, mid-gloss) are left intact.
+pub fn strip_pos_tag(gloss: &str) -> &str {
+    match gloss.rsplit_once("  (") {
+        Some((head, tail)) if tail.ends_with(')') && !tail[..tail.len() - 1].contains(')') => head,
+        _ => gloss,
+    }
+}
+
+/// Length, in UTF-16 code units, of an inflection note's lead word when it is a
+/// plain-English term worth emphasising (e.g. the "Polite" in "Polite masu-form:
+/// ..."). Returns 0 for notes that open with Japanese grammar terms, which the
+/// popup then renders without a bold lead. ASCII lead words are all in the BMP,
+/// so the code-unit count equals the character count and can index the wrapped
+/// UTF-16 line directly.
+pub fn note_lead_len(note: &str) -> usize {
+    if !note.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+        return 0;
+    }
+    note.chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .map(char::len_utf16)
+        .sum()
+}
+
 /// Structured content for the definition popup of one word.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct PopupContent {
@@ -208,9 +239,12 @@ pub struct PopupContent {
     pub ruby: Vec<FuriSegment>,
     /// A note about the surface/inflection (e.g. `食べ · 連用形`), if inflected.
     pub note: Option<String>,
-    /// Per-sense gloss lines (`glosses (pos)`), already formatted.
+    /// Per-sense gloss lines (the meanings, joined with `; `), already formatted.
     pub glosses: Vec<String>,
     pub category: WordCategory,
+    /// Plain-language grammar tag for the category pill (`NOUN`,
+    /// `VERB (GODAN)`, ...), or `None` when there is nothing useful to name.
+    pub pill: Option<String>,
 }
 
 /// Build the popup content for a resolved token: word, furigana ruby, an
@@ -301,6 +335,7 @@ pub fn popup_content(
         note,
         glosses,
         category: categorize(token),
+        pill: pill_label(token),
     }
 }
 
@@ -325,12 +360,16 @@ fn is_quiet_symbol_char(ch: char) -> bool {
 }
 
 /// A drawable highlight: a word's frame-local rect, its category (for colour),
-/// and whether it resolved to a dictionary entry.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// whether it resolved to a dictionary entry, and the ruby to draw over the
+/// on-screen surface glyphs.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Highlight {
     pub rect: Rect,
     pub category: WordCategory,
     pub known: bool,
+    /// Surface-aligned ruby: each segment spans consecutive surface characters,
+    /// kanji runs carrying the furigana to draw above them.
+    pub ruby: Vec<FuriSegment>,
 }
 
 /// A segmented word: its highlight geometry plus the popup content to show when
@@ -343,6 +382,10 @@ pub struct WordSpan {
     pub category: WordCategory,
     pub known: bool,
     pub content: PopupContent,
+    /// Ruby aligned to the surface glyphs, for the always-on overlay furigana
+    /// (the popup ruby in `content` is keyed to the dictionary form instead).
+    #[serde(skip)]
+    pub surface_ruby: Vec<FuriSegment>,
 }
 
 impl WordSpan {
@@ -351,6 +394,7 @@ impl WordSpan {
             rect: self.rect,
             category: self.category,
             known: self.known,
+            ruby: self.surface_ruby.clone(),
         }
     }
 }
@@ -407,12 +451,15 @@ pub fn build_word_spans(
         .enumerate()
         .map(|(index, (token, (start, end)))| {
             let hint = transitivity_hint(tokens, index);
+            let content = popup_content(token, hint, max_senses, max_glosses);
+            let surface_ruby = surface_furigana(&token.surface, &content.ruby);
             WordSpan {
                 rect: word_rect(box_rect, centers, char_count, start, end),
                 surface: token.surface.clone(),
                 category: categorize(token),
                 known: token.is_known(),
-                content: popup_content(token, hint, max_senses, max_glosses),
+                content,
+                surface_ruby,
             }
         })
         .collect();
@@ -438,6 +485,10 @@ pub fn build_word_spans_from_line_tokens(
         .iter()
         .map(|segment| {
             let hint = transitivity_hint(block_tokens, segment.block_token_index);
+            let content = popup_content(&segment.token, hint, max_senses, max_glosses);
+            // Ruby is aligned to the *visible* surface so wrapped tokens only
+            // carry furigana for the kanji actually shown on this line.
+            let surface_ruby = surface_furigana(&segment.visible_surface, &content.ruby);
             WordSpan {
                 rect: word_rect(
                     box_rect,
@@ -449,7 +500,8 @@ pub fn build_word_spans_from_line_tokens(
                 surface: segment.visible_surface.clone(),
                 category: categorize(&segment.token),
                 known: segment.token.is_known(),
-                content: popup_content(&segment.token, hint, max_senses, max_glosses),
+                content,
+                surface_ruby,
             }
         })
         .collect();
@@ -610,11 +662,14 @@ mod tests {
             ]
         );
         assert_eq!(content.note.as_deref(), Some("飲ん · 連用形"));
+        // The structured gloss keeps its POS tag (the eval guard scores it); the
+        // overlay strips the tag at draw time and shows the class in the pill.
         assert_eq!(
             content.glosses,
             vec!["to drink; to gulp  (v5m)".to_string()]
         );
         assert_eq!(content.category, WordCategory::Verb);
+        assert_eq!(content.pill.as_deref(), Some("VERB (GODAN)"));
     }
 
     #[test]
@@ -786,6 +841,31 @@ mod tests {
                 furigana: Some("たべXX".to_string())
             }]
         );
+    }
+
+    #[test]
+    fn note_lead_len_marks_only_english_lead_words() {
+        assert_eq!(note_lead_len("Polite masu-form: the polite non-past."), 6);
+        assert_eq!(note_lead_len("Honorific prefix."), 9);
+        // A note that opens with Japanese grammar terms has no bold lead.
+        assert_eq!(note_lead_len("飲ん · 連用形"), 0);
+        assert_eq!(note_lead_len(""), 0);
+    }
+
+    #[test]
+    fn strip_pos_tag_drops_only_the_trailing_class_tag() {
+        assert_eq!(
+            strip_pos_tag("to drink; to gulp  (v5m)"),
+            "to drink; to gulp"
+        );
+        assert_eq!(strip_pos_tag("topic marker  (prt)"), "topic marker");
+        // A mid-gloss parenthetical (single space, not at the very end) stays.
+        assert_eq!(
+            strip_pos_tag("payload (of a packet, cell, etc.)  (n)"),
+            "payload (of a packet, cell, etc.)"
+        );
+        // No tag: returned unchanged.
+        assert_eq!(strip_pos_tag("morning"), "morning");
     }
 
     #[test]
