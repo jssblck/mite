@@ -6,7 +6,7 @@ import SectionHead from "./SectionHead.astro";
 const rows = [
   {
     t: "Stay in the scene",
-    d: "No window switch, no focus theft. The overlay is layered and click-through.",
+    d: "The overlay is layered and click-through, so it never switches windows or steals focus.",
   },
   {
     t: "No kanji lookup by hand",
@@ -23,24 +23,18 @@ const rows = [
   <div class="moment-grid">
     <div>
       <SectionHead>
-        <span slot="title"
-          >Your dictionary is one alt-tab and one broken scene away.</span
-        >
+        <span slot="title">Browser dictionaries can't read your games.</span>
       </SectionHead>
       <div class="measure moment-prose">
         <p>
-          You are mid-scene. One word you do not know. The old move: alt-tab to a
-          browser dictionary, retype or hand-draw a kanji you cannot read, lose
-          the line, lose the moment, come back cold.
-        </p>
-        <p>
-          And native games and visual novels are not web pages: the
-          point-and-define dictionary that lives in your browser simply cannot
-          reach them. The text stays locked behind the glass.
+          Tools like Yomitan work by reading a web page's text directly. Games
+          and visual novels draw Japanese as pixels, not selectable text, so
+          those tools can't reach it, and you're left alt-tabbing to a
+          dictionary to hand-draw a kanji you can't read.
         </p>
         <p class="moment-prose-strong">
-          <MiteTerm /> removes the tax. It reads the screen in place, answers where
-          your eyes already are, and is gone the instant you stop looking.
+          <MiteTerm /> reads the text straight off the screen, so the lookup happens
+          where you're already looking and you never leave the scene.
         </p>
       </div>
     </div>
