@@ -186,8 +186,8 @@ pub async fn record_runtime() -> Result<AppSettings, String> {
 
 /// The persisted app settings (recorded runtime tier, DLL dirs, seen flag).
 #[tauri::command]
-pub async fn get_settings() -> Result<AppSettings, String> {
-    blocking(|| Ok(settings::load())).await
+pub fn get_settings() -> AppSettings {
+    settings::load()
 }
 
 #[tauri::command]
@@ -219,8 +219,8 @@ pub fn start_watch(
 }
 
 #[tauri::command]
-pub fn stop_watch(state: State<WatchState>) -> Result<(), String> {
-    watch::stop(&state).map_err(|err| format!("{err:#}"))
+pub fn stop_watch(state: State<WatchState>) {
+    watch::stop(&state);
 }
 
 #[tauri::command]

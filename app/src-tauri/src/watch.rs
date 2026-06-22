@@ -124,11 +124,10 @@ pub fn start(app: &AppHandle, state: &State<WatchState>, opts: WatchOptions) -> 
 
 /// Kill the supervised watch process if one is running. The reaper thread then
 /// reaps it and emits the final `watch-state`.
-pub fn stop(state: &State<WatchState>) -> Result<()> {
+pub fn stop(state: &State<WatchState>) {
     if let Some(child) = state.0.lock().unwrap().as_mut() {
         let _ = child.kill();
     }
-    Ok(())
 }
 
 fn open_log_file(pid: u32) -> Option<File> {
