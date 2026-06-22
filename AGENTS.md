@@ -163,7 +163,8 @@ generalize them before publishing.
   JPDB frequency ranks, and JMdict.
 - `src/eval.rs`: full-frame real-image OCR/lookup regression scoring against
   manually authored labels.
-- `src/debug_capture.rs`, `src/artifact.rs`: self-contained diagnostic output.
+- `src/eval_capture.rs`, `src/artifact.rs`: raw eval-fixture capture and shared
+  on-disk artifact helpers.
 - `examples/`: profiling and lookup/sense stress harnesses.
 
 ## Development Rules
@@ -223,7 +224,7 @@ These are not required for every change, but they are the most useful places to
 invest when the touched area overlaps them.
 
 1. Make debug and benchmark outputs consistently artifact-shaped. The repo
-   already has `artifact.rs` and debug-capture JSON; examples and profiling
+   already has `artifact.rs` and eval-capture JSON; examples and profiling
    harnesses could eventually emit structured reports under `target\` for easier
    comparison.
 2. Keep pushing latency work through measured p95/p99 improvements. The next

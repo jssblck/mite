@@ -15,14 +15,12 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use windows::Win32::Foundation::{HWND, POINT, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
-    CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, Ellipse, FW_NORMAL, FW_SEMIBOLD, FillRect,
+    CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, FW_NORMAL, FW_SEMIBOLD, FillRect,
     GetStockObject, GetTextExtentPoint32W, HBITMAP, HDC, HFONT, HGDIOBJ, HOLLOW_BRUSH, PS_SOLID,
     Polyline, Rectangle, RoundRect, SelectObject, SetBkMode, SetTextCharacterExtra, SetTextColor,
     TRANSPARENT, TextOutW,
 };
-use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, GWL_EXSTYLE, GetWindowLongPtrW, SetWindowLongPtrW, WS_EX_TRANSPARENT,
-};
+use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
 use crate::geometry::{Rect, ScreenRect};
 use crate::hover::{FuriSegment, Highlight, PopupContent, note_lead_len, strip_pos_tag};
@@ -36,17 +34,15 @@ use platform::{
     present_layered, pump_messages, u32_to_i32,
 };
 use style::{
-    COLOR_BUTTON_BG, COLOR_BUTTON_BORDER, COLOR_BUTTON_ICON, COLOR_FURIGANA, COLOR_GLOSS_TEXT,
-    COLOR_HUD_BG, COLOR_HUD_GRAPH_BG, COLOR_HUD_GRIDLINE, COLOR_HUD_LEGEND_HEADER,
-    COLOR_HUD_STATUS, COLOR_HUD_TITLE, COLOR_NOTE_LEAD, COLOR_NOTE_TEXT, COLOR_PANEL_BG,
-    COLOR_PANEL_BORDER, COLOR_SEPARATOR, COLOR_WHITE, COLOR_WORD_TEXT, Rgb, category_rgb,
-    hud_stage_rgb,
+    COLOR_FURIGANA, COLOR_GLOSS_TEXT, COLOR_HUD_BG, COLOR_HUD_GRAPH_BG, COLOR_HUD_GRIDLINE,
+    COLOR_HUD_LEGEND_HEADER, COLOR_HUD_STATUS, COLOR_HUD_TITLE, COLOR_NOTE_LEAD, COLOR_NOTE_TEXT,
+    COLOR_PANEL_BG, COLOR_PANEL_BORDER, COLOR_SEPARATOR, COLOR_WHITE, COLOR_WORD_TEXT, Rgb,
+    category_rgb, hud_stage_rgb,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayEvent {
     Hotkey(i32),
-    LeftButtonDown { x: i32, y: i32 },
 }
 
 const CLASS_NAME: &str = "MiteOverlayWindow";
@@ -120,11 +116,6 @@ const SEPARATOR_H: i32 = 1;
 const TAIL_HALF_W: i32 = 8;
 const TAIL_H: i32 = 8;
 
-// Problem-report button (top-right of the popup).
-const BUTTON_W: i32 = 26;
-const BUTTON_H: i32 = 20;
-const BUTTON_MARGIN: i32 = 8;
-
 // Latency HUD (top-left).
 const HUD_WINDOW: Duration = Duration::from_secs(30);
 const HUD_MARGIN: i32 = 14;
@@ -197,10 +188,6 @@ pub struct Win32Overlay {
     popup: Option<Popup>,
     /// Frame-local rect of the drawn popup panel (for sticky hit-testing).
     popup_panel: Option<Rect>,
-    /// Frame-local rect of the problem-report button (for click detection).
-    screenshot_button: Option<Rect>,
-    /// Whether the window currently passes clicks through (`WS_EX_TRANSPARENT`).
-    click_through: bool,
     /// Rolling per-stage latency samples. Always collected (so headless metrics
     /// dumps work); only drawn when `hud_visible`.
     hud: LatencyHud,
@@ -246,34 +233,11 @@ impl Win32Overlay {
             hovered: None,
             popup: None,
             popup_panel: None,
-            screenshot_button: None,
-            click_through: true,
             hud: LatencyHud::new(HUD_WINDOW),
             hud_visible: false,
             furigana_visible: false,
             underlines_visible: true,
         })
-    }
-
-    /// Toggle click-through. The overlay is normally click-through so the game
-    /// keeps all input; disable it briefly while the cursor is over an
-    /// interactive element (the problem-report button) so the click lands on
-    /// the overlay instead of passing through to the game.
-    pub fn set_click_through(&mut self, enabled: bool) {
-        if enabled == self.click_through {
-            return;
-        }
-        self.click_through = enabled;
-        let bit = WS_EX_TRANSPARENT.0 as isize;
-        unsafe {
-            let current = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
-            let updated = if enabled {
-                current | bit
-            } else {
-                current & !bit
-            };
-            SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, updated);
-        }
     }
 
     /// Show the top-left latency HUD overlay (timing is collected regardless).
@@ -311,13 +275,9 @@ impl Win32Overlay {
         self.popup_panel
     }
 
-    /// Frame-local rect of the current problem-report button, if shown.
-    pub fn screenshot_button(&self) -> Option<Rect> {
-        self.screenshot_button
-    }
-
     /// A copy of the current overlay surface: `(width, height, premultiplied
-    /// BGRA bytes)`, for compositing into a debug capture.
+    /// BGRA bytes)`, for compositing the overlay over a frame offline (e.g. the
+    /// headless overlay preview).
     pub fn overlay_surface(&self) -> Option<(i32, i32, Vec<u8>)> {
         let canvas = self.canvas.as_ref()?;
         let len = (canvas.width as usize) * (canvas.height as usize) * 4;
@@ -437,11 +397,8 @@ impl Win32Overlay {
         }
 
         let mut panel_rect = None;
-        let mut button_rect = None;
         if let Some(popup) = &self.popup {
-            let (panel, button) = unsafe { draw_popup(canvas, width, height, popup, &self.fonts) };
-            panel_rect = Some(panel);
-            button_rect = Some(button);
+            panel_rect = Some(unsafe { draw_popup(canvas, width, height, popup, &self.fonts) });
         }
 
         // HUD draws last so it stays readable over highlights and the popup.
@@ -451,7 +408,6 @@ impl Win32Overlay {
 
         present_layered(self.hwnd, self.screen_rect, canvas);
         self.popup_panel = panel_rect;
-        self.screenshot_button = button_rect;
     }
 
     fn destroy_canvas(&mut self) {
@@ -672,16 +628,16 @@ struct WrappedLine {
     height: i32,
 }
 
-/// Returns `(sticky_rect, button_rect)` in frame-local coordinates. `sticky_rect`
-/// is the popup's hover region, extended across the tail gap to the word so the
-/// cursor can travel into the popup without dropping the hover.
+/// Returns the popup's `sticky_rect` in frame-local coordinates: its hover
+/// region, extended across the tail gap to the word so the cursor can travel into
+/// the popup without dropping the hover.
 unsafe fn draw_popup(
     canvas: &Canvas,
     frame_w: i32,
     frame_h: i32,
     popup: &Popup,
     fonts: &Fonts,
-) -> (Rect, Rect) {
+) -> Rect {
     let dc = canvas.dc;
     let content = &popup.content;
 
@@ -748,9 +704,7 @@ unsafe fn draw_popup(
         .max()
         .unwrap_or(0);
     let pill_w = pill.as_ref().map_or(0, |p| p.width);
-    // The top row also has to clear the problem-report button on the right.
-    let top_row_w = word_w + BUTTON_W + BUTTON_MARGIN;
-    let content_w = top_row_w.max(pill_w).max(body_w);
+    let content_w = word_w.max(pill_w).max(body_w);
     let panel_w = (content_w + POPUP_PADDING * 2).min(POPUP_MAX_WIDTH);
 
     let gap_before_gloss = if pill.is_some() {
@@ -799,12 +753,6 @@ unsafe fn draw_popup(
         top,
         right: left + panel_w,
         bottom: top + panel_h,
-    };
-    let button = RECT {
-        left: left + panel_w - BUTTON_W - BUTTON_MARGIN,
-        top: top + BUTTON_MARGIN,
-        right: left + panel_w - BUTTON_MARGIN,
-        bottom: top + BUTTON_MARGIN + BUTTON_H,
     };
     // Tail apex sits on the word edge; the base hugs the flat part of the panel
     // edge (kept off the rounded corners).
@@ -912,8 +860,6 @@ unsafe fn draw_popup(
             }
         }
 
-        draw_button(dc, &button);
-
         // Tail, then carve the rounded corners. The tail is filled premultiplied
         // (already opaque), so the panel-only opacity mask leaves it untouched.
         fill_tail(
@@ -930,7 +876,7 @@ unsafe fn draw_popup(
     apply_rounded_opacity(canvas.bits, frame_w, frame_h, &panel, POPUP_CORNER_RADIUS);
 
     // Sticky region: the panel plus the tail gap back to the word.
-    let sticky = if tail_down {
+    if tail_down {
         Rect::new(
             left as f32,
             top as f32,
@@ -944,16 +890,7 @@ unsafe fn draw_popup(
             panel_w as f32,
             (panel_h + TAIL_H) as f32,
         )
-    };
-    (
-        sticky,
-        Rect::new(
-            button.left as f32,
-            button.top as f32,
-            BUTTON_W as f32,
-            BUTTON_H as f32,
-        ),
-    )
+    }
 }
 
 /// Draw the category pill: a colour-outlined, fully-rounded badge with its
@@ -984,51 +921,6 @@ unsafe fn draw_pill(dc: HDC, x: i32, y: i32, pill: &PillLayout, color: Rgb, font
         let _ = TextOutW(dc, x + PILL_PAD_X, y + PILL_PAD_Y, &pill.text);
         SelectObject(dc, old_font);
         SetTextCharacterExtra(dc, 0);
-    }
-}
-
-/// Draw the problem-report button: a small panel with a line-art camera icon.
-unsafe fn draw_button(dc: HDC, button: &RECT) {
-    unsafe {
-        let bg = CreateSolidBrush(COLOR_BUTTON_BG.to_colorref());
-        FillRect(dc, button, bg);
-        let _ = DeleteObject(HGDIOBJ(bg.0));
-
-        let hollow = GetStockObject(HOLLOW_BRUSH);
-        let old_brush = SelectObject(dc, hollow);
-
-        let border = CreatePen(
-            PS_SOLID,
-            HAIRLINE_PEN_WIDTH,
-            COLOR_BUTTON_BORDER.to_colorref(),
-        );
-        let old_pen = SelectObject(dc, HGDIOBJ(border.0));
-        let _ = Rectangle(dc, button.left, button.top, button.right, button.bottom);
-        SelectObject(dc, old_pen);
-        let _ = DeleteObject(HGDIOBJ(border.0));
-
-        // Camera icon in a light pen.
-        let icon = CreatePen(
-            PS_SOLID,
-            HAIRLINE_PEN_WIDTH,
-            COLOR_BUTTON_ICON.to_colorref(),
-        );
-        let old_pen = SelectObject(dc, HGDIOBJ(icon.0));
-        let cx = (button.left + button.right) / 2;
-        let body_top = button.top + 7;
-        let _ = Rectangle(
-            dc,
-            button.left + 5,
-            body_top,
-            button.right - 5,
-            button.bottom - 3,
-        );
-        let _ = Rectangle(dc, cx - 3, button.top + 4, cx + 3, body_top);
-        let _ = Ellipse(dc, cx - 3, body_top + 2, cx + 3, button.bottom - 5);
-        SelectObject(dc, old_pen);
-        let _ = DeleteObject(HGDIOBJ(icon.0));
-
-        SelectObject(dc, old_brush);
     }
 }
 

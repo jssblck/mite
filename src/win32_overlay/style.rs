@@ -41,9 +41,6 @@ pub(super) const COLOR_NOTE_LEAD: Rgb = Rgb::new(226, 228, 236);
 /// Hairline divider between the meanings and the inflection note.
 pub(super) const COLOR_SEPARATOR: Rgb = Rgb::new(54, 54, 66);
 pub(super) const COLOR_GLOSS_TEXT: Rgb = Rgb::new(214, 214, 222);
-pub(super) const COLOR_BUTTON_BG: Rgb = Rgb::new(46, 46, 58);
-pub(super) const COLOR_BUTTON_BORDER: Rgb = Rgb::new(120, 120, 150);
-pub(super) const COLOR_BUTTON_ICON: Rgb = Rgb::new(228, 228, 238);
 pub(super) const COLOR_HUD_BG: Rgb = Rgb::new(18, 18, 24);
 pub(super) const COLOR_HUD_TITLE: Rgb = Rgb::new(205, 205, 215);
 pub(super) const COLOR_HUD_STATUS: Rgb = Rgb::new(150, 180, 210);

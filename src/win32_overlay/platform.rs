@@ -15,8 +15,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, HICON, HWND_TOPMOST, IDC_ARROW, LoadCursorW,
     MA_NOACTIVATE, MSG, PM_REMOVE, PeekMessageW, RegisterClassW, SW_SHOWNA, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOSIZE, SetWindowPos, ShowWindow, TranslateMessage, ULW_ALPHA,
-    UpdateLayeredWindow, WM_HOTKEY, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WNDCLASSW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    UpdateLayeredWindow, WM_HOTKEY, WM_MOUSEACTIVATE, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::PCWSTR;
 
@@ -210,9 +210,9 @@ pub(super) fn create_overlay_window() -> Result<HWND> {
 fn register_overlay_class(instance: HINSTANCE, class_name: &[u16]) {
     static REGISTERED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     REGISTERED.get_or_init(|| {
-        // Standard arrow cursor: without it the class cursor is null, so when
-        // the overlay is interactive (not click-through, e.g. over the
-        // problem-report button) Windows falls back to the busy/wait cursor.
+        // Standard arrow cursor as a sane default: without it the class cursor
+        // is null. The overlay is click-through, so input (and the cursor) pass
+        // to the window beneath, but a null class cursor is still avoided.
         let cursor = unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap_or_default();
         let class = WNDCLASSW {
             style: Default::default(),
@@ -264,11 +264,6 @@ pub(super) fn pump_messages() -> Vec<OverlayEvent> {
                 }
                 continue;
             }
-            if msg.message == WM_LBUTTONDOWN {
-                let (x, y) = mouse_coords(msg.lParam);
-                events.push(OverlayEvent::LeftButtonDown { x, y });
-                continue;
-            }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -278,13 +273,6 @@ pub(super) fn pump_messages() -> Vec<OverlayEvent> {
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-fn mouse_coords(lparam: LPARAM) -> (i32, i32) {
-    let raw = lparam.0 as u32;
-    let x = (raw & 0xffff) as i16 as i32;
-    let y = ((raw >> 16) & 0xffff) as i16 as i32;
-    (x, y)
 }
 
 pub(super) fn u32_to_i32(value: u32) -> i32 {

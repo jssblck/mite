@@ -25,21 +25,17 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use image::RgbImage;
 use windows::Win32::Foundation::POINT;
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VK_ESCAPE, VK_LBUTTON, VK_SHIFT,
-};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetForegroundWindow};
 
 use crate::capture::{
     Frame, FrameDelivery, FrameSource, WindowCapturePreference, WindowSelector, window_frame_source,
 };
 use crate::config::AppConfig;
-use crate::debug_capture::{self, CaptureInput};
 use crate::dictionary::Dictionary;
 use crate::eval_capture;
 use crate::geometry::{Rect, ScreenRect};
@@ -92,12 +88,10 @@ pub struct EvalHotkeyRequest {
 }
 
 /// One captured-and-analyzed snapshot of the target window: the segmented words
-/// (highlight geometry + popup content) in frame-local coordinates, plus the
-/// raw OCR lines and the frame image, retained for debug captures.
+/// (highlight geometry + popup content) in frame-local coordinates, plus the raw
+/// OCR lines (retained for the HUD's line count).
 struct Snapshot {
     screen_rect: ScreenRect,
-    window_id: u32,
-    image: Option<std::sync::Arc<RgbImage>>,
     items: Vec<RecognizedText>,
     words: Vec<WordSpan>,
     /// Capture-health extras for the HUD/metrics (drop count + staleness).
@@ -184,8 +178,6 @@ pub fn run_watch(config: &AppConfig, request: &WatchRequest) -> Result<()> {
     let mut last_request: Option<Instant> = None;
     let mut last_window: Option<u32> = None;
     let mut showing = false;
-    let mut lbutton_was_down = false;
-    let mut report_click_latched = false;
     let mut last_metrics = Instant::now();
 
     loop {
@@ -278,9 +270,6 @@ pub fn run_watch(config: &AppConfig, request: &WatchRequest) -> Result<()> {
         let over_popup = matches!((overlay.popup_panel(), local), (Some(panel), Some((x, y)))
             if panel.contains(x, y));
         let over_interactive = over_highlight || over_popup;
-        let report_button = overlay.screenshot_button();
-        let over_button = matches!((report_button, local), (Some(button), Some((x, y)))
-            if button.contains(x, y));
 
         if active {
             // Request a fresh OCR pass when the target window changes or the
@@ -301,7 +290,7 @@ pub fn run_watch(config: &AppConfig, request: &WatchRequest) -> Result<()> {
             }
         } else if showing && over_interactive {
             // Sticky: keep the overlay alive while the cursor is over a word or
-            // the popup, even after Shift is released (so it can be screenshot).
+            // the popup, even after Shift is released, so the popup stays readable.
             if !over_popup {
                 update_hover(&mut overlay, snapshot.as_ref(), local);
             }
@@ -313,65 +302,10 @@ pub fn run_watch(config: &AppConfig, request: &WatchRequest) -> Result<()> {
             last_window = None;
         }
 
-        // Problem-report button: a left-click over the button writes a debug
-        // capture. Use both overlay mouse messages and a global polling fallback:
-        // the former is the reliable path once the overlay receives the click,
-        // while the latter still catches fast clicks during the transparent →
-        // interactive style transition.
-        let lbutton_down = key_down(VK_LBUTTON.0);
-        if !lbutton_down {
-            report_click_latched = false;
-        }
-        let report_requested_by_message = overlay_events.iter().any(|event| {
-            matches!(
-                event,
-                OverlayEvent::LeftButtonDown { x, y }
-                    if button_contains(report_button, *x, *y)
-            )
-        });
-        let report_requested_by_poll = lbutton_down && !lbutton_was_down && over_button;
-        if (report_requested_by_message || report_requested_by_poll)
-            && !report_click_latched
-            && let Some(snap) = &snapshot
-        {
-            save_debug_capture(&overlay, snap);
-            report_click_latched = true;
-        }
-        lbutton_was_down = lbutton_down;
-
-        // Drop click-through only while over (or actively clicking) the report
-        // button, so the rest of the overlay stays transparent to the game.
-        overlay.set_click_through(!(over_button || report_click_latched));
-
         thread::sleep(UI_POLL_INTERVAL);
     }
 
     Ok(())
-}
-
-/// Composite the overlay over the captured frame and write a debug capture.
-fn save_debug_capture(overlay: &Win32Overlay, snapshot: &Snapshot) {
-    let Some(image) = &snapshot.image else {
-        tracing::warn!("no frame image retained; cannot write debug capture");
-        return;
-    };
-    let Some((width, height, bgra)) = overlay.overlay_surface() else {
-        return;
-    };
-    let input = CaptureInput {
-        frame: image,
-        overlay_width: width,
-        overlay_height: height,
-        overlay_bgra: &bgra,
-        screen_rect: snapshot.screen_rect,
-        window_id: snapshot.window_id,
-        lines: &snapshot.items,
-        words: &snapshot.words,
-    };
-    match debug_capture::write_capture(&input) {
-        Ok(dir) => println!("problem report capture saved: {}", dir.display()),
-        Err(error) => tracing::warn!("problem report capture failed: {error:#}"),
-    }
 }
 
 enum WorkerJob {
@@ -508,8 +442,6 @@ impl Worker {
                 drop(tracing::info_span!("analyze").entered());
                 return Ok(Snapshot {
                     screen_rect: unchanged.screen_rect,
-                    window_id,
-                    image: None,
                     items: cached.items,
                     words: cached.words,
                     extras: PassExtras {
@@ -539,8 +471,6 @@ impl Worker {
             drop(tracing::info_span!("analyze").entered());
             return Ok(Snapshot {
                 screen_rect,
-                window_id,
-                image: frame.pixels,
                 items: cached.items,
                 words: cached.words,
                 extras,
@@ -570,8 +500,6 @@ impl Worker {
             items.len(),
         );
 
-        let image = frame.pixels; // retained for debug captures
-
         let words = {
             let _span = tracing::info_span!("analyze").entered();
             let mut words = Vec::new();
@@ -593,14 +521,15 @@ impl Worker {
         // the detected text rects and their luma so the next frame can be
         // compared there.
         let rects: Vec<Rect> = items.iter().map(|item| item.text_box.rect).collect();
-        self.smoothing.anchor = image.as_ref().map(|img| Anchor::from_detection(img, rects));
+        self.smoothing.anchor = frame
+            .pixels
+            .as_ref()
+            .map(|img| Anchor::from_detection(img, rects));
         self.smoothing.cached = Some(CachedDetection::new(items.clone(), words.clone()));
         self.smoothing.last_full = Instant::now();
 
         Ok(Snapshot {
             screen_rect,
-            window_id,
-            image,
             items,
             words,
             extras,
@@ -703,25 +632,5 @@ fn cursor_position() -> Option<(i32, i32)> {
         Some((point.x, point.y))
     } else {
         None
-    }
-}
-
-fn button_contains(button: Option<Rect>, x: i32, y: i32) -> bool {
-    button.is_some_and(|button| button.contains(x as f32, y as f32))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn button_contains_uses_frame_local_mouse_coordinates() {
-        let button = Some(Rect::new(10.0, 20.0, 30.0, 15.0));
-
-        assert!(button_contains(button, 10, 20));
-        assert!(button_contains(button, 39, 34));
-        assert!(!button_contains(button, 40, 34));
-        assert!(!button_contains(button, 39, 35));
-        assert!(!button_contains(None, 10, 20));
     }
 }

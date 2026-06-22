@@ -94,7 +94,6 @@ Use `--auto` for games that consume the `Shift` key, and pin the target with
 - TensorRT/CUDA acceleration with CPU fallback.
 - Temporal smoothing so stable text regions can be reused instead of re-OCR'd
   every frame.
-- Raw debug captures for concrete issue reports.
 - Manual real-image eval workflow for OCR, lookup, bounds, and popup metadata.
 - Browser-based eval label UI for private eval corpora.
 
