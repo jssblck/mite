@@ -6,7 +6,6 @@ import {
   type GpuRuntimeStatus,
   type RuntimeTier,
 } from "../lib/api";
-import { MiteMark } from "../components/MiteMark";
 
 interface RuntimeSetupProps {
   status: AppStatus;
@@ -233,7 +232,6 @@ export function RuntimeSetup({ status, onClose }: RuntimeSetupProps) {
         <main className="app-main">
           <div className="wizard">
             <div className="wizard-hero">
-              <MiteMark className="mark" size="2.75rem" />
               <h1>No NVIDIA GPU detected</h1>
               <p>
                 Mite will run on the CPU. It is slower than the GPU path but works
@@ -265,7 +263,6 @@ export function RuntimeSetup({ status, onClose }: RuntimeSetupProps) {
       <main className="app-main">
         <div className="wizard wizard-wide">
           <div className="wizard-hero">
-            <MiteMark className="mark" size="2.75rem" />
             <h1>Set up GPU acceleration</h1>
             <p className="wide">
               Mite needs several NVIDIA runtime components to use your GPU. These

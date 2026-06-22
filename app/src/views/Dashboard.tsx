@@ -38,6 +38,32 @@ export function Dashboard({ status, watching, onRefresh, onWatch }: DashboardPro
     api.checkForUpdates().then(setUpdate).catch(() => setUpdate(null));
   }, []);
 
+  // Auto-refresh the install status while the Dashboard is on screen (it only
+  // mounts when its tab is active). Debounced so a slow probe never overlaps the
+  // next tick, paused while the window is hidden, and re-run on regaining focus.
+  useEffect(() => {
+    let inFlight = false;
+    const tick = async () => {
+      if (inFlight || document.hidden) return;
+      inFlight = true;
+      try {
+        await onRefresh();
+      } finally {
+        inFlight = false;
+      }
+    };
+    tick();
+    const handle = setInterval(tick, 3000);
+    const onVisible = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(handle);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [onRefresh]);
+
   const doctor = status.doctor;
   const gpu = doctor?.nvidia;
   const tier = doctor?.gpu_runtime?.tier ?? "cpu";
@@ -128,9 +154,6 @@ export function Dashboard({ status, watching, onRefresh, onWatch }: DashboardPro
         <div className="btn-row">
           <button className="btn btn-primary" onClick={onWatch}>
             {watching ? "Go to watch" : "Start watching"}
-          </button>
-          <button className="btn btn-ghost btn-sm" onClick={onRefresh}>
-            Refresh
           </button>
         </div>
       </div>

@@ -28,6 +28,28 @@ body,
   flex-direction: column;
 }
 
+/* Native-app feel: the standard arrow cursor everywhere (never the web text
+   I-beam or link hand), and no rubber-band text selection, so the window does
+   not behave like a web page. The #root-scoped universal selector overrides the
+   shared global.css button cursors without editing that site-shared file. Code
+   blocks and form fields opt back into text selection below. */
+#root,
+#root * {
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+#root .cmd-code,
+#root .cmd-code code,
+#root .code-path,
+#root .log-view,
+#root input,
+#root textarea {
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 /* ----------------------------------------------------------------------------
    App shell
 ---------------------------------------------------------------------------- */
@@ -157,6 +179,45 @@ body,
 .page-head p {
   color: var(--color-muted);
   max-width: 52ch;
+}
+
+/* ----------------------------------------------------------------------------
+   Settings list: compact hairline-separated rows (native, no whole-page scroll)
+---------------------------------------------------------------------------- */
+
+.settings-list {
+  padding-block: 0.4rem;
+}
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.85rem 0;
+  border-top: 1px solid var(--color-line);
+}
+.setting-row:first-child {
+  border-top: 0;
+}
+.setting-main {
+  flex: 1;
+  min-width: 0;
+}
+.setting-label {
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.setting-detail {
+  font-size: 0.85rem;
+  color: var(--color-muted);
+  margin-top: 0.1rem;
+}
+.setting-actions {
+  flex: none;
+  display: flex;
+  gap: 0.5rem;
+}
+.setting-note {
+  margin: 0 0 0.85rem;
 }
 
 /* ----------------------------------------------------------------------------

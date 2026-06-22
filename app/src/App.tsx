@@ -133,7 +133,7 @@ function App() {
               <span className="dot" /> Watching
             </span>
           )}
-          <span>v{status.appVersion}</span>
+          <span>{status.appVersion}</span>
         </span>
       </header>
       <main className="app-main">
