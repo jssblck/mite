@@ -234,21 +234,37 @@ cargo run -- clean-images
 ## GPU acceleration
 
 The fast path is the **TensorRT execution provider** (FP16). ONNX Runtime ships
-only the provider shims, so fetch the NVIDIA runtime DLLs once and let Cargo
-stage them:
+only the provider shims, so the NVIDIA runtime itself has to be on the machine.
+Mite never downloads, hosts, bundles, or installs NVIDIA binaries, and that
+applies to this repository's developer tooling too: install the runtime yourself
+from NVIDIA, then make it discoverable on `PATH`.
+
+There are two install routes, the same two the desktop app guides end users
+through. Pick one:
+
+- **NVIDIA installers (recommended):** install the CUDA Toolkit 12.x and cuDNN 9
+  from NVIDIA, plus the TensorRT 10.x runtime. The CUDA Toolkit installer adds its
+  `bin` directory to `PATH` for you; for the cuDNN and TensorRT zips, add their
+  `bin` directories to `PATH` (or copy the DLLs alongside one of the directories
+  `doctor` already searches).
+- **Pinned pip wheels:** install the wheels into a virtual environment or a
+  `--target` folder, then put their wheel `bin` directories on `PATH`. The pins
+  that match the ONNX Runtime build are:
+
+  ```powershell
+  pip install tensorrt-cu12==10.16.1.11 nvidia-cuda-runtime-cu12==12.9.79 `
+    nvidia-cuda-nvrtc-cu12==12.9.86 nvidia-cublas-cu12==12.9.2.10 `
+    nvidia-cudnn-cu12==9.23.1.3
+  ```
+
+  ORT imports `nvinfer_10.dll` directly, so use a TensorRT 10.x wheel: the 11.x
+  wheels ship only `nvinfer_11.dll`.
+
+Then build as usual:
 
 ```powershell
-.\scripts\bootstrap-dev.ps1 -GpuRuntimeOnly
 cargo build --release
 ```
-
-`scripts\bootstrap-dev.ps1 -GpuRuntimeOnly` installs pinned Python wheels for
-`tensorrt-cu12`, CUDA runtime, NVRTC, cuBLAS, and cuDNN into `.venv-models`, then
-copies their DLLs into `.gpu-runtime\bin`. The cache is intentionally ignored by
-Git because it is several GB. The script also stages the cache into existing
-Cargo target dirs immediately. Future `cargo build` runs use `build.rs` to stage
-the same DLLs next to the active executable automatically, so debug and release
-builds no longer depend on a one-off manual copy.
 
 The first `watch` run builds and caches the FP16 engines under `cache\engines`
 (one-time, multi-minute, GPU-heavy); later runs load them instantly. Confirm with
@@ -257,20 +273,21 @@ mite falls back to the CUDA execution provider, then CPU, so it always runs.
 `cargo run -- doctor` reports the detected runtime tier (TensorRT, CUDA, or CPU),
 which required DLLs are present, and the directories they were found in.
 
-`doctor` searches system-wide for the runtime, not just `.gpu-runtime\bin`: it
-checks `PATH`, the CUDA Toolkit install (`CUDA_PATH` and
+`doctor` searches system-wide for the runtime: it checks `PATH`, the CUDA Toolkit
+install (`CUDA_PATH` and
 `%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA\v12.x\bin`), common TensorRT
 and cuDNN unzip locations, pip wheel layouts (`nvidia\*\bin` and `tensorrt_libs`
-under a `--target` folder or venv), and any folders in
-`MITE_GPU_RUNTIME_EXTRA_DIRS`. So a runtime you installed yourself from NVIDIA is
-detected without copying anything into the mite-managed cache.
+under a `--target` folder or venv), an optional local `.gpu-runtime\bin` drop-in,
+and any folders in `MITE_GPU_RUNTIME_EXTRA_DIRS`. So a runtime you installed
+yourself from NVIDIA is detected wherever it lives, without copying anything into
+a mite-managed location.
 
 The desktop app under `app\` automates this for non-technical users: it detects
 the runtime tier, guides the user through installing the missing NVIDIA
 components (Mite never installs them for the user), records the tier, and
 launches the CLI with the right `--backend` and `PATH`. Developers building
-locally still use `bootstrap-dev.ps1 -GpuRuntimeOnly` as above. See
-[../app/README.md](../app/README.md).
+locally follow the same install routes above and verify with
+`cargo run -- doctor`. See [../app/README.md](../app/README.md).
 
 > Detector sizing: the detector input is sized dynamically. By default,
 > `detector_downscale = 1.0`, `detector_min_long_side = 3840`, and

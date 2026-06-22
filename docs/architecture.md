@@ -128,12 +128,13 @@ is wired end to end with a graceful fallback chain **TensorRT -> CUDA -> CPU**
 3. **CPU EP** is the last resort for correctness without a GPU runtime.
 
 TensorRT and CUDA need NVIDIA runtime DLLs reachable by the loader; ORT ships
-only the provider shims. Mite never redistributes or installs those NVIDIA
-binaries. For development, run `scripts\bootstrap-dev.ps1 -GpuRuntimeOnly` once
-to fetch pinned `tensorrt-cu12`, CUDA 12, and cuDNN 9 wheels into
-`.gpu-runtime\bin`; `build.rs` stages that cache into the active Cargo profile
-output dir on every build, so debug and release binaries get the same provider
-DLL dependencies.
+only the provider shims. Mite never downloads, hosts, bundles, or installs those
+NVIDIA binaries, and neither does its developer tooling. For development, install
+the runtime yourself from NVIDIA (the CUDA Toolkit, cuDNN, and TensorRT 10.x) or
+from the pinned pip wheels, then make it discoverable on `PATH`. `doctor` searches
+`PATH`, the CUDA Toolkit, TensorRT/cuDNN install locations, pip wheel layouts, and
+an optional `.gpu-runtime\bin` drop-in (see `src/doctor.rs`), so the loader and
+`doctor` find the same DLLs without any staging step. See `docs/local-windows.md`.
 
 For end users, the desktop app under `app\` detects what NVIDIA runtime is
 installed (searching `PATH`, the CUDA Toolkit, TensorRT/cuDNN install locations,

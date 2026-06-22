@@ -78,10 +78,11 @@ not download, host, bundle, or install any NVIDIA binary. Instead, the user
 obtains these components directly from NVIDIA, as the licensee, and Mite detects
 what is installed and launches accordingly. The desktop app provides a guided
 flow that lists the missing components and links to NVIDIA's official downloads
-(and the official PyPI wheels); for local development,
-`scripts\bootstrap-dev.ps1 -GpuRuntimeOnly` fetches the wheels into a developer's
-own working tree (this is the developer installing their own runtime, not
-redistribution by Mite).
+(and the official PyPI wheels). Developers follow the same routes: they install
+the runtime themselves from NVIDIA or the official PyPI wheels into their own
+working tree (this is the developer installing their own runtime, not
+redistribution by Mite). The developer tooling in this repository does not fetch,
+stage, or bundle these binaries.
 
 The components and their license terms, listed here for reference only:
 

@@ -100,8 +100,8 @@ impl DoctorReport {
                 RuntimeTier::Cpu => warnings.push(
                     "An NVIDIA GPU was detected but no NVIDIA GPU runtime (TensorRT or CUDA DLLs) \
                      was found, so Mite will run on the CPU. Install NVIDIA's runtime to enable GPU \
-                     acceleration (the desktop app guides this; for local development run \
-                     scripts\\bootstrap-dev.ps1 -GpuRuntimeOnly)."
+                     acceleration and ensure it is on PATH (the desktop app guides this; for local \
+                     development see docs/local-windows.md)."
                         .to_string(),
                 ),
                 RuntimeTier::Cuda => warnings.push(
@@ -407,8 +407,10 @@ fn tier_label(tier: &TierStatus) -> String {
     }
 }
 
-/// The mite-managed GPU runtime cache directory: `MITE_GPU_RUNTIME_DIR` if set,
-/// otherwise the dev default produced by `scripts\bootstrap-dev.ps1`.
+/// An optional drop-in GPU runtime directory: `MITE_GPU_RUNTIME_DIR` if set
+/// (the desktop app points this at a per-user folder), otherwise a local
+/// `.gpu-runtime\bin` a contributor can drop the NVIDIA DLLs into. Mite never
+/// populates this itself.
 fn gpu_runtime_cache_dir() -> PathBuf {
     std::env::var_os("MITE_GPU_RUNTIME_DIR")
         .map(PathBuf::from)
@@ -440,7 +442,7 @@ fn runtime_search_dirs() -> Vec<PathBuf> {
     // resolved against the working directory: the desktop app launches the CLI
     // from the mite home, so `nvidia-runtime` lands inside the home.
     push_wheel_layout(&mut dirs, PathBuf::from("nvidia-runtime"));
-    // The dev wheel venv produced by bootstrap-dev.ps1 -GpuRuntimeOnly.
+    // A common local venv name for contributors who pip-install the NVIDIA wheels.
     push_wheel_layout(&mut dirs, PathBuf::from(".venv-models"));
 
     // Any user-specified extra folders (a less common install location).

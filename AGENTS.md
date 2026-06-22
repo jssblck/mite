@@ -80,8 +80,14 @@ First-time Windows setup:
 ```powershell
 .\scripts\bootstrap-dev.ps1
 .\scripts\bootstrap-dev.ps1 -IncludeEvalData
-.\scripts\bootstrap-dev.ps1 -SkipGpuRuntime
 ```
+
+`bootstrap-dev.ps1` does not install the NVIDIA GPU runtime: Mite never
+downloads, hosts, bundles, or installs NVIDIA binaries, and that applies to the
+developer tooling too. Install the runtime yourself from NVIDIA (the CUDA
+Toolkit, cuDNN, and TensorRT 10.x) or from the pinned pip wheels, make it
+discoverable on `PATH`, and verify with `cargo run -- doctor`. See
+`docs\local-windows.md`.
 
 Product commands:
 
@@ -116,8 +122,10 @@ The following are local/runtime artifacts and should not be committed:
 
 Model files and dictionaries are acquired with
 `scripts\bootstrap-dev.ps1 -ModelsOnly`.
-TensorRT/CUDA/cuDNN runtime DLLs are cached with
-`scripts\bootstrap-dev.ps1 -GpuRuntimeOnly` and staged by `build.rs`.
+The TensorRT/CUDA/cuDNN runtime is installed by the developer from NVIDIA (or the
+pinned pip wheels) and made discoverable on `PATH`; the repository never fetches
+or stages it. `.gpu-runtime\` is only an optional local drop-in folder `doctor`
+will search. See `docs\local-windows.md`.
 Real-image eval captures live under the private `eval\` submodule, usually as
 `eval\collection-name\capture-<ts>\` bundles.
 Each scored capture should keep the original full-frame `underlying.png`, the

@@ -90,9 +90,6 @@ jobs:
       # Pin the binary's reported --version to the release tag so it is correct
       # regardless of clone depth. build.rs honors this override.
       MITE_VERSION: ${{ needs.prepare.outputs.tag }}
-      # The NVIDIA GPU runtime is user-installed, never shipped, so there is no
-      # runtime cache on the runner; skip build.rs staging it next to the exe.
-      MITE_SKIP_GPU_RUNTIME_STAGE: "1"
     steps:
       - uses: actions/checkout@v7
         with:
