@@ -14,3 +14,11 @@
 # Claude session scheduler artifacts
 .claude/scheduled_tasks.lock
 .claude/scheduled_tasks.json
+
+# Stray Git LFS hooks directory created when a tool runs `git lfs install/update`
+# with core.hooksPath passed as a relative "dev/null" (an accidental "/dev/null"
+# with the leading slash dropped: the real /dev/null maps to the Windows NUL
+# device and is rejected, so only the relative form lands a literal directory).
+# It is inert here (hooks resolve via core.hooksPath=.githooks) and safe to
+# delete; this guard just keeps it from ever being staged or cluttering status.
+/dev/
