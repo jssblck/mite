@@ -73,6 +73,13 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
+CI enforces these too. The app is a standalone crate (the repository root is not
+a Cargo workspace), so the root Rust job does not see it; the separate `app` job
+in `.github\workflows\ci.yml` builds the frontend (clippy needs `app\dist` for
+`tauri::generate_context!`) and then runs the same fmt/test/clippy bar. The
+crate carries the same `[lints.clippy]` table as the root crate so the standard
+is identical on both surfaces.
+
 ## Versioning
 
 The app version is derived from git tags at build time, the same way the CLI

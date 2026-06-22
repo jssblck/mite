@@ -195,8 +195,8 @@ pub fn start_watch(
 }
 
 #[tauri::command]
-pub fn stop_watch(state: State<WatchState>) -> Result<(), String> {
-    watch::stop(&state).map_err(|err| format!("{err:#}"))
+pub fn stop_watch(state: State<WatchState>) {
+    watch::stop(&state);
 }
 
 #[tauri::command]
