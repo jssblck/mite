@@ -1,0 +1,112 @@
+---
+import { LEGEND_SENTENCE, POS_LEGEND } from "../data/sentences";
+import MiteTerm from "./MiteTerm.astro";
+import OverlayLine from "./OverlayLine.astro";
+import SectionHead from "./SectionHead.astro";
+---
+
+<section class="grammar">
+  <div class="container grammar-grid">
+    <div>
+      <SectionHead>
+        <span slot="title">Color you can read grammar by.</span>
+        <MiteTerm /> tints each word by its part of speech, using a colorblind-safe
+        set. The color is meaning: particles, verbs, and nouns separate at a glance,
+        before you have read a single gloss.
+      </SectionHead>
+
+      <dl class="legend">
+        {
+          POS_LEGEND.map((p) => (
+            <div class={`legend-row pos-${p.pos}`}>
+              <span class="legend-swatch" />
+              <div>
+                <dt class="legend-term">{p.label}</dt>
+                <dd class="legend-examples" lang="ja">
+                  {p.examples.join("　")}
+                </dd>
+              </div>
+            </div>
+          ))
+        }
+      </dl>
+    </div>
+
+    <div class="grammar-demo">
+      <div class="grammar-demo-center">
+        <OverlayLine sentence={LEGEND_SENTENCE} />
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .grammar {
+    scroll-margin-top: 6rem;
+    border-block: 1px solid var(--color-line);
+    background: var(--color-bg-2);
+    padding-block: 5rem;
+  }
+  .grammar-grid {
+    display: grid;
+    gap: 3rem;
+  }
+  .legend {
+    margin: 2rem 0 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 1.5rem;
+    row-gap: 1rem;
+  }
+  .legend-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+  .legend-swatch {
+    margin-top: 0.25rem;
+    height: 0.875rem;
+    width: 0.875rem;
+    flex: none;
+    border-radius: 4px;
+    background: var(--pos);
+  }
+  .legend-term {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+  .legend-examples {
+    margin: 0.125rem 0 0;
+    font-size: 0.875rem;
+    color: var(--color-muted);
+  }
+  .grammar-demo {
+    border-radius: 1rem;
+    border: 1px solid var(--color-line);
+    background: var(--color-bg);
+    padding: 2rem;
+  }
+  .grammar-demo-center {
+    display: flex;
+    justify-content: center;
+  }
+
+  @media (min-width: 640px) {
+    .grammar {
+      padding-block: 7rem;
+    }
+    .legend {
+      max-width: 28rem;
+    }
+    .grammar-demo {
+      padding: 3rem;
+    }
+  }
+  @media (min-width: 1024px) {
+    .grammar-grid {
+      grid-template-columns: 0.85fr 1.15fr;
+      align-items: center;
+    }
+  }
+</style>

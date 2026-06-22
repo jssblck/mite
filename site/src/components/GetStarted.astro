@@ -1,0 +1,114 @@
+---
+import { GITHUB_URL, RELEASES_URL } from "../data/sentences";
+import Icon from "./Icon.astro";
+import MiteTerm from "./MiteTerm.astro";
+import SectionHead from "./SectionHead.astro";
+---
+
+<section id="start" class="start">
+  <div class="container start-grid">
+    <div>
+      <SectionHead>
+        <span slot="title">Clone it, bootstrap it, start reading.</span>
+        <MiteTerm /> is open source. The canonical setup path is the repository's
+        bootstrap script: clone, run it once, and you are reading.
+      </SectionHead>
+      <div class="start-cta">
+        <a href={GITHUB_URL} class="btn btn-primary" target="_blank" rel="noreferrer">
+          <Icon name="github" size={16} /> View on GitHub
+        </a>
+        <a href={RELEASES_URL} class="btn btn-ghost" target="_blank" rel="noreferrer">
+          Releases <Icon name="arrow-up-right" size={16} />
+        </a>
+      </div>
+      <p class="start-reqs">
+        Requirements: Windows 10 or 11. An NVIDIA GPU is recommended for the
+        fastest path; a CPU fallback works without one.
+      </p>
+    </div>
+
+    <div class="terminal">
+      <div class="terminal-bar">
+        <span class="capture-dot"></span>
+        <span class="capture-dot"></span>
+        <span class="capture-dot"></span>
+        <span class="mono terminal-label">PowerShell</span>
+      </div>
+      <pre class="mono terminal-body"><code><span class="tok-comment"># clone and bootstrap</span>
+<span class="tok-cmd">git</span> clone {GITHUB_URL}
+<span class="tok-cmd">cd</span> mite
+<span class="tok-cmd">./bootstrap-dev.ps1</span>
+
+<span class="tok-comment"># then point Mite at a window and read</span></code></pre>
+    </div>
+  </div>
+</section>
+
+<style>
+  .start {
+    scroll-margin-top: 6rem;
+    border-top: 1px solid var(--color-line);
+    background: var(--color-bg-2);
+    padding-block: 5rem;
+  }
+  .start-grid {
+    display: grid;
+    gap: 3rem;
+  }
+  .start-cta {
+    margin-top: 2rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+  .start-reqs {
+    margin: 1.5rem 0 0;
+    font-size: 0.875rem;
+    color: var(--color-muted);
+  }
+
+  .terminal {
+    overflow: hidden;
+    border-radius: 0.75rem;
+    border: 1px solid var(--color-line);
+    background: var(--color-bg);
+  }
+  .terminal-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    border-bottom: 1px solid var(--color-line);
+    padding: 0.625rem 1rem;
+  }
+  .terminal-label {
+    margin-left: 0.5rem;
+    font-size: 0.75rem;
+    color: var(--color-faint);
+  }
+  .terminal-body {
+    overflow-x: auto;
+    padding: 1.25rem;
+    font-size: 0.875rem;
+    line-height: 1.625;
+    color: var(--color-ink-2);
+    margin: 0;
+  }
+  .tok-comment {
+    color: var(--color-faint);
+  }
+  .tok-cmd {
+    color: var(--color-accent);
+  }
+
+  @media (min-width: 640px) {
+    .start {
+      padding-block: 7rem;
+    }
+  }
+  @media (min-width: 1024px) {
+    .start-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: center;
+    }
+  }
+</style>

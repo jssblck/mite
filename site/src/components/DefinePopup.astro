@@ -1,0 +1,29 @@
+---
+import type { Word } from "../data/sentences";
+import Ruby from "./Ruby.astro";
+
+interface Props {
+  word: Word;
+}
+const { word } = Astro.props;
+const d = word.define;
+---
+
+{
+  d && (
+    <span class="define-pop" role="tooltip">
+      {/* The headword carries its reading as furigana on top of each kanji
+          group; kana headwords need no annotation (readers know kana). */}
+      <span class="define-dict">
+        <Ruby segs={d.dict} />
+      </span>
+      <span class="define-pos">{d.posLabel}</span>
+      <span class="define-gloss">{d.gloss}</span>
+      {d.note && (
+        <span class="define-note">
+          <b>{d.note.form}</b>{" "}{d.note.text}
+        </span>
+      )}
+    </span>
+  )
+}

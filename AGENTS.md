@@ -136,6 +136,39 @@ pass/fail status. Local file paths and commands that include private corpus
 directory names may be used in private terminal workflows, but redact or
 generalize them before publishing.
 
+## Marketing Site
+
+The marketing site for `mite.jessica.black` lives in `site\` and is the one part
+of this repository that is not Rust. It is a static [Astro](https://astro.build)
+site (no UI framework runtime, no Tailwind: plain `.astro` components with scoped
+styles over a `tokens.css` plus `global.css` design system). The Node toolchain
+is scoped entirely to `site\`; the Rust crate at the repository root does not
+depend on it and vice versa.
+
+```powershell
+cd site
+npm install
+npm run dev      # http://localhost:4321
+npm run build    # static output to site\dist
+npm run check    # astro type/diagnostics check
+npm test         # vitest over the authored sample-sentence data
+```
+
+Notes for changes here:
+
+- `site\src\data\sentences.ts` is the single source of the demo content. Every
+  Japanese string is original, neutral, textbook-style example text: no game,
+  visual novel, or other third-party IP, and nothing transcribed from a real
+  capture. Keep it that way (this is the same constraint as Private Eval
+  Disclosure, applied to site copy).
+- The overlay demo, the part-of-speech color channel, and the self-defining みて
+  brand term are pure CSS/markup mirrors of the product surface in
+  `PRODUCT.md` and `src\win32_overlay\style.rs`. Keep the palette colorblind-safe
+  and the hues confined to product-demo contexts.
+- Pushes to `main` touching `site\**` deploy to GitHub Pages via
+  `.github\workflows\site.yml`. `site\public\CNAME` carries the custom domain.
+- `site\README.md` documents structure, fonts, and the Open Graph generator.
+
 ## Architecture Map
 
 - `src/main.rs`: binary startup and tracing initialization only.

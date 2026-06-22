@@ -1,0 +1,59 @@
+name: Deploy site
+
+# Builds the marketing site in site/ and deploys it to GitHub Pages.
+# The custom domain (mite.jessica.black) is carried by site/public/CNAME.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; let an in-flight run finish rather than cancelling it,
+# so a published site is never left half-deployed.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The site's binary assets (public/og.png, the PWA icons,
+          # apple-touch-icon.png) are tracked in Git LFS. Without this, checkout
+          # leaves them as pointer files, the build copies the pointers into
+          # dist/, and Pages serves 130-byte text where a PNG should be -- so
+          # link unfurls render a broken Open Graph image.
+          lfs: true
+      - uses: actions/setup-node@v4
+        with:
+          # Astro 6 requires Node >=22.12.0; pin the current LTS line.
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

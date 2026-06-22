@@ -1,0 +1,124 @@
+---
+import MiteTerm from "./MiteTerm.astro";
+import MiteText from "./MiteText.astro";
+import SectionHead from "./SectionHead.astro";
+
+const rows = [
+  {
+    t: "Stay in the scene",
+    d: "No window switch, no focus theft. The overlay is layered and click-through.",
+  },
+  {
+    t: "No kanji lookup by hand",
+    d: "You never type or draw a character you cannot read. Mite read it already.",
+  },
+  {
+    t: "Reaches native apps",
+    d: "Games, visual novels, manga readers, video: anything Windows can put on screen.",
+  },
+];
+---
+
+<section class="container section moment">
+  <div class="moment-grid">
+    <div>
+      <SectionHead>
+        <span slot="title"
+          >Your dictionary is one alt-tab and one broken scene away.</span
+        >
+      </SectionHead>
+      <div class="measure moment-prose">
+        <p>
+          You are mid-scene. One word you do not know. The old move: alt-tab to a
+          browser dictionary, retype or hand-draw a kanji you cannot read, lose
+          the line, lose the moment, come back cold.
+        </p>
+        <p>
+          And native games and visual novels are not web pages: the
+          point-and-define dictionary that lives in your browser simply cannot
+          reach them. The text stays locked behind the glass.
+        </p>
+        <p class="moment-prose-strong">
+          <MiteTerm /> removes the tax. It reads the screen in place, answers where
+          your eyes already are, and is gone the instant you stop looking.
+        </p>
+      </div>
+    </div>
+
+    <ul class="moment-cards">
+      {
+        rows.map((row) => (
+          <li class="moment-card">
+            <h3 class="moment-card-title">{row.t}</h3>
+            <p class="moment-card-body">
+              <MiteText text={row.d} />
+            </p>
+          </li>
+        ))
+      }
+    </ul>
+  </div>
+</section>
+
+<style>
+  .section {
+    scroll-margin-top: 6rem;
+    padding-block: 5rem;
+  }
+  .moment-grid {
+    display: grid;
+    gap: 3rem;
+  }
+  .moment-prose {
+    margin-top: 1.5rem;
+    font-size: 1.125rem;
+    color: var(--color-ink-2);
+  }
+  .moment-prose p + p {
+    margin-top: 1rem;
+  }
+  .moment-prose p {
+    margin: 0;
+  }
+  .moment-prose-strong {
+    color: var(--color-ink);
+  }
+  .moment-cards {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 1px;
+    overflow: hidden;
+    border-radius: 0.75rem;
+    border: 1px solid var(--color-line);
+    background: var(--color-line);
+  }
+  .moment-card {
+    background: var(--color-bg-2);
+    padding: 1.5rem;
+  }
+  .moment-card-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--color-ink);
+    margin: 0;
+  }
+  .moment-card-body {
+    margin: 0.375rem 0 0;
+    font-size: 0.875rem;
+    color: var(--color-muted);
+  }
+
+  @media (min-width: 640px) {
+    .section {
+      padding-block: 7rem;
+    }
+  }
+  @media (min-width: 1024px) {
+    .moment-grid {
+      grid-template-columns: 1.1fr 0.9fr;
+      align-items: center;
+    }
+  }
+</style>
