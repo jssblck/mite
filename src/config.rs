@@ -369,7 +369,9 @@ pub struct OverlayConfig {
     /// by default. When off, the word layer is fully transparent: nothing is
     /// painted over the recognized words, but hover lookups still work (the popup
     /// is hit-tested from word geometry, not from the drawn pixels), so this is
-    /// the "invisible until I hover" reading mode.
+    /// the "invisible until I hover" reading mode. Note that `furigana` is a
+    /// separate layer: enabling it still draws always-on ruby even when
+    /// underlines are off.
     pub word_underlines: bool,
     /// Draw furigana above every recognized word, not just in the hover popup.
     /// Off by default: it is the most intrusive ink the overlay puts over the

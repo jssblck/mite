@@ -86,9 +86,11 @@ pub fn furigana_segments(word: &str, reading: &str) -> Vec<FuriSegment> {
 /// surface), but [`furigana_segments`] keys its reading to the dictionary form.
 /// Japanese inflection only rewrites trailing okurigana, so the kanji stem and
 /// its reading are invariant: each kanji run in the surface reuses the reading
-/// of the matching kanji run from `dict_ruby` (matched by identical text, in
-/// order). Surface kana runs carry no furigana. This never invents a reading: a
-/// surface kanji run with no matching dictionary run is left bare.
+/// of the matching kanji run from `dict_ruby` (matched by identical text,
+/// scanning forward in order, so a wrapped surface that begins partway through
+/// the word still aligns to the right dictionary run). Surface kana runs carry
+/// no furigana. This never invents a reading: a surface kanji run with no
+/// matching dictionary run is left bare.
 pub fn surface_furigana(surface: &str, dict_ruby: &[FuriSegment]) -> Vec<FuriSegment> {
     // Kanji runs of the dictionary ruby that carry a reading, in order.
     let dict_kanji: Vec<&FuriSegment> = dict_ruby
@@ -114,11 +116,16 @@ pub fn surface_furigana(surface: &str, dict_ruby: &[FuriSegment]) -> Vec<FuriSeg
         if !is_kanji_char_run(&segment.text) {
             continue;
         }
-        if let Some(dict) = dict_kanji.get(next)
-            && dict.text == segment.text
+        // Scan forward from the last match for a dictionary kanji run with
+        // identical text. The visible surface may begin partway through the word
+        // (a wrapped tail), so the first surface kanji run need not be the first
+        // dictionary run; forward scanning keeps repeated kanji aligned in order.
+        if let Some(offset) = dict_kanji[next..]
+            .iter()
+            .position(|dict| dict.text == segment.text)
         {
-            segment.furigana = dict.furigana.clone();
-            next += 1;
+            segment.furigana = dict_kanji[next + offset].furigana.clone();
+            next += offset + 1;
         }
     }
     segments
@@ -194,6 +201,18 @@ mod tests {
                 seg("出", Some("だ")),
                 seg("した", None),
             ],
+        );
+    }
+
+    #[test]
+    fn surface_ruby_aligns_a_wrapped_tail_to_a_later_kanji_run() {
+        // The visible surface begins partway through the word: only 出した shows
+        // on this line (取り wrapped off the previous one). The 出 run must still
+        // pick up its reading by scanning forward past the unseen 取 run.
+        let dict = furigana_segments("取り出す", "とりだす");
+        assert_eq!(
+            surface_furigana("出した", &dict),
+            vec![seg("出", Some("だ")), seg("した", None)],
         );
     }
 

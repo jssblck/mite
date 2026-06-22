@@ -182,8 +182,8 @@ Notes for changes here:
   ONNX Runtime engine, detector and recognizer pre/post-processing,
   TensorRT/CUDA/CPU setup, timing hooks, and OCR text normalization.
 - `src/interactive/mod.rs`, `src/interactive/smoothing.rs`: `watch`
-  orchestration, worker thread, capture/OCR loop, smoothing handoff, debug
-  capture trigger.
+  orchestration, worker thread, capture/OCR loop, smoothing handoff, raw
+  eval-capture hotkey.
 - `src/win32_overlay/mod.rs`, `src/win32_overlay/style.rs`: layered
   click-through Win32 overlay drawing and overlay palette.
 - `src/hover/mod.rs`, `src/hover/furigana.rs`, `src/hover/sense.rs`: pure hit

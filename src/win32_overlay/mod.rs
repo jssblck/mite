@@ -605,13 +605,16 @@ unsafe fn blit_overlay_text(
     }
 }
 
-/// One ruby segment laid out for drawing: base text + width, and centred
-/// furigana + width.
+/// One ruby segment laid out for drawing: base text + width, centred furigana +
+/// width, and the cell width that hosts both. The cell is `max(base, furigana)`
+/// so a reading wider than its kanji widens the heading instead of overhanging
+/// the panel (and being clipped by the rounded-corner opacity mask).
 struct RubySeg {
     text: Vec<u16>,
     width: i32,
     furi: Option<Vec<u16>>,
     furi_w: i32,
+    cell: i32,
 }
 
 /// A laid-out category pill: its uppercase label plus padded box size.
@@ -655,12 +658,14 @@ unsafe fn draw_popup(
             }
             None => (None, 0),
         };
-        word_w += tw;
+        let cell = tw.max(furi_w);
+        word_w += cell;
         segs.push(RubySeg {
             text,
             width: tw,
             furi,
             furi_w,
+            cell,
         });
     }
     let has_furi = segs.iter().any(|seg| seg.furi.is_some());
@@ -705,7 +710,11 @@ unsafe fn draw_popup(
         .unwrap_or(0);
     let pill_w = pill.as_ref().map_or(0, |p| p.width);
     let content_w = word_w.max(pill_w).max(body_w);
-    let panel_w = (content_w + POPUP_PADDING * 2).min(POPUP_MAX_WIDTH);
+    // Floor the width so the panel can always host the tail between its rounded
+    // corners; otherwise empty/tiny content makes the tail-x clamp below panic
+    // (its lower bound would exceed its upper bound).
+    let min_w = 2 * (POPUP_CORNER_RADIUS + TAIL_HALF_W);
+    let panel_w = (content_w + POPUP_PADDING * 2).clamp(min_w, POPUP_MAX_WIDTH);
 
     let gap_before_gloss = if pill.is_some() {
         PILL_GAP_BELOW
@@ -775,21 +784,23 @@ unsafe fn draw_popup(
         let word_y = furi_y + if has_furi { furi_h + RUBY_GAP } else { 0 };
         let mut x = text_x;
         for seg in &segs {
+            // Base and furigana are each centred in the segment's cell, so a wide
+            // reading sits symmetrically over its kanji without overhang.
             let old_font = SelectObject(dc, HGDIOBJ(fonts.word.0));
             SetTextColor(dc, COLOR_WORD_TEXT.to_colorref());
             if !seg.text.is_empty() {
-                let _ = TextOutW(dc, x, word_y, &seg.text);
+                let _ = TextOutW(dc, x + (seg.cell - seg.width) / 2, word_y, &seg.text);
             }
             SelectObject(dc, old_font);
 
             if let Some(furi) = &seg.furi {
-                let fx = x + (seg.width - seg.furi_w) / 2;
+                let fx = x + (seg.cell - seg.furi_w) / 2;
                 let old_font = SelectObject(dc, HGDIOBJ(fonts.furi.0));
                 SetTextColor(dc, COLOR_FURIGANA.to_colorref());
                 let _ = TextOutW(dc, fx, furi_y, furi);
                 SelectObject(dc, old_font);
             }
-            x += seg.width;
+            x += seg.cell;
         }
 
         let mut y = word_y + word_h;
