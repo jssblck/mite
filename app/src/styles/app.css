@@ -374,6 +374,10 @@ body,
 .progress-bar {
   height: 100%;
   background: linear-gradient(90deg, var(--color-accent-2), var(--color-accent));
+  /* The fill animates width on purpose. This bar updates a few times a second
+     during downloads, so the layout cost is invisible, and a transform: scaleX
+     would squash the gradient instead of revealing it. The design hook flags
+     this as layout-transition: a known, accepted nag, not a defect. */
   transition: width 0.2s var(--ease-out);
 }
 .progress-bar.indeterminate {
@@ -479,18 +483,13 @@ body,
    Window picker (Discord-style grid of live thumbnails)
 ---------------------------------------------------------------------------- */
 
-.picker-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin-bottom: 1.1rem;
-}
 .window-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
   gap: 0.9rem;
 }
 .window-card {
+  position: relative;
   text-align: left;
   appearance: none;
   font: inherit;
@@ -506,13 +505,13 @@ body,
     transform 0.16s var(--ease-out),
     box-shadow 0.16s var(--ease-out);
 }
-.window-card:hover {
-  border-color: var(--color-line-2);
-  transform: translateY(-2px);
-}
-.window-card[aria-selected="true"] {
+.window-card:hover:not(:disabled) {
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 1px var(--color-accent);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px -12px oklch(0 0 0 / 0.7);
+}
+.window-card:disabled {
+  cursor: default;
 }
 .thumb {
   position: relative;
@@ -542,26 +541,38 @@ body,
   text-transform: uppercase;
   color: var(--color-faint);
 }
-/* The reticle corner brackets on the selected card, echoing the brand mark. */
-.window-card[aria-selected="true"] .thumb::before,
-.window-card[aria-selected="true"] .thumb::after {
-  content: "";
+/* Hover affordance: the whole card is a "start watching this window" button. */
+.thumb-hover {
   position: absolute;
-  width: 14px;
-  height: 14px;
-  pointer-events: none;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: oklch(0.15 0.02 256 / 0.55);
+  opacity: 0;
+  transition: opacity 0.16s var(--ease-out);
 }
-.window-card[aria-selected="true"] .thumb::before {
-  top: 6px;
-  left: 6px;
-  border-top: 2px solid var(--color-accent);
-  border-left: 2px solid var(--color-accent);
+.window-card:hover:not(:disabled) .thumb-hover {
+  opacity: 1;
 }
-.window-card[aria-selected="true"] .thumb::after {
-  right: 6px;
-  bottom: 6px;
-  border-right: 2px solid var(--color-accent);
-  border-bottom: 2px solid var(--color-accent);
+.thumb-cta {
+  font-weight: 600;
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  color: oklch(0.18 0.02 256);
+  background: var(--color-accent);
+  padding: 0.4rem 0.95rem;
+  border-radius: 99px;
+}
+.thumb-launching {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--color-ink);
+  background: oklch(0.15 0.02 256 / 0.78);
 }
 .window-meta {
   padding: 0.6rem 0.7rem 0.7rem;
@@ -582,22 +593,56 @@ body,
 }
 
 /* ----------------------------------------------------------------------------
-   Watch options + run view
+   Settings controls (toggle switch, number input)
 ---------------------------------------------------------------------------- */
 
-.option-row {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.5rem 0;
-  color: var(--color-ink-2);
+/* On/off toggle: a checkbox restyled as a sliding switch. */
+.switch {
+  position: relative;
+  display: inline-flex;
+  cursor: pointer;
 }
-.option-row label {
-  font-size: 0.92rem;
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
 }
-.option-row .hint {
-  font-size: 0.8rem;
-  color: var(--color-faint);
+.switch-track {
+  width: 2.2rem;
+  height: 1.25rem;
+  border-radius: 99px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-line-2);
+  transition:
+    background-color 0.16s var(--ease-out),
+    border-color 0.16s var(--ease-out);
+}
+.switch-thumb {
+  position: absolute;
+  top: 50%;
+  left: 0.2rem;
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 50%;
+  background: var(--color-ink);
+  transform: translate(0, -50%);
+  transition: transform 0.16s var(--ease-out);
+}
+.switch input:checked + .switch-track {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+.switch input:checked + .switch-track .switch-thumb {
+  transform: translate(0.95rem, -50%);
+  background: oklch(0.18 0.02 256);
+}
+.switch input:focus-visible + .switch-track {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.switch input:disabled + .switch-track {
+  opacity: 0.5;
 }
 .number-input {
   width: 4.5rem;
@@ -898,6 +943,19 @@ body,
     linear-gradient(160deg, oklch(0.2 0.011 256), oklch(0.168 0.009 256));
   box-shadow: 0 30px 70px -30px oklch(0 0 0 / 0.85);
   padding: 1.35rem 1.4rem;
+}
+.modal-wide {
+  max-width: 32rem;
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.4rem;
+}
+.modal-head .modal-title {
+  margin: 0;
 }
 .modal-title {
   font-size: 1.1rem;

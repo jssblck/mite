@@ -35,58 +35,76 @@ function LogView({ logs }: { logs: WatchLog[] }) {
 
 export function WatchView({ watching, onWatchingChange }: WatchViewProps) {
   const [windows, setWindows] = useState<WindowSummary[]>([]);
-  const [selected, setSelected] = useState<number | null>(null);
-  const [auto, setAuto] = useState(true);
-  const [hud, setHud] = useState(false);
-  const [metrics, setMetrics] = useState(0);
+  const [launchingId, setLaunchingId] = useState<number | null>(null);
+  const [launched, setLaunched] = useState<WindowSummary | null>(null);
   const [logs, setLogs] = useState<WatchLog[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
   const refreshWindows = useCallback(async () => {
-    setLoading(true);
     try {
       const list = await api.listWindows();
       setWindows(list);
-      setSelected((current) =>
-        current != null && list.some((w) => w.id === current) ? current : null,
-      );
     } catch (err) {
       setError(String(err));
     } finally {
-      setLoading(false);
+      setLoaded(true);
     }
   }, []);
 
+  // Keep the list current while the picker is on screen: windows open and close
+  // while the user decides. Debounced so a slow enumeration never overlaps the
+  // next tick, paused while watching or while the window is hidden.
   useEffect(() => {
-    refreshWindows();
-  }, [refreshWindows]);
+    if (watching) return;
+    let inFlight = false;
+    const tick = async () => {
+      if (inFlight || document.hidden) return;
+      inFlight = true;
+      try {
+        await refreshWindows();
+      } finally {
+        inFlight = false;
+      }
+    };
+    tick();
+    const handle = setInterval(tick, 3000);
+    const onVisible = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(handle);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [watching, refreshWindows]);
 
   useEffect(() => {
     const logUnlisten = onWatchLog((log) =>
       setLogs((prev) => [...prev.slice(-400), log]),
     );
-    const stateUnlisten = onWatchState((state) => onWatchingChange(state.running));
+    const stateUnlisten = onWatchState((state) =>
+      onWatchingChange(state.running),
+    );
     return () => {
       logUnlisten.then((fn) => fn());
       stateUnlisten.then((fn) => fn());
     };
   }, [onWatchingChange]);
 
-  async function start() {
-    if (selected == null) return;
+  async function startWatching(target: WindowSummary) {
+    if (launchingId != null) return;
     setError(null);
     setLogs([]);
+    setLaunchingId(target.id);
     try {
-      await api.startWatch({
-        windowId: selected,
-        auto,
-        hud,
-        metricsIntervalSecs: metrics,
-      });
+      await api.startWatch(target.id);
+      setLaunched(target);
       onWatchingChange(true);
     } catch (err) {
       setError(String(err));
+    } finally {
+      setLaunchingId(null);
     }
   }
 
@@ -99,15 +117,15 @@ export function WatchView({ watching, onWatchingChange }: WatchViewProps) {
   }
 
   if (watching) {
-    const target = windows.find((w) => w.id === selected);
     return (
       <div>
         <div className="page-head">
           <p>
-            {target ? `Reading "${target.title || target.appName}". ` : ""}
-            {auto
-              ? "The overlay is active continuously. Hover a word over the target window for its definition."
-              : "Hold Shift over the target window to read; hover a word for its definition."}
+            {launched
+              ? `Reading "${launched.title || launched.appName}". `
+              : ""}
+            Hover a word over the target window for its definition. Adjust how
+            the overlay runs in Settings.
           </p>
         </div>
         <div className="card">
@@ -126,27 +144,16 @@ export function WatchView({ watching, onWatchingChange }: WatchViewProps) {
 
   return (
     <div>
-      <div className="page-head">
-        <p>
-          Pick the game or app you want to read. Its live preview updates so you
-          can confirm the right window before you start.
-        </p>
-      </div>
-
-      <div className="picker-toolbar">
-        <button
-          className="btn btn-ghost btn-sm"
-          onClick={refreshWindows}
-          disabled={loading}
-        >
-          {loading ? <span className="inline-spinner" /> : "Refresh windows"}
-        </button>
-        <span className="header-meta">{windows.length} windows</span>
-      </div>
-
+      {error && <div className="error-text">{error}</div>}
       {windows.length === 0 ? (
         <div className="empty-state">
-          {loading ? "Looking for windows..." : "No capturable windows found."}
+          {loaded ? (
+            "No readable windows found. Open the game or app you want to read."
+          ) : (
+            <>
+              <span className="inline-spinner" /> Looking for windows...
+            </>
+          )}
         </div>
       ) : (
         <div className="window-grid">
@@ -154,59 +161,13 @@ export function WatchView({ watching, onWatchingChange }: WatchViewProps) {
             <WindowCard
               key={w.id}
               info={w}
-              selected={selected === w.id}
-              onSelect={() => setSelected(w.id)}
+              launching={launchingId === w.id}
+              disabled={launchingId != null}
+              onSelect={() => startWatching(w)}
             />
           ))}
         </div>
       )}
-
-      <div className="card" style={{ marginTop: "1.25rem" }}>
-        <div className="card-title">Options</div>
-        <div className="option-row">
-          <input
-            id="opt-auto"
-            type="checkbox"
-            checked={auto}
-            onChange={(e) => setAuto(e.target.checked)}
-          />
-          <label htmlFor="opt-auto">
-            Run continuously{" "}
-            <span className="hint">(recommended; some games intercept Shift)</span>
-          </label>
-        </div>
-        <div className="option-row">
-          <input
-            id="opt-hud"
-            type="checkbox"
-            checked={hud}
-            onChange={(e) => setHud(e.target.checked)}
-          />
-          <label htmlFor="opt-hud">
-            Show latency HUD <span className="hint">(per-stage timings)</span>
-          </label>
-        </div>
-        <div className="option-row">
-          <input
-            id="opt-metrics"
-            className="number-input"
-            type="number"
-            min={0}
-            value={metrics}
-            onChange={(e) => setMetrics(Math.max(0, Number(e.target.value) || 0))}
-          />
-          <label htmlFor="opt-metrics">
-            Log metrics every N seconds <span className="hint">(0 = off)</span>
-          </label>
-        </div>
-
-        {error && <div className="error-text">{error}</div>}
-        <div className="btn-row">
-          <button className="btn btn-primary" onClick={start} disabled={selected == null}>
-            Start watching
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

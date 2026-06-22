@@ -13,26 +13,14 @@ use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::{cli, home};
+use crate::{cli, home, settings};
 
 /// The single supervised `watch` child, shared with the reaper thread.
 #[derive(Default)]
 pub struct WatchState(pub Arc<Mutex<Option<Child>>>);
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WatchOptions {
-    pub window_id: u32,
-    #[serde(default)]
-    pub auto: bool,
-    #[serde(default)]
-    pub hud: bool,
-    #[serde(default)]
-    pub metrics_interval_secs: u64,
-}
 
 #[derive(Debug, Clone, Serialize)]
 struct LogLine {
@@ -53,7 +41,11 @@ pub fn is_watching(state: &State<WatchState>) -> bool {
 }
 
 /// Start `mite watch` for the given window. Errors if one is already running.
-pub fn start(app: &AppHandle, state: &State<WatchState>, opts: WatchOptions) -> Result<()> {
+///
+/// The watch flags (continuous mode, HUD, metrics interval) come from the saved
+/// app settings, which the user configures in the Settings panel; the picker
+/// only supplies the window to read.
+pub fn start(app: &AppHandle, state: &State<WatchState>, window_id: u32) -> Result<()> {
     if is_watching(state) {
         anyhow::bail!("watch is already running");
     }
@@ -62,21 +54,23 @@ pub fn start(app: &AppHandle, state: &State<WatchState>, opts: WatchOptions) -> 
         anyhow::bail!("the mite CLI is not installed yet");
     }
 
+    let opts = settings::load();
+
     // cli::command() applies the home CWD, the NVIDIA runtime PATH, the
     // CREATE_NO_WINDOW flag, and the recorded `--backend` override.
     let mut cmd = cli::command()?;
     cmd.arg("watch")
         .arg("--window-id")
-        .arg(opts.window_id.to_string());
-    if opts.auto {
+        .arg(window_id.to_string());
+    if opts.watch_auto {
         cmd.arg("--auto");
     }
-    if opts.hud {
+    if opts.watch_hud {
         cmd.arg("--hud");
     }
-    if opts.metrics_interval_secs > 0 {
+    if opts.watch_metrics_interval_secs > 0 {
         cmd.arg("--metrics-interval-secs")
-            .arg(opts.metrics_interval_secs.to_string());
+            .arg(opts.watch_metrics_interval_secs.to_string());
     }
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 

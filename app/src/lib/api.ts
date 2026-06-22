@@ -62,11 +62,14 @@ export interface AppStatus {
   doctor: DoctorReport | null;
 }
 
-/** Persisted app settings: the recorded runtime tier and DLL directories. */
+/** Persisted app settings: recorded runtime tier, DLL dirs, and watch options. */
 export interface AppSettings {
   runtimeTier: RuntimeTier | null;
   dllDirs: string[];
   runtimeSetupSeen: boolean;
+  watchAuto: boolean;
+  watchHud: boolean;
+  watchMetricsIntervalSecs: number;
 }
 
 export interface UpdateInfo {
@@ -86,13 +89,6 @@ export interface WindowSummary {
   height: number;
   x: number;
   y: number;
-}
-
-export interface WatchOptions {
-  windowId: number;
-  auto: boolean;
-  hud: boolean;
-  metricsIntervalSecs: number;
 }
 
 export interface DownloadProgress {
@@ -123,12 +119,14 @@ export const api = {
   detectRuntime: () => invoke<DoctorReport>("detect_runtime"),
   recordRuntime: () => invoke<AppSettings>("record_runtime"),
   getSettings: () => invoke<AppSettings>("get_settings"),
+  setWatchOptions: (auto: boolean, hud: boolean, metricsIntervalSecs: number) =>
+    invoke<AppSettings>("set_watch_options", { auto, hud, metricsIntervalSecs }),
   pipAvailable: () => invoke<boolean>("pip_available"),
   writeDefaultConfig: () => invoke<void>("write_default_config"),
   listWindows: () => invoke<WindowSummary[]>("list_windows"),
   captureThumbnail: (windowId: number, maxWidth: number) =>
     invoke<string>("capture_thumbnail", { windowId, maxWidth }),
-  startWatch: (options: WatchOptions) => invoke<void>("start_watch", { options }),
+  startWatch: (windowId: number) => invoke<void>("start_watch", { windowId }),
   stopWatch: () => invoke<void>("stop_watch"),
   isWatching: () => invoke<boolean>("is_watching"),
   openMiteHome: () => invoke<void>("open_mite_home"),

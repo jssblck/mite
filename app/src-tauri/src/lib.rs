@@ -55,6 +55,7 @@ pub fn run() {
             commands::detect_runtime,
             commands::record_runtime,
             commands::get_settings,
+            commands::set_watch_options,
             commands::pip_available,
             commands::write_default_config,
             commands::list_windows,

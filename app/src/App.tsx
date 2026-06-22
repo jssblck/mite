@@ -135,7 +135,6 @@ function App() {
           className={`icon-btn${view === "settings" ? " active" : ""}`}
           aria-label="Settings"
           aria-current={view === "settings"}
-          title="Settings"
           onClick={() => setView("settings")}
         >
           <svg

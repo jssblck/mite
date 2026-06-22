@@ -1,11 +1,43 @@
-import { useState, type ReactNode } from "react";
-import { api, type AppStatus, type RuntimeTier } from "../lib/api";
+import { useEffect, useState, type ReactNode } from "react";
+import {
+  api,
+  type AppSettings,
+  type AppStatus,
+  type RuntimeTier,
+} from "../lib/api";
 import { AppUpdateRow } from "../components/AppUpdateRow";
 
 interface SettingsProps {
   status: AppStatus;
   onRefresh: () => void;
   onOpenRuntimeSetup: () => void;
+}
+
+/** A native-style on/off toggle backed by a checkbox. */
+function Toggle({
+  checked,
+  onChange,
+  label,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="switch" aria-label={label}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span className="switch-track" aria-hidden="true">
+        <span className="switch-thumb" />
+      </span>
+    </label>
+  );
 }
 
 function runtimeSummary(status: AppStatus): string {
@@ -44,10 +76,135 @@ export function SettingRow({
   );
 }
 
+/** The "Advanced options" modal: how the overlay behaves while watching. */
+function AdvancedOptionsModal({
+  settings,
+  onChange,
+  onClose,
+}: {
+  settings: AppSettings | null;
+  onChange: (patch: Partial<AppSettings>) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="modal-overlay"
+      role="presentation"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="modal modal-wide"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Advanced options"
+      >
+        <div className="modal-head">
+          <h2 className="modal-title">Advanced options</h2>
+          <button className="icon-btn" aria-label="Close" onClick={onClose}>
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="settings-list">
+          <SettingRow
+            label="Run continuously"
+            detail="Keep the overlay active instead of holding Shift (some games swallow Shift)."
+          >
+            <Toggle
+              label="Run continuously"
+              checked={settings?.watchAuto ?? true}
+              disabled={!settings}
+              onChange={(v) => onChange({ watchAuto: v })}
+            />
+          </SettingRow>
+
+          <SettingRow
+            label="Latency HUD"
+            detail="Show per-stage timings overlaid while watching."
+          >
+            <Toggle
+              label="Latency HUD"
+              checked={settings?.watchHud ?? false}
+              disabled={!settings}
+              onChange={(v) => onChange({ watchHud: v })}
+            />
+          </SettingRow>
+
+          <SettingRow
+            label="Metrics logging"
+            detail="Log aggregate latency to the engine output every N seconds (0 = off)."
+          >
+            <input
+              className="number-input"
+              type="number"
+              min={0}
+              aria-label="Metrics interval in seconds"
+              value={settings?.watchMetricsIntervalSecs ?? 0}
+              disabled={!settings}
+              onChange={(e) =>
+                onChange({
+                  watchMetricsIntervalSecs: Math.max(
+                    0,
+                    Number(e.target.value) || 0,
+                  ),
+                })
+              }
+            />
+          </SettingRow>
+        </div>
+
+        <div className="btn-row modal-actions">
+          <button className="btn btn-primary" onClick={onClose}>
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function Settings({ status, onRefresh, onOpenRuntimeSetup }: SettingsProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmWipe, setConfirmWipe] = useState(false);
+  const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  useEffect(() => {
+    api.getSettings().then(setSettings).catch(() => undefined);
+  }, []);
+
+  // Persist a watch-option change and reflect the saved settings the backend
+  // returns, so the UI stays in lockstep with what the next launch will use.
+  async function saveWatch(patch: Partial<AppSettings>) {
+    if (!settings) return;
+    const next = { ...settings, ...patch };
+    setSettings(next);
+    try {
+      const saved = await api.setWatchOptions(
+        next.watchAuto,
+        next.watchHud,
+        next.watchMetricsIntervalSecs,
+      );
+      setSettings(saved);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
 
   async function run(key: string, action: () => Promise<void>) {
     setBusy(key);
@@ -101,6 +258,18 @@ export function Settings({ status, onRefresh, onOpenRuntimeSetup }: SettingsProp
           </button>
         </SettingRow>
 
+        <SettingRow
+          label="Watching"
+          detail="Run mode, latency HUD, and metrics logging while watching."
+        >
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => setAdvancedOpen(true)}
+          >
+            Advanced options
+          </button>
+        </SettingRow>
+
         <SettingRow label="Storage" detail="Engine, models, cache, and config.">
           <button
             className="btn btn-ghost btn-sm"
@@ -146,6 +315,14 @@ export function Settings({ status, onRefresh, onOpenRuntimeSetup }: SettingsProp
 
         {error && <div className="error-text">{error}</div>}
       </div>
+
+      {advancedOpen && (
+        <AdvancedOptionsModal
+          settings={settings}
+          onChange={saveWatch}
+          onClose={() => setAdvancedOpen(false)}
+        />
+      )}
     </div>
   );
 }
