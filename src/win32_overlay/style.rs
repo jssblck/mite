@@ -24,15 +24,23 @@ impl Rgb {
 
 // Popup palette. Centralized so the overlay's colour scheme is tunable in one
 // place.
+/// Pure white, used as the draw colour for grayscale-AA overlay text whose
+/// alpha is later recovered from the glyph coverage (see `blit_overlay_text`).
+pub(super) const COLOR_WHITE: Rgb = Rgb::new(255, 255, 255);
 pub(super) const COLOR_PANEL_BG: Rgb = Rgb::new(26, 26, 32);
 pub(super) const COLOR_PANEL_BORDER: Rgb = Rgb::new(70, 70, 86);
 pub(super) const COLOR_WORD_TEXT: Rgb = Rgb::new(245, 245, 250);
-pub(super) const COLOR_FURIGANA: Rgb = Rgb::new(150, 200, 255);
-pub(super) const COLOR_NOTE_TEXT: Rgb = Rgb::new(205, 175, 95);
+/// Furigana ruby, in both the popup heading and the always-on overlay. A muted
+/// slate-blue: legible over the dark panel and a dark scene, without competing
+/// with the white base text the way a saturated blue would.
+pub(super) const COLOR_FURIGANA: Rgb = Rgb::new(150, 178, 206);
+/// Inflection-note body text, a quiet grey that sits below the meanings.
+pub(super) const COLOR_NOTE_TEXT: Rgb = Rgb::new(176, 178, 190);
+/// The bold lead word of an inflection note (e.g. "Polite ...").
+pub(super) const COLOR_NOTE_LEAD: Rgb = Rgb::new(226, 228, 236);
+/// Hairline divider between the meanings and the inflection note.
+pub(super) const COLOR_SEPARATOR: Rgb = Rgb::new(54, 54, 66);
 pub(super) const COLOR_GLOSS_TEXT: Rgb = Rgb::new(214, 214, 222);
-pub(super) const COLOR_BUTTON_BG: Rgb = Rgb::new(46, 46, 58);
-pub(super) const COLOR_BUTTON_BORDER: Rgb = Rgb::new(120, 120, 150);
-pub(super) const COLOR_BUTTON_ICON: Rgb = Rgb::new(228, 228, 238);
 pub(super) const COLOR_HUD_BG: Rgb = Rgb::new(18, 18, 24);
 pub(super) const COLOR_HUD_TITLE: Rgb = Rgb::new(205, 205, 215);
 pub(super) const COLOR_HUD_STATUS: Rgb = Rgb::new(150, 180, 210);
@@ -311,6 +319,7 @@ mod tests {
             ("word", COLOR_WORD_TEXT),
             ("furigana", COLOR_FURIGANA),
             ("note", COLOR_NOTE_TEXT),
+            ("note lead", COLOR_NOTE_LEAD),
             ("gloss", COLOR_GLOSS_TEXT),
         ] {
             let ratio = contrast(color, COLOR_PANEL_BG);

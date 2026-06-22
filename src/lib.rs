@@ -2,7 +2,6 @@ pub mod artifact;
 pub mod capture;
 pub mod cli;
 pub mod config;
-pub mod debug_capture;
 pub mod dictionary;
 pub mod doctor;
 pub mod eval;

@@ -120,10 +120,10 @@ mod tests {
     #[test]
     fn deletes_images_recursively_and_keeps_metadata() {
         let temp = tempfile::tempdir().unwrap();
-        let nested = temp.path().join("debug-captures").join("capture-1");
+        let nested = temp.path().join("eval-captures").join("capture-1");
         fs::create_dir_all(&nested).unwrap();
         let png = nested.join("underlying.PNG");
-        let jpg = nested.join("with_overlay.jpg");
+        let jpg = nested.join("frame.jpg");
         let json = nested.join("capture.json");
         fs::write(&png, b"png").unwrap();
         fs::write(&jpg, b"jpg").unwrap();

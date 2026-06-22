@@ -1,8 +1,8 @@
-//! Small shared helpers for writing on-disk artifacts (reports, manifests,
-//! debug captures) and for the timing/timestamp values that go in them.
+//! Small shared helpers for writing on-disk artifacts (reports, manifests, eval
+//! captures) and for the timing/timestamp values that go in them.
 //!
 //! These were previously copy-pasted across `capture_report`, `session_collect`,
-//! `debug_capture`, `lookup`, `eval`, and `main`; centralizing them keeps the
+//! `eval_capture`, `lookup`, `eval`, and `main`; centralizing them keeps the
 //! `artifact_version`/pretty-JSON/`create_dir_all` convention in one place.
 
 use std::path::Path;
@@ -11,9 +11,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-/// Schema version stamped into on-disk artifacts (eval reports, debug
-/// captures). Bump when the JSON shape changes in a way downstream tools care
-/// about.
+/// Schema version stamped into on-disk artifacts (eval reports, eval captures).
+/// Bump when the JSON shape changes in a way downstream tools care about.
 pub const ARTIFACT_VERSION: u32 = 1;
 
 /// Wall-clock time since the Unix epoch, in milliseconds. Used to stamp and

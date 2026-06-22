@@ -365,17 +365,25 @@ impl Default for PipelineConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OverlayConfig {
-    pub enabled: bool,
-    pub click_through: bool,
-    pub show_confidence: bool,
+    /// Draw the per-word category underlines (and the hover selection tint). On
+    /// by default. When off, the word layer is fully transparent: nothing is
+    /// painted over the recognized words, but hover lookups still work (the popup
+    /// is hit-tested from word geometry, not from the drawn pixels), so this is
+    /// the "invisible until I hover" reading mode. Note that `furigana` is a
+    /// separate layer: enabling it still draws always-on ruby even when
+    /// underlines are off.
+    pub word_underlines: bool,
+    /// Draw furigana above every recognized word, not just in the hover popup.
+    /// Off by default: it is the most intrusive ink the overlay puts over the
+    /// game, so it stays opt-in for learners who want continuous reading support.
+    pub furigana: bool,
 }
 
 impl Default for OverlayConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
-            click_through: true,
-            show_confidence: true,
+            word_underlines: true,
+            furigana: false,
         }
     }
 }
@@ -402,6 +410,24 @@ mod tests {
         );
         assert_eq!(decoded.pipeline.detector_min_long_side, 3840);
         assert_eq!(decoded.pipeline.detector_downscale, 1.0);
+        // Overlay furigana is opt-in: off unless the config turns it on. Word
+        // underlines are on by default.
+        assert!(!decoded.overlay.furigana);
+        assert!(decoded.overlay.word_underlines);
+    }
+
+    #[test]
+    fn overlay_furigana_parses_when_enabled() {
+        let cfg = AppConfig::parse_toml("[overlay]\nfurigana = true\n").unwrap();
+        assert!(cfg.overlay.furigana);
+        // Other overlay fields keep their defaults.
+        assert!(cfg.overlay.word_underlines);
+    }
+
+    #[test]
+    fn overlay_word_underlines_can_be_disabled() {
+        let cfg = AppConfig::parse_toml("[overlay]\nword_underlines = false\n").unwrap();
+        assert!(!cfg.overlay.word_underlines);
     }
 
     #[test]
