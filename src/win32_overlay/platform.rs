@@ -4,18 +4,19 @@ use std::mem::MaybeUninit;
 use anyhow::{Context, Result};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
-    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateCompatibleDC, CreateDIBSection, CreateFontW,
-    DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, DeleteObject, FF_DONTCARE, FIXED_PITCH,
-    FW_NORMAL, GetDC, HBITMAP, HBRUSH, HFONT, HGDIOBJ, OUT_TT_PRECIS, ReleaseDC, SelectObject,
+    AC_SRC_ALPHA, AC_SRC_OVER, ANTIALIASED_QUALITY, BI_RGB, BITMAPINFO, BITMAPINFOHEADER,
+    BLENDFUNCTION, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateCompatibleDC, CreateDIBSection,
+    CreateFontW, DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, DeleteObject, FF_DONTCARE,
+    FIXED_PITCH, FW_NORMAL, GetDC, HBITMAP, HBRUSH, HFONT, HGDIOBJ, OUT_TT_PRECIS, ReleaseDC,
+    SelectObject,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, HICON, HWND_TOPMOST, IDC_ARROW, LoadCursorW,
     MA_NOACTIVATE, MSG, PM_REMOVE, PeekMessageW, RegisterClassW, SW_SHOWNA, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOSIZE, SetWindowPos, ShowWindow, TranslateMessage, ULW_ALPHA,
-    UpdateLayeredWindow, WM_HOTKEY, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WNDCLASSW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    UpdateLayeredWindow, WM_HOTKEY, WM_MOUSEACTIVATE, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::PCWSTR;
 
@@ -122,6 +123,35 @@ pub(super) fn create_font(height: i32, weight: i32) -> HFONT {
     }
 }
 
+/// Proportional UI font with *grayscale* antialiasing rather than ClearType.
+///
+/// The always-on overlay furigana is drawn straight onto the transparent
+/// layered surface, where its per-pixel alpha is recovered from the glyph's
+/// grey coverage (see `draw_overlay_glyphs`). ClearType's subpixel colour
+/// fringing would make the three channels disagree and corrupt that recovery, so
+/// grayscale AA (equal channels == coverage) is required here.
+pub(super) fn create_aa_font(height: i32, weight: i32) -> HFONT {
+    let face = wide(FONT_FACE_UI);
+    unsafe {
+        CreateFontW(
+            height,
+            0,
+            0,
+            0,
+            weight,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET,
+            OUT_TT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            ANTIALIASED_QUALITY,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            PCWSTR(face.as_ptr()),
+        )
+    }
+}
+
 /// Fixed-pitch font for the HUD so numeric columns align. Falls back to GDI's
 /// default fixed-pitch face if Consolas is unavailable.
 pub(super) fn create_mono_font(height: i32) -> HFONT {
@@ -180,9 +210,9 @@ pub(super) fn create_overlay_window() -> Result<HWND> {
 fn register_overlay_class(instance: HINSTANCE, class_name: &[u16]) {
     static REGISTERED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     REGISTERED.get_or_init(|| {
-        // Standard arrow cursor: without it the class cursor is null, so when
-        // the overlay is interactive (not click-through, e.g. over the
-        // problem-report button) Windows falls back to the busy/wait cursor.
+        // Standard arrow cursor as a sane default: without it the class cursor
+        // is null. The overlay is click-through, so input (and the cursor) pass
+        // to the window beneath, but a null class cursor is still avoided.
         let cursor = unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap_or_default();
         let class = WNDCLASSW {
             style: Default::default(),
@@ -234,11 +264,6 @@ pub(super) fn pump_messages() -> Vec<OverlayEvent> {
                 }
                 continue;
             }
-            if msg.message == WM_LBUTTONDOWN {
-                let (x, y) = mouse_coords(msg.lParam);
-                events.push(OverlayEvent::LeftButtonDown { x, y });
-                continue;
-            }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -248,13 +273,6 @@ pub(super) fn pump_messages() -> Vec<OverlayEvent> {
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-fn mouse_coords(lparam: LPARAM) -> (i32, i32) {
-    let raw = lparam.0 as u32;
-    let x = (raw & 0xffff) as i16 as i32;
-    let y = ((raw >> 16) & 0xffff) as i16 as i32;
-    (x, y)
 }
 
 pub(super) fn u32_to_i32(value: u32) -> i32 {

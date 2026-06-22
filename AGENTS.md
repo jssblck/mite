@@ -186,8 +186,8 @@ Notes for changes here:
   ONNX Runtime engine, detector and recognizer pre/post-processing,
   TensorRT/CUDA/CPU setup, timing hooks, and OCR text normalization.
 - `src/interactive/mod.rs`, `src/interactive/smoothing.rs`: `watch`
-  orchestration, worker thread, capture/OCR loop, smoothing handoff, debug
-  capture trigger.
+  orchestration, worker thread, capture/OCR loop, smoothing handoff, raw
+  eval-capture hotkey.
 - `src/win32_overlay/mod.rs`, `src/win32_overlay/style.rs`: layered
   click-through Win32 overlay drawing and overlay palette.
 - `src/hover/mod.rs`, `src/hover/furigana.rs`, `src/hover/sense.rs`: pure hit
@@ -200,7 +200,8 @@ Notes for changes here:
   JPDB frequency ranks, and JMdict.
 - `src/eval.rs`: full-frame real-image OCR/lookup regression scoring against
   manually authored labels.
-- `src/debug_capture.rs`, `src/artifact.rs`: self-contained diagnostic output.
+- `src/eval_capture.rs`, `src/artifact.rs`: raw eval-fixture capture and shared
+  on-disk artifact helpers.
 - `examples/`: profiling and lookup/sense stress harnesses.
 - `app/`: the Tauri desktop app (a separate, non-Rust-core surface) that
   installs, updates, and launches the CLI for non-technical users. Rust backend
@@ -274,7 +275,7 @@ These are not required for every change, but they are the most useful places to
 invest when the touched area overlaps them.
 
 1. Make debug and benchmark outputs consistently artifact-shaped. The repo
-   already has `artifact.rs` and debug-capture JSON; examples and profiling
+   already has `artifact.rs` and eval-capture JSON; examples and profiling
    harnesses could eventually emit structured reports under `target\` for easier
    comparison.
 2. Keep pushing latency work through measured p95/p99 improvements. The next

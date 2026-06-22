@@ -97,13 +97,16 @@ Use `--auto` for games that consume the `Shift` key, and pin the target with
 
 ## Features
 
-- Window OCR overlay for Japanese text in native Windows apps and games.
-- Hover popups with dictionary forms, glosses, inflection notes, and furigana.
+- Window OCR overlay for Japanese text in native Windows apps and games, with
+  POS-coloured per-word underlines (`overlay.word_underlines`, on by default)
+  and optional always-on furigana (`overlay.furigana`, off by default). Turn
+  underlines off for an invisible overlay that only shows a popup on hover.
+- Hover popups with dictionary forms, a plain-language grammar pill, glosses,
+  inflection notes, and furigana.
 - Click-through layered Win32 overlay that keeps game input uninterrupted.
 - TensorRT/CUDA acceleration with CPU fallback.
 - Temporal smoothing so stable text regions can be reused instead of re-OCR'd
   every frame.
-- Raw debug captures for concrete issue reports.
 - Manual real-image eval workflow for OCR, lookup, bounds, and popup metadata.
 - Browser-based eval label UI for private eval corpora.
 

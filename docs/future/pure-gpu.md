@@ -146,7 +146,7 @@ If revisited, do not start with full interop. In rough order of value/risk:
    modest win.
 3. **Skip RGB materialization.** Index the BGRA buffer directly in crop/resize/
    tensor instead of building an `RgbImage`. Pure-CPU, removes a 25 MB alloc + a
-   conversion pass, but touches many call sites (overlay, debug-capture,
+   conversion pass, but touches many call sites (overlay, eval-capture,
    contrast-stretch all assume `RgbImage`).
 4. **Single-API zero-copy rewrite.** Only after 1–3 and a faster recognizer make
    the CPU glue the dominant cost. Pick DirectML (clean, slower infer) or

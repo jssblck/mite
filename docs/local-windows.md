@@ -183,27 +183,6 @@ cargo run --bin eval-ui -- --port 0
 `--fixture-ocr` uses deterministic fixture boxes for UI smoke tests. Leave it off when
 you need real raw detections or label-vs-Mite diffs.
 
-### Filing concrete issues
-
-The popup's problem report camera button writes a self-contained debug capture to
-`%LOCALAPPDATA%\mite\debug-captures\capture-<ts>\`: the OCR'd frame
-(`underlying.png`), that frame with the overlay composited on top
-(`with_overlay.png`), and `capture.json` (window id, screen rect, raw OCR lines
-with per-glyph centres, and every word's surface/dictionary form/furigana/
-glosses/category/rect). Attach that folder when reporting a misread.
-
-To make a recurring real-game issue permanent regression coverage, copy or move
-the capture folder under `eval\collection-name\capture-<ts>\` and manually add a
-sibling `eval.json`:
-
-```powershell
-cargo run -- eval `
-  --image eval\collection-name\capture-<ts>\underlying.png `
-  --labels eval\collection-name\capture-<ts>\eval.json `
-  --out target\eval\capture-<ts>.json `
-  --allow-failures
-```
-
 ### Collecting raw eval screenshots
 
 For fixture collection without OCR, start `watch` with a developer hotkey:
@@ -230,10 +209,22 @@ Once you have a capture worth keeping, label it by hand with an `eval.json` file
 next to `underlying.png`. Mite only scores against that file; it does not create
 or infer labels.
 
+To make a recurring real-game issue permanent regression coverage, copy or move
+the capture folder under `eval\collection-name\capture-<ts>\` next to its
+hand-authored `eval.json` and score it:
+
+```powershell
+cargo run -- eval `
+  --image eval\collection-name\capture-<ts>\underlying.png `
+  --labels eval\collection-name\capture-<ts>\eval.json `
+  --out target\eval\capture-<ts>.json `
+  --allow-failures
+```
+
 ### Cleaning local capture images
 
-Problem-report and raw eval captures can leave large PNGs under
-`%LOCALAPPDATA%\mite`. Clean those image files without touching JSON metadata:
+Raw eval captures can leave large PNGs under `%LOCALAPPDATA%\mite`. Clean those
+image files without touching JSON metadata:
 
 ```powershell
 cargo run -- clean-images --dry-run

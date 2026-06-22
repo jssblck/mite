@@ -82,7 +82,10 @@ hands off to `cli.rs`, where Clap parsing and command handlers live.
 - `Win32Overlay` (`win32_overlay/mod.rs`, `win32_overlay/style.rs`): the
   presentation layer - a per-pixel-alpha layered topmost window
   (`UpdateLayeredWindow` over a 32-bit BGRA buffer) that draws POS-coloured
-  word highlights, the furigana definition popup, and the latency HUD. The
+  per-word underlines (with optional furigana above each word, gated by
+  `overlay.furigana`), the rounded definition popup (category pill, furigana
+  heading, glosses, inflection note, and a tail pointing at the hovered word),
+  and the latency HUD. The
   pure, Win32-free hit-testing and popup-content logic lives in
   `hover/mod.rs`, `hover/furigana.rs`, and `hover/sense.rs` so it can be
   unit-tested off-Windows.
