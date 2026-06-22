@@ -16,7 +16,7 @@ use crate::home;
 /// The persisted app settings file inside the mite home.
 const SETTINGS_FILE: &str = "app-settings.json";
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
     /// The recorded runtime tier: `"cpu"`, `"cuda"`, or `"tensor_rt"`. `None`
@@ -28,6 +28,29 @@ pub struct AppSettings {
     /// True once the guided runtime setup has been completed or skipped, so the
     /// app does not reopen it automatically on later launches.
     pub runtime_setup_seen: bool,
+    /// Run the overlay continuously (`watch --auto`) instead of holding Shift.
+    /// On by default: some games swallow the Shift hotkey.
+    pub watch_auto: bool,
+    /// Show the per-stage latency HUD (`watch --hud`).
+    pub watch_hud: bool,
+    /// Log aggregate metrics every N seconds (`watch --metrics-interval-secs`);
+    /// `0` disables it.
+    pub watch_metrics_interval_secs: u64,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            runtime_tier: None,
+            dll_dirs: Vec::new(),
+            runtime_setup_seen: false,
+            // Matches the previous in-picker defaults: continuous on, the
+            // diagnostic surfaces off.
+            watch_auto: true,
+            watch_hud: false,
+            watch_metrics_interval_secs: 0,
+        }
+    }
 }
 
 impl AppSettings {
@@ -94,11 +117,28 @@ mod tests {
             runtime_tier: Some("cuda".to_string()),
             dll_dirs: vec!["C:\\nvidia\\bin".to_string()],
             runtime_setup_seen: true,
+            watch_auto: false,
+            watch_hud: true,
+            watch_metrics_interval_secs: 5,
         };
         let text = serde_json::to_string(&settings).unwrap();
         let decoded: AppSettings = serde_json::from_str(&text).unwrap();
         assert_eq!(decoded.runtime_tier.as_deref(), Some("cuda"));
         assert_eq!(decoded.dll_dirs, vec!["C:\\nvidia\\bin".to_string()]);
         assert!(decoded.runtime_setup_seen);
+        assert!(!decoded.watch_auto);
+        assert!(decoded.watch_hud);
+        assert_eq!(decoded.watch_metrics_interval_secs, 5);
+    }
+
+    #[test]
+    fn watch_defaults_fill_in_for_settings_files_predating_the_fields() {
+        // A settings file written before watch options existed must deserialize
+        // with continuous-watch on, matching the prior in-picker default.
+        let legacy = r#"{"runtimeTier":"cpu","dllDirs":[],"runtimeSetupSeen":true}"#;
+        let decoded: AppSettings = serde_json::from_str(legacy).unwrap();
+        assert!(decoded.watch_auto);
+        assert!(!decoded.watch_hud);
+        assert_eq!(decoded.watch_metrics_interval_secs, 0);
     }
 }

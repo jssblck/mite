@@ -5,18 +5,25 @@ import {
   type DoctorReport,
   type GpuRuntimeStatus,
   type RuntimeTier,
-  type TierStatus,
 } from "../lib/api";
-import { MiteMark } from "../components/MiteMark";
 
 interface RuntimeSetupProps {
   status: AppStatus;
   onClose: () => void;
 }
 
-/** The pinned NVIDIA packages, surfaced in the pip route's copy-paste command. */
+/** NVIDIA's own package index, where the TensorRT runtime wheel is hosted. */
+const NVIDIA_PIP_INDEX = "https://pypi.nvidia.com";
+
+/**
+ * The pinned NVIDIA packages, surfaced in the pip route's copy-paste command.
+ * Mite loads the native DLLs through ONNX Runtime, so this installs the TensorRT
+ * runtime libraries (`tensorrt-cu12-libs`) rather than the `tensorrt-cu12`
+ * meta-package: that meta-package also pulls the Python bindings, which have no
+ * wheel for current Python versions and break the install.
+ */
 const PIP_PACKAGES = [
-  "tensorrt-cu12==10.16.1.11",
+  "tensorrt-cu12-libs==10.16.1.11",
   "nvidia-cuda-runtime-cu12==12.9.79",
   "nvidia-cuda-nvrtc-cu12==12.9.86",
   "nvidia-cublas-cu12==12.9.2.10",
@@ -26,35 +33,18 @@ const PIP_PACKAGES = [
 /** Official NVIDIA download pages, kept generic so they stay current. */
 const NVIDIA_LINKS = [
   {
-    label: "CUDA Toolkit (pick a 12.x release)",
+    label: "CUDA Toolkit 12.x",
     url: "https://developer.nvidia.com/cuda-toolkit-archive",
-    note: "Provides the CUDA runtime, cuBLAS, and NVRTC.",
   },
-  {
-    label: "cuDNN 9.x",
-    url: "https://developer.nvidia.com/cudnn",
-    note: "Free NVIDIA developer account required to download.",
-  },
-  {
-    label: "TensorRT 10.x",
-    url: "https://developer.nvidia.com/tensorrt",
-    note: "Free NVIDIA developer account required to download.",
-  },
+  { label: "cuDNN 9.x", url: "https://developer.nvidia.com/cudnn" },
+  { label: "TensorRT 10.x", url: "https://developer.nvidia.com/tensorrt" },
 ];
 
 /** How often to re-run detection while the screen is open. */
 const POLL_MS = 2000;
 
-function tierName(tier: RuntimeTier): string {
-  switch (tier) {
-    case "tensor_rt":
-      return "TensorRT (fastest)";
-    case "cuda":
-      return "CUDA (no TensorRT yet)";
-    default:
-      return "CPU only";
-  }
-}
+/** Which install route the tabs are showing. */
+type Route = "nvidia" | "pip";
 
 function skipConsequence(tier: RuntimeTier): string {
   switch (tier) {
@@ -67,36 +57,33 @@ function skipConsequence(tier: RuntimeTier): string {
   }
 }
 
-function Checklist({ title, hint, tier }: { title: string; hint: string; tier: TierStatus }) {
+function TierRow({
+  title,
+  hint,
+  present,
+}: {
+  title: string;
+  hint: string;
+  present: boolean;
+}) {
   return (
-    <div className="dll-group">
-      <div className="dll-group-head">
-        <span className="dll-group-title">{title}</span>
-        <span className={`pill ${tier.present ? "ok" : "pending"}`}>
-          {tier.present ? "ready" : "incomplete"}
-        </span>
+    <div className="tier-row">
+      <div className="tier-row-main">
+        <span className="tier-row-title">{title}</span>
+        <span className="tier-row-hint">{hint}</span>
       </div>
-      <p className="dll-group-hint">{hint}</p>
-      <ul className="dll-list">
-        {tier.components.map((component) => (
-          <li
-            key={component.name}
-            className={`dll-item${component.present ? " present" : ""}`}
-          >
-            <span className="dll-mark">{component.present ? "✓" : "○"}</span>
-            <code>{component.name}</code>
-          </li>
-        ))}
-      </ul>
+      <span className={`pill ${present ? "ok" : "warn"}`}>
+        {present ? "ready" : "incomplete"}
+      </span>
     </div>
   );
 }
 
-function CommandBlock({ text }: { text: string }) {
+function CommandBlock({ text, copyText }: { text: string; copyText: string }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(copyText);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -105,19 +92,81 @@ function CommandBlock({ text }: { text: string }) {
   };
   return (
     <div className="cmd-block">
-      <code>{text}</code>
-      <button className="btn btn-ghost btn-sm" onClick={copy}>
+      <pre className="cmd-code">
+        <code>{text}</code>
+      </pre>
+      <button className="btn btn-ghost btn-sm cmd-copy" onClick={copy}>
         {copied ? "Copied" : "Copy"}
       </button>
     </div>
   );
 }
 
+function ConfirmModal({
+  title,
+  body,
+  confirmLabel,
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  busy: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      className="modal-overlay"
+      role="presentation"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <div className="modal" role="dialog" aria-modal="true" aria-label={title}>
+        <h2 className="modal-title">{title}</h2>
+        <p className="modal-body">{body}</p>
+        <div className="btn-row modal-actions">
+          <button className="btn btn-primary" onClick={onConfirm} disabled={busy}>
+            {busy ? "Saving..." : confirmLabel}
+          </button>
+          <button className="btn btn-ghost" onClick={onCancel} disabled={busy}>
+            Back
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function RuntimeSetup({ status, onClose }: RuntimeSetupProps) {
   const [report, setReport] = useState<DoctorReport | null>(status.doctor);
+  const [route, setRoute] = useState<Route>("nvidia");
+  const [confirmSkip, setConfirmSkip] = useState(false);
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
+  // True once the user has picked a tab by hand, so the pip auto-default below
+  // never overrides a deliberate choice if it resolves late.
+  const routePicked = useRef(false);
+
+  const chooseRoute = useCallback((next: Route) => {
+    routePicked.current = true;
+    setRoute(next);
+  }, []);
+
+  // Default to the pip route when pip is on PATH: that route is a single
+  // copy-paste command, so it is the path of least resistance for those users.
+  useEffect(() => {
+    api
+      .pipAvailable()
+      .then((available) => {
+        if (available && !routePicked.current) setRoute("pip");
+      })
+      .catch(() => undefined);
+  }, []);
 
   // Live re-check: re-run detection on a short interval, debounced so a slow
   // probe never overlaps the next tick. Stops when the screen unmounts.
@@ -159,7 +208,18 @@ export function RuntimeSetup({ status, onClose }: RuntimeSetupProps) {
   const gpu: GpuRuntimeStatus | null = report?.gpu_runtime ?? null;
   const tier: RuntimeTier = gpu?.tier ?? "cpu";
   const runtimeFolder = `${status.miteHome}\\nvidia-runtime`;
-  const pipCommand = `pip install --target "${runtimeFolder}" ${PIP_PACKAGES.join(" ")}`;
+  // The command parts. Displayed across indented lines for readability, but
+  // copied as a single line so it runs in any shell (PowerShell or cmd): no
+  // shell-specific line-continuation characters to trip a paste.
+  const pipParts = [
+    `pip install --target "${runtimeFolder}"`,
+    `--extra-index-url ${NVIDIA_PIP_INDEX}`,
+    ...PIP_PACKAGES,
+  ];
+  const pipDisplay = pipParts
+    .map((line, index) => (index === 0 ? line : `  ${line}`))
+    .join("\n");
+  const pipCopy = pipParts.join(" ");
 
   const openLink = (url: string) => {
     api.openUrl(url).catch((err) => setError(String(err)));
@@ -172,7 +232,6 @@ export function RuntimeSetup({ status, onClose }: RuntimeSetupProps) {
         <main className="app-main">
           <div className="wizard">
             <div className="wizard-hero">
-              <MiteMark className="mark" size="2.75rem" />
               <h1>No NVIDIA GPU detected</h1>
               <p>
                 Mite will run on the CPU. It is slower than the GPU path but works
@@ -197,20 +256,46 @@ export function RuntimeSetup({ status, onClose }: RuntimeSetupProps) {
     );
   }
 
+  const ready = tier === "tensor_rt";
+
   return (
     <div className="app-shell">
       <main className="app-main">
         <div className="wizard wizard-wide">
           <div className="wizard-hero">
-            <MiteMark className="mark" size="2.75rem" />
             <h1>Set up GPU acceleration</h1>
-            <p>
-              Mite needs several NVIDIA runtime components to use your GPU.
-              Because of NVIDIA's license terms we do not install them for you;
-              you install them directly from NVIDIA, and Mite detects them and
-              launches with the right settings. The steps below walk you through
-              it.
+            <p className="wide">
+              Mite needs several NVIDIA runtime components to use your GPU. These
+              are NVIDIA's own software, and their license does not let us install
+              them for you.
             </p>
+          </div>
+
+          {/* The primary and skip actions live up top, above the status. */}
+          <div className="action-bar">
+            <span className="action-bar-text">
+              {ready
+                ? null
+                : "GPU acceleration is optional. You can set it up anytime from Settings."}
+            </span>
+            <div className="action-bar-buttons">
+              {!ready && (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setConfirmSkip(true)}
+                  disabled={recording}
+                >
+                  Skip for now
+                </button>
+              )}
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={finish}
+                disabled={recording || !ready}
+              >
+                {recording ? "Saving..." : "Continue"}
+              </button>
+            </div>
           </div>
 
           <div className="card">
@@ -227,99 +312,96 @@ export function RuntimeSetup({ status, onClose }: RuntimeSetupProps) {
               </p>
             )}
             <p className="card-sub">
-              Detected runtime: <strong>{tierName(tier)}</strong>. This screen
-              re-checks every couple of seconds, so each component below checks
-              off as you install it.
+              Install both for the fastest path: TensorRT runs on top of the CUDA
+              runtime, so it needs CUDA alongside it. CUDA on its own still works,
+              but is roughly 2x slower.
             </p>
 
             {gpu && (
-              <div className="dll-groups">
-                <Checklist
-                  title="TensorRT runtime (fastest path)"
-                  hint="The fastest backend. Needs the TensorRT 10.x DLLs plus the CUDA set below."
-                  tier={gpu.tensorrt}
+              <div className="tier-rows">
+                <TierRow
+                  title="TensorRT runtime"
+                  hint="The fastest path."
+                  present={gpu.tensorrt.present}
                 />
-                <Checklist
+                <TierRow
                   title="CUDA runtime"
-                  hint="The CUDA 12 runtime, cuBLAS, and cuDNN 9. On its own this enables the CUDA backend (about 2x slower than TensorRT)."
-                  tier={gpu.cuda}
+                  hint="The required base for TensorRT."
+                  present={gpu.cuda.present}
                 />
               </div>
             )}
             {gpu && !gpu.builder_present && gpu.tensorrt.present && (
               <p className="card-sub subtle">
-                Note: nvinfer_builder_resource.dll was not found. A cached engine
-                will still run, but building a new TensorRT engine on this
-                machine needs that component from NVIDIA's TensorRT package.
+                Note: the TensorRT engine builder was not found. A cached engine
+                will still run, but building a new one on this machine needs that
+                component from NVIDIA's TensorRT package.
               </p>
             )}
           </div>
 
-          <div className="card">
-            <div className="card-title">How to install (choose one route)</div>
-
-            <div className="route">
-              <div className="route-title">Option A: download from NVIDIA</div>
-              <p className="card-sub">
-                Install compatible major versions: CUDA 12.x, cuDNN 9.x, and
-                TensorRT 10.x. Newer majors will not load.
-              </p>
-              <ul className="link-list">
-                {NVIDIA_LINKS.map((link) => (
-                  <li key={link.url}>
-                    <button
-                      className="link-btn"
-                      onClick={() => openLink(link.url)}
-                    >
-                      {link.label}
-                    </button>
-                    <span className="link-note">{link.note}</span>
-                  </li>
-                ))}
-              </ul>
+          <div className="install-routes">
+            <div className="tabs" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={route === "nvidia"}
+                className={`tab${route === "nvidia" ? " active" : ""}`}
+                onClick={() => chooseRoute("nvidia")}
+              >
+                Download from NVIDIA
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={route === "pip"}
+                className={`tab${route === "pip" ? " active" : ""}`}
+                onClick={() => chooseRoute("pip")}
+              >
+                Install with pip
+              </button>
             </div>
 
-            <div className="route">
-              <div className="route-title">Option B: install with pip</div>
-              <p className="card-sub">
-                If you have Python, install NVIDIA's official wheels (the exact
-                versions Mite is built against) into a folder Mite watches. The
-                DLLs land under that folder; Mite finds them automatically.
-              </p>
-              <CommandBlock text={pipCommand} />
-              <p className="card-sub subtle">
-                Installs into {runtimeFolder}
-              </p>
-            </div>
+            {route === "nvidia" ? (
+              <div className="tab-panel">
+                <ol className="dl-steps">
+                  {NVIDIA_LINKS.map((link, index) => (
+                    <li key={link.url}>
+                      <button
+                        className="dl-step"
+                        onClick={() => openLink(link.url)}
+                      >
+                        <span className="dl-step-num">{index + 1}</span>
+                        <span className="dl-step-label">{link.label}</span>
+                        <span className="dl-step-icon" aria-hidden="true">
+                          ↗
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            ) : (
+              <div className="tab-panel">
+                <CommandBlock text={pipDisplay} copyText={pipCopy} />
+              </div>
+            )}
           </div>
 
           {error && <div className="error-text">{error}</div>}
-
-          <div className="card">
-            <p className="card-sub">{skipConsequence(tier)}</p>
-            <div className="btn-row">
-              <button
-                className="btn btn-primary"
-                onClick={finish}
-                disabled={recording || tier !== "tensor_rt"}
-              >
-                {recording
-                  ? "Saving..."
-                  : tier === "tensor_rt"
-                    ? "Continue"
-                    : "Waiting for TensorRT..."}
-              </button>
-              <button
-                className="btn btn-ghost"
-                onClick={finish}
-                disabled={recording}
-              >
-                Skip for now
-              </button>
-            </div>
-          </div>
         </div>
       </main>
+
+      {confirmSkip && (
+        <ConfirmModal
+          title="Skip GPU acceleration?"
+          body={`${skipConsequence(tier)} You can come back to this anytime from Settings.`}
+          confirmLabel="Skip for now"
+          busy={recording}
+          onConfirm={finish}
+          onCancel={() => setConfirmSkip(false)}
+        />
+      )}
     </div>
   );
 }

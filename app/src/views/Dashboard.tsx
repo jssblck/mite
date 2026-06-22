@@ -6,6 +6,13 @@ interface DashboardProps {
   watching: boolean;
   onRefresh: () => void;
   onWatch: () => void;
+  onSetupGpu: () => void;
+}
+
+/** The leading sentence of a diagnostics message, for a compact one-line view. */
+function firstSentence(text: string): string {
+  const end = text.indexOf(". ");
+  return end === -1 ? text : text.slice(0, end + 1);
 }
 
 function Stat({
@@ -29,7 +36,13 @@ function Stat({
   );
 }
 
-export function Dashboard({ status, watching, onRefresh, onWatch }: DashboardProps) {
+export function Dashboard({
+  status,
+  watching,
+  onRefresh,
+  onWatch,
+  onSetupGpu,
+}: DashboardProps) {
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [updating, setUpdating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +50,32 @@ export function Dashboard({ status, watching, onRefresh, onWatch }: DashboardPro
   useEffect(() => {
     api.checkForUpdates().then(setUpdate).catch(() => setUpdate(null));
   }, []);
+
+  // Auto-refresh the install status while the Dashboard is on screen (it only
+  // mounts when its tab is active). Debounced so a slow probe never overlaps the
+  // next tick, paused while the window is hidden, and re-run on regaining focus.
+  useEffect(() => {
+    let inFlight = false;
+    const tick = async () => {
+      if (inFlight || document.hidden) return;
+      inFlight = true;
+      try {
+        await onRefresh();
+      } finally {
+        inFlight = false;
+      }
+    };
+    tick();
+    const handle = setInterval(tick, 3000);
+    const onVisible = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(handle);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [onRefresh]);
 
   const doctor = status.doctor;
   const gpu = doctor?.nvidia;
@@ -52,6 +91,9 @@ export function Dashboard({ status, watching, onRefresh, onWatch }: DashboardPro
               detail: "Running on CPU. Set up GPU acceleration from Settings.",
             }
           : { ok: "warn" as const, detail: "Running on CPU (no NVIDIA GPU)." };
+
+  // An NVIDIA GPU is present but not at the fastest path: setup can still help.
+  const needsGpuSetup = Boolean(gpu?.available) && tier !== "tensor_rt";
 
   async function updateCli() {
     setUpdating(true);
@@ -70,11 +112,6 @@ export function Dashboard({ status, watching, onRefresh, onWatch }: DashboardPro
 
   return (
     <div>
-      <div className="page-head">
-        <h1>Dashboard</h1>
-        <p>Your Mite install at a glance, and one button to start reading.</p>
-      </div>
-
       {update?.cliUpdateAvailable && (
         <div className="banner">
           <span className="banner-text">
@@ -121,7 +158,7 @@ export function Dashboard({ status, watching, onRefresh, onWatch }: DashboardPro
           <Stat
             ok="warn"
             label="Diagnostics"
-            detail={doctor.warnings.join(" ")}
+            detail={firstSentence(doctor.warnings[0])}
           />
         )}
         {error && <div className="error-text">{error}</div>}
@@ -129,9 +166,11 @@ export function Dashboard({ status, watching, onRefresh, onWatch }: DashboardPro
           <button className="btn btn-primary" onClick={onWatch}>
             {watching ? "Go to watch" : "Start watching"}
           </button>
-          <button className="btn btn-ghost btn-sm" onClick={onRefresh}>
-            Refresh
-          </button>
+          {needsGpuSetup && (
+            <button className="btn btn-ghost" onClick={onSetupGpu}>
+              Set up GPU
+            </button>
+          )}
         </div>
       </div>
     </div>

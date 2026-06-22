@@ -15,10 +15,14 @@ const TENSORRT_DLLS: &[&str] = &[
     "nvonnxparser_10.dll",
     "nvinfer_plugin_10.dll",
 ];
-/// The on-device TensorRT engine builder component (~1.7 GB). It is only needed
-/// to build an engine on this machine; a cached engine runs without it. It is
-/// reported on its own rather than gating the tier.
-const TENSORRT_BUILDER_DLL: &str = "nvinfer_builder_resource.dll";
+/// The on-device TensorRT engine builder component. It is only needed to build
+/// an engine on this machine; a cached engine runs without it, so it is reported
+/// on its own rather than gating the tier. It ships under more than one name:
+/// NVIDIA's standalone TensorRT package historically used a single
+/// `nvinfer_builder_resource.dll`, while the pip wheels split it per compute
+/// capability (for example `nvinfer_builder_resource_sm89_10.dll`). Both start
+/// with this prefix, so it is matched by prefix rather than an exact file name.
+const TENSORRT_BUILDER_PREFIX: &str = "nvinfer_builder_resource";
 /// CUDA-tier DLLs: the CUDA 12 runtime, cuBLAS, and cuDNN 9. These majors match
 /// what the `ort` build links, so guidance pins compatible major versions.
 const CUDA_DLLS: &[&str] = &[
@@ -98,7 +102,7 @@ impl DoctorReport {
         if nvidia.available {
             match gpu_runtime.tier {
                 RuntimeTier::Cpu => warnings.push(
-                    "An NVIDIA GPU was detected but no NVIDIA GPU runtime (TensorRT or CUDA DLLs) \
+                    "An NVIDIA GPU was detected but no NVIDIA GPU runtime (TensorRT or CUDA) \
                      was found, so Mite will run on the CPU. Install NVIDIA's runtime to enable GPU \
                      acceleration and ensure it is on PATH (the desktop app guides this; for local \
                      development see docs/local-windows.md)."
@@ -289,7 +293,12 @@ impl GpuRuntimeStatus {
 
         let tensorrt = tier_status(TENSORRT_DLLS, &resolve);
         let cuda = tier_status(CUDA_DLLS, &resolve);
-        let builder_dir = resolve(TENSORRT_BUILDER_DLL);
+        // The builder resource has a versioned, per-SM file name in the pip
+        // wheels, so it is matched by prefix across the TensorRT directories.
+        let builder_dir = dirs
+            .iter()
+            .find(|dir| dir_has_prefixed_dll(dir, TENSORRT_BUILDER_PREFIX))
+            .cloned();
 
         // Collect the directories that supplied a required DLL.
         let mut found_dirs: BTreeSet<PathBuf> = BTreeSet::new();
@@ -622,7 +631,9 @@ mod tests {
         for name in TENSORRT_DLLS {
             touch(trt_dir.path(), name);
         }
-        touch(trt_dir.path(), TENSORRT_BUILDER_DLL);
+        // The pip wheels ship the builder resource per compute capability; the
+        // prefix match must accept that name, not just the legacy single file.
+        touch(trt_dir.path(), "nvinfer_builder_resource_sm89_10.dll");
 
         let dirs = vec![cuda_dir.path().to_path_buf(), trt_dir.path().to_path_buf()];
         let status = GpuRuntimeStatus::detect_in(&dirs);
@@ -632,6 +643,25 @@ mod tests {
         assert!(status.builder_present);
         assert!(status.dll_dirs.contains(&cuda_dir.path().to_path_buf()));
         assert!(status.dll_dirs.contains(&trt_dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn detect_in_accepts_legacy_builder_resource_name() {
+        // NVIDIA's standalone TensorRT package uses the single-file name; it must
+        // still satisfy the builder check.
+        let cuda_dir = tempfile::tempdir().unwrap();
+        let trt_dir = tempfile::tempdir().unwrap();
+        for name in CUDA_DLLS {
+            touch(cuda_dir.path(), name);
+        }
+        for name in TENSORRT_DLLS {
+            touch(trt_dir.path(), name);
+        }
+        touch(trt_dir.path(), "nvinfer_builder_resource.dll");
+
+        let dirs = vec![cuda_dir.path().to_path_buf(), trt_dir.path().to_path_buf()];
+        let status = GpuRuntimeStatus::detect_in(&dirs);
+        assert!(status.builder_present);
     }
 
     #[test]

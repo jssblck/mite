@@ -12,7 +12,7 @@ use tauri_plugin_opener::OpenerExt;
 use crate::release::{self, normalize_version};
 use crate::settings::{self, AppSettings};
 use crate::status::{self, AppStatus};
-use crate::watch::{self, WatchOptions, WatchState};
+use crate::watch::{self, WatchState};
 use crate::{cli, download, home, models, windows};
 
 /// Run blocking work off the async executor and flatten errors to strings.
@@ -173,11 +173,31 @@ pub async fn record_runtime() -> Result<AppSettings, String> {
                     .collect()
             })
             .unwrap_or_default();
-        let saved = AppSettings {
-            runtime_tier,
-            dll_dirs,
-            runtime_setup_seen: true,
-        };
+        // Preserve any watch options the user has set; only the runtime fields
+        // are (re)detected here.
+        let mut saved = settings::load();
+        saved.runtime_tier = runtime_tier;
+        saved.dll_dirs = dll_dirs;
+        saved.runtime_setup_seen = true;
+        settings::save(&saved)?;
+        Ok(saved)
+    })
+    .await
+}
+
+/// Persist the watch launch options the user sets in the Settings panel. Every
+/// click-to-watch in the picker launches with these.
+#[tauri::command]
+pub async fn set_watch_options(
+    auto: bool,
+    hud: bool,
+    metrics_interval_secs: u64,
+) -> Result<AppSettings, String> {
+    blocking(move || {
+        let mut saved = settings::load();
+        saved.watch_auto = auto;
+        saved.watch_hud = hud;
+        saved.watch_metrics_interval_secs = metrics_interval_secs;
         settings::save(&saved)?;
         Ok(saved)
     })
@@ -188,6 +208,22 @@ pub async fn record_runtime() -> Result<AppSettings, String> {
 #[tauri::command]
 pub fn get_settings() -> AppSettings {
     settings::load()
+}
+
+/// Whether a `pip` executable is discoverable on `PATH`. The guided runtime
+/// setup defaults to the pip install route when it is, since that route is a
+/// single copy-paste command. Pure PATH inspection: it never spawns pip.
+#[tauri::command]
+pub fn pip_available() -> bool {
+    let names: &[&str] = if cfg!(windows) {
+        &["pip.exe", "pip3.exe"]
+    } else {
+        &["pip", "pip3"]
+    };
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| names.iter().any(|name| dir.join(name).is_file()))
 }
 
 #[tauri::command]
@@ -210,12 +246,8 @@ pub async fn capture_thumbnail(window_id: u32, max_width: u32) -> Result<String,
 }
 
 #[tauri::command]
-pub fn start_watch(
-    app: AppHandle,
-    state: State<WatchState>,
-    options: WatchOptions,
-) -> Result<(), String> {
-    watch::start(&app, &state, options).map_err(|err| format!("{err:#}"))
+pub fn start_watch(app: AppHandle, state: State<WatchState>, window_id: u32) -> Result<(), String> {
+    watch::start(&app, &state, window_id).map_err(|err| format!("{err:#}"))
 }
 
 #[tauri::command]

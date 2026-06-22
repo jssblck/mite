@@ -3,16 +3,23 @@ import { api, type WindowSummary } from "../lib/api";
 
 interface WindowCardProps {
   info: WindowSummary;
-  selected: boolean;
+  launching: boolean;
+  disabled: boolean;
   onSelect: () => void;
 }
 
 /**
  * A picker card showing a live thumbnail of one window, refreshed a couple of
- * times per second. The initial capture is staggered so opening the grid does
- * not capture every window in the same frame.
+ * times per second. Clicking it starts watching that window immediately. The
+ * initial capture is staggered so opening the grid does not capture every window
+ * in the same frame.
  */
-export function WindowCard({ info, selected, onSelect }: WindowCardProps) {
+export function WindowCard({
+  info,
+  launching,
+  disabled,
+  onSelect,
+}: WindowCardProps) {
   const [thumb, setThumb] = useState<string | null>(null);
   const alive = useRef(true);
 
@@ -46,14 +53,22 @@ export function WindowCard({ info, selected, onSelect }: WindowCardProps) {
     <button
       type="button"
       className="window-card"
-      aria-selected={selected}
       onClick={onSelect}
+      disabled={disabled}
     >
       <div className="thumb">
         {thumb ? (
           <img src={thumb} alt="" draggable={false} />
         ) : (
           <span className="thumb-fallback">capturing...</span>
+        )}
+        <div className="thumb-hover">
+          <span className="thumb-cta">Watch</span>
+        </div>
+        {launching && (
+          <div className="thumb-launching">
+            <span className="inline-spinner" /> Starting...
+          </div>
         )}
       </div>
       <div className="window-meta">

@@ -11,16 +11,17 @@ type Phase =
   | "uptodate"
   | "error";
 
-interface AppUpdateCardProps {
+interface AppUpdateRowProps {
   appVersion: string;
 }
 
 /**
- * Self-update control for the desktop app. Checks the release feed, and when a
- * newer signed build exists, downloads and verifies it, then offers a relaunch.
- * This is separate from the "Update engine" control, which updates the mite CLI.
+ * Self-update control for the desktop app, rendered as a settings row. Checks
+ * the release feed, and when a newer signed build exists, downloads and verifies
+ * it, then offers a relaunch. This is separate from the "Update" control in the
+ * Engine row, which updates the mite CLI.
  */
-export function AppUpdateCard({ appVersion }: AppUpdateCardProps) {
+export function AppUpdateRow({ appVersion }: AppUpdateRowProps) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [update, setUpdate] = useState<AppUpdate | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -86,49 +87,52 @@ export function AppUpdateCard({ appVersion }: AppUpdateCardProps) {
 
   const summary =
     phase === "available" && update
-      ? `Version ${update.version} is available. You have ${appVersion}.`
+      ? `Version ${update.version} is available (you have ${appVersion}).`
       : phase === "uptodate"
-        ? `You are on the latest version (${appVersion}).`
+        ? `You're on the latest version (${appVersion}).`
         : phase === "downloading"
           ? "Downloading and verifying the update..."
           : phase === "ready"
             ? "Update installed. Restart Mite to finish."
-            : `Current version: ${appVersion}. The app updates itself from signed releases.`;
+            : appVersion;
 
   return (
-    <div className="card">
-      <div className="card-title">App updates</div>
-      <p className="card-sub">{summary}</p>
+    <>
+      <div className="setting-row">
+        <div className="setting-main">
+          <div className="setting-label">App version</div>
+          <div className="setting-detail">{summary}</div>
+        </div>
+        <div className="setting-actions">
+          {phase === "ready" ? (
+            <button className="btn btn-primary btn-sm" onClick={restart}>
+              Restart now
+            </button>
+          ) : phase === "available" ? (
+            <button className="btn btn-primary btn-sm" onClick={install}>
+              Download and install
+            </button>
+          ) : (
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={check}
+              disabled={phase === "checking" || phase === "downloading"}
+            >
+              {phase === "checking" ? "Checking..." : "Check for updates"}
+            </button>
+          )}
+        </div>
+      </div>
 
       {phase === "available" && update?.body && (
-        <div className="code-path">{update.body}</div>
+        <div className="code-path setting-note">{update.body}</div>
       )}
-
       {phase === "downloading" && (
-        <ProgressBar received={received} total={total} label="App update" />
+        <div className="setting-note">
+          <ProgressBar received={received} total={total} label="App update" />
+        </div>
       )}
-
-      {error && <div className="error-text">{error}</div>}
-
-      <div className="btn-row">
-        {phase === "ready" ? (
-          <button className="btn btn-primary btn-sm" onClick={restart}>
-            Restart now
-          </button>
-        ) : phase === "available" ? (
-          <button className="btn btn-primary btn-sm" onClick={install}>
-            Download and install
-          </button>
-        ) : (
-          <button
-            className="btn btn-ghost btn-sm"
-            onClick={check}
-            disabled={phase === "checking" || phase === "downloading"}
-          >
-            {phase === "checking" ? "Checking..." : "Check for updates"}
-          </button>
-        )}
-      </div>
-    </div>
+      {error && <div className="error-text setting-note">{error}</div>}
+    </>
   );
 }

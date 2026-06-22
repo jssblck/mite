@@ -28,6 +28,28 @@ body,
   flex-direction: column;
 }
 
+/* Native-app feel: the standard arrow cursor everywhere (never the web text
+   I-beam or link hand), and no rubber-band text selection, so the window does
+   not behave like a web page. The #root-scoped universal selector overrides the
+   shared global.css button cursors without editing that site-shared file. Code
+   blocks and form fields opt back into text selection below. */
+#root,
+#root * {
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+#root .cmd-code,
+#root .cmd-code code,
+#root .code-path,
+#root .log-view,
+#root input,
+#root textarea {
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 /* ----------------------------------------------------------------------------
    App shell
 ---------------------------------------------------------------------------- */
@@ -65,6 +87,10 @@ body,
   color: var(--color-ink);
   font-size: 1.35rem;
 }
+/* The brand word set as みて in the Japanese face, mirroring the site wordmark. */
+.brand-name {
+  font-family: var(--font-jp);
+}
 
 .app-nav {
   display: flex;
@@ -97,6 +123,30 @@ body,
 
 .header-spacer {
   flex: 1;
+}
+
+/* Icon-only header control (Settings gear), sitting right of the version. */
+.icon-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  display: inline-grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius);
+  transition:
+    color 0.16s var(--ease-out),
+    background-color 0.16s var(--ease-out);
+}
+.icon-btn:hover {
+  color: var(--color-ink);
+  background: var(--color-surface);
+}
+.icon-btn.active {
+  color: var(--color-ink);
+  background: var(--color-surface-2);
 }
 .header-meta {
   display: inline-flex;
@@ -157,6 +207,45 @@ body,
 .page-head p {
   color: var(--color-muted);
   max-width: 52ch;
+}
+
+/* ----------------------------------------------------------------------------
+   Settings list: compact hairline-separated rows (native, no whole-page scroll)
+---------------------------------------------------------------------------- */
+
+.settings-list {
+  padding-block: 0.4rem;
+}
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.85rem 0;
+  border-top: 1px solid var(--color-line);
+}
+.setting-row:first-child {
+  border-top: 0;
+}
+.setting-main {
+  flex: 1;
+  min-width: 0;
+}
+.setting-label {
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.setting-detail {
+  font-size: 0.85rem;
+  color: var(--color-muted);
+  margin-top: 0.1rem;
+}
+.setting-actions {
+  flex: none;
+  display: flex;
+  gap: 0.5rem;
+}
+.setting-note {
+  margin: 0 0 0.85rem;
 }
 
 /* ----------------------------------------------------------------------------
@@ -285,6 +374,10 @@ body,
 .progress-bar {
   height: 100%;
   background: linear-gradient(90deg, var(--color-accent-2), var(--color-accent));
+  /* The fill animates width on purpose. This bar updates a few times a second
+     during downloads, so the layout cost is invisible, and a transform: scaleX
+     would squash the gradient instead of revealing it. The design hook flags
+     this as layout-transition: a known, accepted nag, not a defect. */
   transition: width 0.2s var(--ease-out);
 }
 .progress-bar.indeterminate {
@@ -332,6 +425,11 @@ body,
   color: var(--color-muted);
   max-width: 44ch;
   margin-inline: auto;
+}
+/* Lede that may run the full content width, so it wraps to fewer lines and
+   pushes the rest of the screen down less. */
+.wizard-hero p.wide {
+  max-width: none;
 }
 
 .step {
@@ -385,18 +483,13 @@ body,
    Window picker (Discord-style grid of live thumbnails)
 ---------------------------------------------------------------------------- */
 
-.picker-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin-bottom: 1.1rem;
-}
 .window-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
   gap: 0.9rem;
 }
 .window-card {
+  position: relative;
   text-align: left;
   appearance: none;
   font: inherit;
@@ -412,13 +505,13 @@ body,
     transform 0.16s var(--ease-out),
     box-shadow 0.16s var(--ease-out);
 }
-.window-card:hover {
-  border-color: var(--color-line-2);
-  transform: translateY(-2px);
-}
-.window-card[aria-selected="true"] {
+.window-card:hover:not(:disabled) {
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 1px var(--color-accent);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px -12px oklch(0 0 0 / 0.7);
+}
+.window-card:disabled {
+  cursor: default;
 }
 .thumb {
   position: relative;
@@ -448,26 +541,38 @@ body,
   text-transform: uppercase;
   color: var(--color-faint);
 }
-/* The reticle corner brackets on the selected card, echoing the brand mark. */
-.window-card[aria-selected="true"] .thumb::before,
-.window-card[aria-selected="true"] .thumb::after {
-  content: "";
+/* Hover affordance: the whole card is a "start watching this window" button. */
+.thumb-hover {
   position: absolute;
-  width: 14px;
-  height: 14px;
-  pointer-events: none;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: oklch(0.15 0.02 256 / 0.55);
+  opacity: 0;
+  transition: opacity 0.16s var(--ease-out);
 }
-.window-card[aria-selected="true"] .thumb::before {
-  top: 6px;
-  left: 6px;
-  border-top: 2px solid var(--color-accent);
-  border-left: 2px solid var(--color-accent);
+.window-card:hover:not(:disabled) .thumb-hover {
+  opacity: 1;
 }
-.window-card[aria-selected="true"] .thumb::after {
-  right: 6px;
-  bottom: 6px;
-  border-right: 2px solid var(--color-accent);
-  border-bottom: 2px solid var(--color-accent);
+.thumb-cta {
+  font-weight: 600;
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  color: oklch(0.18 0.02 256);
+  background: var(--color-accent);
+  padding: 0.4rem 0.95rem;
+  border-radius: 99px;
+}
+.thumb-launching {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--color-ink);
+  background: oklch(0.15 0.02 256 / 0.78);
 }
 .window-meta {
   padding: 0.6rem 0.7rem 0.7rem;
@@ -488,22 +593,56 @@ body,
 }
 
 /* ----------------------------------------------------------------------------
-   Watch options + run view
+   Settings controls (toggle switch, number input)
 ---------------------------------------------------------------------------- */
 
-.option-row {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.5rem 0;
-  color: var(--color-ink-2);
+/* On/off toggle: a checkbox restyled as a sliding switch. */
+.switch {
+  position: relative;
+  display: inline-flex;
+  cursor: pointer;
 }
-.option-row label {
-  font-size: 0.92rem;
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
 }
-.option-row .hint {
-  font-size: 0.8rem;
-  color: var(--color-faint);
+.switch-track {
+  width: 2.2rem;
+  height: 1.25rem;
+  border-radius: 99px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-line-2);
+  transition:
+    background-color 0.16s var(--ease-out),
+    border-color 0.16s var(--ease-out);
+}
+.switch-thumb {
+  position: absolute;
+  top: 50%;
+  left: 0.2rem;
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 50%;
+  background: var(--color-ink);
+  transform: translate(0, -50%);
+  transition: transform 0.16s var(--ease-out);
+}
+.switch input:checked + .switch-track {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+.switch input:checked + .switch-track .switch-thumb {
+  transform: translate(0.95rem, -50%);
+  background: oklch(0.18 0.02 256);
+}
+.switch input:focus-visible + .switch-track {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.switch input:disabled + .switch-track {
+  opacity: 0.5;
 }
 .number-input {
   width: 4.5rem;
@@ -607,115 +746,227 @@ body,
   font-size: 0.82rem;
 }
 
-.pill.pending {
-  color: var(--color-muted);
-  border-color: var(--color-line-2);
-}
-
-.dll-groups {
-  display: grid;
-  gap: 1rem;
-  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
-  margin-top: 0.5rem;
-}
-.dll-group {
+/* Action bar: the primary (Continue) and Skip actions, above the status. */
+.action-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.55rem 0.55rem 0.55rem 0.9rem;
   border: 1px solid var(--color-line);
-  border-radius: var(--radius);
-  padding: 0.85rem 0.95rem;
+  border-radius: 0.7rem;
   background: var(--color-bg-2);
 }
-.dll-group-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-.dll-group-title {
-  font-weight: 600;
-  color: var(--color-ink);
-}
-.dll-group-hint {
+.action-bar-text {
+  flex: 1;
+  font-size: 0.85rem;
   color: var(--color-muted);
-  font-size: 0.8rem;
-  margin: 0.4rem 0 0.6rem;
 }
-.dll-list {
-  list-style: none;
+.action-bar-buttons {
+  display: flex;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+/* Compact tier status rows (replacing the per-DLL checklist). */
+.tier-rows {
   display: grid;
-  gap: 0.3rem;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
 }
-.dll-item {
+.tier-row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  color: var(--color-faint);
-}
-.dll-item.present {
-  color: var(--color-ink-2);
-}
-.dll-mark {
-  flex: none;
-  width: 1rem;
-  text-align: center;
-  color: var(--color-faint);
-}
-.dll-item.present .dll-mark {
-  color: var(--ok);
-  font-weight: 700;
-}
-
-.route + .route {
-  margin-top: 1.25rem;
-  padding-top: 1.25rem;
-  border-top: 1px solid var(--color-line);
-}
-.route-title {
-  font-weight: 600;
-  color: var(--color-ink);
-  margin-bottom: 0.4rem;
-}
-
-.cmd-block {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.6rem;
-  background: var(--color-bg);
+  gap: 0.75rem;
+  padding: 0.6rem 0.8rem;
   border: 1px solid var(--color-line);
   border-radius: var(--radius);
-  padding: 0.6rem 0.7rem;
+  background: var(--color-bg-2);
 }
-.cmd-block code {
+.tier-row-main {
   flex: 1;
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  color: var(--color-ink-2);
-  word-break: break-all;
-  white-space: pre-wrap;
-}
-
-.link-list {
-  list-style: none;
-  display: grid;
-  gap: 0.55rem;
-}
-.link-list li {
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0.5rem;
 }
-.link-btn {
-  background: none;
-  border: 0;
-  padding: 0;
-  font: inherit;
-  color: var(--color-accent);
-  text-decoration: underline;
-  cursor: pointer;
+.tier-row-title {
+  font-weight: 600;
+  color: var(--color-ink);
 }
-.link-note {
-  color: var(--color-faint);
+.tier-row-hint {
   font-size: 0.8rem;
+  color: var(--color-muted);
+}
+
+/* Install routes: a full-width tab bar with its panel on the page background. */
+.install-routes {
+  margin-top: 1rem;
+}
+.tabs {
+  display: flex;
+  width: 100%;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius);
+  background: var(--color-bg-2);
+}
+.tab {
+  appearance: none;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.45rem 0.85rem;
+  text-align: center;
+  border-radius: calc(var(--radius) - 0.15rem);
+  cursor: pointer;
+  transition:
+    color 0.16s var(--ease-out),
+    background-color 0.16s var(--ease-out);
+}
+.tab:hover {
+  color: var(--color-ink);
+}
+.tab.active {
+  color: var(--color-accent);
+  background: oklch(0.83 0.115 78 / 0.16);
+}
+
+/* Numbered, full-width download steps: install all three, in order. */
+.dl-steps {
+  list-style: none;
+  display: grid;
+  gap: 0.5rem;
+}
+.dl-step {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  appearance: none;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius);
+  background: var(--color-bg-2);
+  color: var(--color-ink);
+  transition:
+    border-color 0.16s var(--ease-out),
+    background-color 0.16s var(--ease-out);
+}
+.dl-step:hover {
+  border-color: color-mix(in oklch, var(--color-accent) 50%, transparent);
+  background: var(--color-surface);
+}
+.dl-step-num {
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  display: grid;
+  place-items: center;
+  border-radius: 99px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--color-accent);
+  background: oklch(0.83 0.115 78 / 0.16);
+  border: 1px solid color-mix(in oklch, var(--color-accent) 40%, transparent);
+}
+.dl-step-label {
+  flex: 1;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.dl-step-icon {
+  flex: none;
+  color: var(--color-faint);
+  font-size: 0.85rem;
+}
+
+.cmd-block {
+  background: var(--color-bg);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.cmd-code {
+  margin: 0;
+  padding: 0.7rem 0.85rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.65;
+  color: var(--color-ink-2);
+  white-space: pre;
+  overflow-x: auto;
+}
+.cmd-code code {
+  font: inherit;
+}
+/* Copy as a full-width footer bar across the bottom of the code panel. */
+.cmd-copy {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--color-line);
+  border-radius: 0;
+}
+
+/* ----------------------------------------------------------------------------
+   Modal
+---------------------------------------------------------------------------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal, 100);
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: oklch(0.1 0.006 256 / 0.6);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+.modal {
+  width: 100%;
+  max-width: 26rem;
+  border: 1px solid var(--color-line-2);
+  border-radius: 0.8rem;
+  background:
+    linear-gradient(160deg, oklch(0.2 0.011 256), oklch(0.168 0.009 256));
+  box-shadow: 0 30px 70px -30px oklch(0 0 0 / 0.85);
+  padding: 1.35rem 1.4rem;
+}
+.modal-wide {
+  max-width: 32rem;
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.4rem;
+}
+.modal-head .modal-title {
+  margin: 0;
+}
+.modal-title {
+  font-size: 1.1rem;
+  margin: 0 0 0.6rem;
+  color: var(--color-ink);
+}
+.modal-body {
+  font-size: 0.9rem;
+  color: var(--color-muted);
+  margin: 0;
+}
+.modal-actions {
+  margin-top: 1.25rem;
 }

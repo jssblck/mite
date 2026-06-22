@@ -42,10 +42,11 @@ that is user-installed (see below). See [docs/releases.md](../docs/releases.md).
 ## NVIDIA runtime setup
 
 Mite's GPU pipeline needs NVIDIA runtime libraries (TensorRT, the CUDA runtime,
-NVRTC, cuBLAS, cuDNN). Because of NVIDIA's license terms, the app does not
-download, host, bundle, or install any NVIDIA binary. Instead it detects what is
-installed, guides the user to install the missing pieces themselves from NVIDIA,
-and records the result so it can launch the CLI with the right options.
+NVRTC, cuBLAS, cuDNN). NVIDIA's license does not let the app download, host,
+bundle, or install any NVIDIA binary, so it cannot install them for the user.
+Instead it detects what is installed, guides the user to install the missing
+pieces themselves from NVIDIA, and records the result so it can launch the CLI
+with the right options.
 
 The flow:
 
@@ -55,19 +56,25 @@ The flow:
    locations, pip wheel layouts, and `MITE_GPU_RUNTIME_EXTRA_DIRS`). With no
    NVIDIA GPU it records the CPU tier and never nags.
 2. If an NVIDIA GPU is present but the runtime is incomplete, the app opens a
-   guided screen that lists exactly which components are missing, explains in
-   plain language that these are NVIDIA's software and Mite cannot install them
-   for the user, and walks through installing from NVIDIA: either the official
-   download pages (`developer.nvidia.com`; cuDNN and TensorRT need a free NVIDIA
-   developer account) or the official PyPI wheels (a copy-paste `pip install
-   --target` command with the exact version pins, installing into the watched
-   `nvidia-runtime\` folder).
-3. "Skip for now" explains the consequence based on what is already present: CPU
-   if nothing NVIDIA is installed (much slower, always works), or CUDA-only if
-   the CUDA tier is present but TensorRT is not (roughly 2x slower than
-   TensorRT). While the screen is open it re-checks the dependencies every couple
-   of seconds, so each component checks off live as the user installs it; the
-   "Continue" button enables once the TensorRT tier is complete.
+   guided screen that shows a compact per-tier status (TensorRT and CUDA, each
+   ready or incomplete), explains in plain language that these are NVIDIA's
+   software and their license does not let Mite install them for the user, and
+   offers two tabbed install routes from NVIDIA: the official download pages
+   (`developer.nvidia.com`; cuDNN and TensorRT need a free NVIDIA developer
+   account) or the official wheels (a copy-paste `pip install --target` command
+   with the exact version pins, installing into the watched `nvidia-runtime\`
+   folder). The pip route installs `tensorrt-cu12-libs` (the runtime DLLs that
+   ORT loads natively) rather than the `tensorrt-cu12` meta-package, and uses
+   `--extra-index-url https://pypi.nvidia.com` because the TensorRT runtime wheel
+   is hosted on NVIDIA's index.
+3. Skipping is offered above the status (GPU acceleration is optional) and opens
+   a confirmation that explains the consequence based on what is already present:
+   CPU if nothing NVIDIA is installed (much slower, always works), or CUDA-only
+   if the CUDA tier is present but TensorRT is not (roughly 2x slower than
+   TensorRT), and notes the setup can be re-run from Settings. While the screen
+   is open it re-checks the dependencies every couple of seconds, so each tier
+   flips to ready live as the user installs it; the "Continue" button enables
+   once the TensorRT tier is complete.
 4. Settings has a "Set up GPU acceleration" / "Re-run GPU setup" action that
    reopens this same detection-and-guidance flow later, for when the user
    installs or changes their NVIDIA runtime after first launch.
