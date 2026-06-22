@@ -28,7 +28,7 @@ const STEPS: StepView[] = [
   { id: "models", title: "Download recognition models", detail: "OCR models and the JMdict dictionary (a few hundred MB)." },
 ];
 
-type Phase = "intro" | "running" | "gpu" | "done";
+type Phase = "intro" | "running";
 
 export function SetupWizard({ status, onDone }: SetupWizardProps) {
   const [phase, setPhase] = useState<Phase>("intro");
@@ -39,9 +39,6 @@ export function SetupWizard({ status, onDone }: SetupWizardProps) {
   });
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
-  const [gpuState, setGpuState] = useState<StepStatus>(
-    status.gpuPackInstalled ? "done" : "pending",
-  );
   const progressRef = useRef<DownloadProgress | null>(null);
 
   useEffect(() => {
@@ -73,7 +70,9 @@ export function SetupWizard({ status, onDone }: SetupWizardProps) {
       await runStep("cli", () => api.installOrUpdateCli());
       await runStep("config", () => api.writeDefaultConfig());
       await runStep("models", () => api.downloadModels());
-      setPhase("gpu");
+      // GPU acceleration is a separate, guided step handled after the core
+      // install completes (the app opens it when an NVIDIA GPU is present).
+      onDone();
     } catch (err) {
       const active = (Object.keys(statuses) as StepId[]).find(
         (id) => statuses[id] === "active",
@@ -81,19 +80,6 @@ export function SetupWizard({ status, onDone }: SetupWizardProps) {
       if (active) setStep(active, "error");
       setError(String(err));
       setPhase("running");
-    }
-  }
-
-  async function installGpu() {
-    setError(null);
-    setGpuState("active");
-    setProgress(null);
-    try {
-      await api.downloadGpuPack();
-      setGpuState("done");
-    } catch (err) {
-      setGpuState("error");
-      setError(String(err));
     }
   }
 
@@ -164,43 +150,6 @@ export function SetupWizard({ status, onDone }: SetupWizardProps) {
               )}
             </div>
           </div>
-
-          {phase === "gpu" && (
-            <div className="card">
-              <div className="card-title">
-                <MiteMark size="1.1rem" /> Optional: GPU acceleration
-              </div>
-              <p className="card-sub">
-                If you have an NVIDIA GPU, the acceleration pack makes recognition
-                dramatically faster. It is a large download (several GB) and can
-                be added later from Settings. Mite runs without it on the CPU.
-              </p>
-              {gpuState === "active" && activeProgressTask && (
-                <ProgressBar
-                  received={activeProgressTask.received}
-                  total={activeProgressTask.total}
-                  label="GPU runtime"
-                />
-              )}
-              {error && <div className="error-text">{error}</div>}
-              <div className="btn-row">
-                <button
-                  className="btn btn-primary"
-                  onClick={installGpu}
-                  disabled={gpuState === "active" || gpuState === "done"}
-                >
-                  {gpuState === "done"
-                    ? "Installed"
-                    : gpuState === "active"
-                      ? "Downloading..."
-                      : "Install GPU pack"}
-                </button>
-                <button className="btn btn-ghost" onClick={onDone}>
-                  {gpuState === "done" ? "Finish" : "Skip for now"}
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       </main>
     </div>

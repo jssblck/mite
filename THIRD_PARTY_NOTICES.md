@@ -40,8 +40,9 @@ Its dependencies remain under their own terms:
   Google Fonts and are licensed under the SIL Open Font License; they are not
   committed to this repository.
 
-The app does not bundle the OCR models or GPU runtime; it downloads them at
-runtime from the sources described below and in `model-manifest.json`.
+The app does not bundle the OCR models; it downloads them at runtime from the
+sources described below and in `model-manifest.json`. It does not bundle,
+download, or install the NVIDIA GPU runtime at all (see the section below).
 
 ## OCR Models And Character Dictionary
 
@@ -68,13 +69,36 @@ Optional PP-OCRv5 server models can be downloaded with
 
 ## ONNX Runtime And NVIDIA Runtime Libraries
 
-Mite uses ONNX Runtime through the Rust `ort` crate. ONNX Runtime provider
-libraries and NVIDIA TensorRT/CUDA/cuDNN runtime DLLs are not committed to this
-repository. `scripts\bootstrap-dev.ps1 -GpuRuntimeOnly` stages redistributable
-runtime DLLs into `.gpu-runtime\bin` for local use and build-time copying.
+Mite uses ONNX Runtime through the Rust `ort` crate. The ONNX Runtime provider
+libraries are not committed to this repository.
 
-Review the upstream NVIDIA and ONNX Runtime license terms before redistributing
-any staged binary runtime artifacts.
+Mite neither redistributes nor installs the NVIDIA runtime libraries its GPU
+pipeline needs (TensorRT, the CUDA runtime, NVRTC, cuBLAS, and cuDNN). It does
+not download, host, bundle, or install any NVIDIA binary. Instead, the user
+obtains these components directly from NVIDIA, as the licensee, and Mite detects
+what is installed and launches accordingly. The desktop app provides a guided
+flow that lists the missing components and links to NVIDIA's official downloads
+(and the official PyPI wheels); for local development,
+`scripts\bootstrap-dev.ps1 -GpuRuntimeOnly` fetches the wheels into a developer's
+own working tree (this is the developer installing their own runtime, not
+redistribution by Mite).
+
+The components and their license terms, listed here for reference only:
+
+- NVIDIA TensorRT (`nvinfer_10.dll`, `nvonnxparser_10.dll`,
+  `nvinfer_plugin_10.dll`, and the `nvinfer_builder_resource.dll` builder
+  component): NVIDIA TensorRT Software License Agreement,
+  https://docs.nvidia.com/deeplearning/tensorrt/sla/index.html
+- NVIDIA cuDNN (`cudnn64_9.dll`, `cudnn_ops64_9.dll`, `cudnn_cnn64_9.dll`):
+  NVIDIA cuDNN Software License Agreement,
+  https://docs.nvidia.com/deeplearning/cudnn/sla/index.html
+- NVIDIA CUDA runtime, NVRTC, and cuBLAS (`cudart64_12.dll`, `nvrtc*.dll`,
+  `cublas64_12.dll`, `cublasLt64_12.dll`): NVIDIA CUDA Toolkit End User License
+  Agreement, https://docs.nvidia.com/cuda/eula/index.html (cuBLAS additionally
+  carries upstream BSD notices).
+
+These URLs are provided for awareness; they are not a substitute for reading the
+current upstream terms, which govern the user's installation.
 
 ## JMdict / EDRDG Dictionary Data
 

@@ -40,6 +40,18 @@ export function Dashboard({ status, watching, onRefresh, onWatch }: DashboardPro
 
   const doctor = status.doctor;
   const gpu = doctor?.nvidia;
+  const tier = doctor?.gpu_runtime?.tier ?? "cpu";
+  const accel =
+    tier === "tensor_rt"
+      ? { ok: "ok" as const, detail: "TensorRT (fastest path)" }
+      : tier === "cuda"
+        ? { ok: "warn" as const, detail: "CUDA backend (TensorRT not installed)" }
+        : gpu?.available
+          ? {
+              ok: "warn" as const,
+              detail: "Running on CPU. Set up GPU acceleration from Settings.",
+            }
+          : { ok: "warn" as const, detail: "Running on CPU (no NVIDIA GPU)." };
 
   async function updateCli() {
     setUpdating(true);
@@ -93,15 +105,7 @@ export function Dashboard({ status, watching, onRefresh, onWatch }: DashboardPro
           label="Recognition models"
           detail={status.modelsReady ? "Ready" : "Missing"}
         />
-        <Stat
-          ok={status.gpuPackInstalled ? "ok" : "warn"}
-          label="GPU acceleration"
-          detail={
-            status.gpuPackInstalled
-              ? "Installed"
-              : "Not installed (running on CPU). Add it from Settings."
-          }
-        />
+        <Stat ok={accel.ok} label="GPU acceleration" detail={accel.detail} />
         {gpu && (
           <Stat
             ok={gpu.available ? "ok" : "warn"}

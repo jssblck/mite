@@ -76,8 +76,8 @@ cargo run -- watch --window-id 459082 --capture-backend screenshot
 ```
 
 If a game window appears black or shows the wrong app under the overlay, force
-`--capture-backend wgc` — the desktop-screenshot fallback can return
-compositor-contaminated frames for fullscreen-windowed games.
+`--capture-backend wgc` (the desktop-screenshot fallback can return
+compositor-contaminated frames for fullscreen-windowed games).
 
 ### Latency feedback loop
 
@@ -254,8 +254,23 @@ The first `watch` run builds and caches the FP16 engines under `cache\engines`
 (one-time, multi-minute, GPU-heavy); later runs load them instantly. Confirm with
 the `TensorRT execution provider active` log line. If TensorRT can't register,
 mite falls back to the CUDA execution provider, then CPU, so it always runs.
-`cargo run -- doctor` reports both the `.gpu-runtime\bin` cache status and the
-current executable directory status.
+`cargo run -- doctor` reports the detected runtime tier (TensorRT, CUDA, or CPU),
+which required DLLs are present, and the directories they were found in.
+
+`doctor` searches system-wide for the runtime, not just `.gpu-runtime\bin`: it
+checks `PATH`, the CUDA Toolkit install (`CUDA_PATH` and
+`%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA\v12.x\bin`), common TensorRT
+and cuDNN unzip locations, pip wheel layouts (`nvidia\*\bin` and `tensorrt_libs`
+under a `--target` folder or venv), and any folders in
+`MITE_GPU_RUNTIME_EXTRA_DIRS`. So a runtime you installed yourself from NVIDIA is
+detected without copying anything into the mite-managed cache.
+
+The desktop app under `app\` automates this for non-technical users: it detects
+the runtime tier, guides the user through installing the missing NVIDIA
+components (Mite never installs them for the user), records the tier, and
+launches the CLI with the right `--backend` and `PATH`. Developers building
+locally still use `bootstrap-dev.ps1 -GpuRuntimeOnly` as above. See
+[../app/README.md](../app/README.md).
 
 > Detector sizing: the detector input is sized dynamically. By default,
 > `detector_downscale = 1.0`, `detector_min_long_side = 3840`, and

@@ -127,12 +127,23 @@ is wired end to end with a graceful fallback chain **TensorRT -> CUDA -> CPU**
    and TF32 tensor-core math.
 3. **CPU EP** is the last resort for correctness without a GPU runtime.
 
-TensorRT and CUDA need NVIDIA runtime DLLs next to the binary; ORT ships only
-the provider shims. Run `scripts\bootstrap-dev.ps1 -GpuRuntimeOnly` once to
-fetch pinned `tensorrt-cu12`, CUDA 12, and cuDNN 9 wheels into
-`.gpu-runtime\bin`.
-`build.rs` stages that cache into the active Cargo profile output dir on every
-build, so debug and release binaries get the same provider DLL dependencies.
+TensorRT and CUDA need NVIDIA runtime DLLs reachable by the loader; ORT ships
+only the provider shims. Mite never redistributes or installs those NVIDIA
+binaries. For development, run `scripts\bootstrap-dev.ps1 -GpuRuntimeOnly` once
+to fetch pinned `tensorrt-cu12`, CUDA 12, and cuDNN 9 wheels into
+`.gpu-runtime\bin`; `build.rs` stages that cache into the active Cargo profile
+output dir on every build, so debug and release binaries get the same provider
+DLL dependencies.
+
+For end users, the desktop app under `app\` detects what NVIDIA runtime is
+installed (searching `PATH`, the CUDA Toolkit, TensorRT/cuDNN install locations,
+and pip wheel layouts: see `src/doctor.rs`), decides the available tier
+(TensorRT, CUDA-only, or CPU), guides the user through installing the missing
+NVIDIA components themselves, records the tier, and launches the CLI with the
+matching `--backend` and a `PATH` that includes the directories where the runtime
+was found. The default `nvidia_tensor_rt_then_cuda` chain still auto-degrades, so
+the recorded backend is about clear UX (not implying TensorRT is active when only
+CUDA is present) rather than enabling the fallback.
 
 ## Pipeline latency
 

@@ -10,6 +10,7 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::release::{self, normalize_version};
+use crate::settings::{self, AppSettings};
 use crate::status::{self, AppStatus};
 use crate::watch::{self, WatchOptions, WatchState};
 use crate::{cli, download, home, models, windows};
@@ -140,30 +141,53 @@ pub async fn download_models(app: AppHandle) -> Result<(), String> {
     .await
 }
 
+/// Run the NVIDIA runtime detection and return the full `mite doctor --json`
+/// report (its `nvidia` and `gpu_runtime` fields drive the guided setup). The
+/// guided setup screen polls this on a short interval so each component checks
+/// off live as the user installs it.
 #[tauri::command]
-pub async fn download_gpu_pack(app: AppHandle) -> Result<(), String> {
-    blocking(move || {
-        let rel = release::fetch_latest()?;
-        let gpu = rel
-            .manifest
-            .gpu_runtime
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("this release has no GPU runtime pack"))?;
-        let url = rel
-            .asset_url(&gpu.asset)
-            .ok_or_else(|| anyhow::anyhow!("release is missing {}", gpu.asset))?;
-        let home_dir = home::ensure_home()?;
-        let tmp = home_dir.join(".gpu-runtime").join("pack.zip.tmp");
-        download::download_to_file(&url, &tmp, |received, total| {
-            emit_progress(&app, "gpu", &gpu.asset, received, total, false)
-        })?;
-        download::verify_sha256(&tmp, &gpu.sha256)?;
-        download::extract_zip_all(&tmp, &home::gpu_runtime_dir()?)?;
-        let _ = std::fs::remove_file(&tmp);
-        emit_progress(&app, "gpu", &gpu.asset, 1, 1, true);
-        Ok(())
+pub async fn detect_runtime() -> Result<serde_json::Value, String> {
+    blocking(cli::doctor_json).await
+}
+
+/// Re-run detection and persist the detected tier and DLL directories, marking
+/// the guided setup as seen. Called when the user finishes or skips the guided
+/// flow, and silently on first launch when there is no NVIDIA GPU. The launcher
+/// reads this to choose the backend and DLL search path.
+#[tauri::command]
+pub async fn record_runtime() -> Result<AppSettings, String> {
+    blocking(|| {
+        let report = cli::doctor_json()?;
+        let gpu = report.get("gpu_runtime");
+        let runtime_tier = gpu
+            .and_then(|value| value.get("tier"))
+            .and_then(|value| value.as_str())
+            .map(str::to_string);
+        let dll_dirs = gpu
+            .and_then(|value| value.get("dll_dirs"))
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let saved = AppSettings {
+            runtime_tier,
+            dll_dirs,
+            runtime_setup_seen: true,
+        };
+        settings::save(&saved)?;
+        Ok(saved)
     })
     .await
+}
+
+/// The persisted app settings (recorded runtime tier, DLL dirs, seen flag).
+#[tauri::command]
+pub async fn get_settings() -> Result<AppSettings, String> {
+    blocking(|| Ok(settings::load())).await
 }
 
 #[tauri::command]
@@ -212,13 +236,24 @@ pub fn open_mite_home(app: AppHandle) -> Result<(), String> {
         .map_err(|err| err.to_string())
 }
 
-/// Remove the downloaded data (models, GPU pack, cache, config, logs) while
-/// leaving the installed CLI binary in place. The frontend confirms first.
+/// Open a URL in the user's default browser (the NVIDIA download pages the
+/// guided runtime setup links to).
+#[tauri::command]
+pub fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|err| err.to_string())
+}
+
+/// Remove the downloaded data (models, engine cache, config, logs) while leaving
+/// the installed CLI binary in place. This never touches NVIDIA's runtime: Mite
+/// does not install those bytes, so it does not delete them either. The frontend
+/// confirms first.
 #[tauri::command]
 pub async fn uninstall_data() -> Result<(), String> {
     blocking(|| {
         let home_dir = home::mite_home()?;
-        for entry in ["models", "cache", ".gpu-runtime", "logs"] {
+        for entry in ["models", "cache", "logs"] {
             let _ = std::fs::remove_dir_all(home_dir.join(entry));
         }
         let _ = std::fs::remove_file(home_dir.join("mite.toml"));

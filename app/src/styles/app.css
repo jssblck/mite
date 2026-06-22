@@ -593,3 +593,129 @@ body,
   color: var(--color-muted);
   word-break: break-all;
 }
+
+/* ----------------------------------------------------------------------------
+   Guided NVIDIA runtime setup
+---------------------------------------------------------------------------- */
+
+.wizard-wide {
+  max-width: 48rem;
+}
+
+.card-sub.subtle {
+  color: var(--color-faint);
+  font-size: 0.82rem;
+}
+
+.pill.pending {
+  color: var(--color-muted);
+  border-color: var(--color-line-2);
+}
+
+.dll-groups {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  margin-top: 0.5rem;
+}
+.dll-group {
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius);
+  padding: 0.85rem 0.95rem;
+  background: var(--color-bg-2);
+}
+.dll-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.dll-group-title {
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.dll-group-hint {
+  color: var(--color-muted);
+  font-size: 0.8rem;
+  margin: 0.4rem 0 0.6rem;
+}
+.dll-list {
+  list-style: none;
+  display: grid;
+  gap: 0.3rem;
+}
+.dll-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--color-faint);
+}
+.dll-item.present {
+  color: var(--color-ink-2);
+}
+.dll-mark {
+  flex: none;
+  width: 1rem;
+  text-align: center;
+  color: var(--color-faint);
+}
+.dll-item.present .dll-mark {
+  color: var(--ok);
+  font-weight: 700;
+}
+
+.route + .route {
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--color-line);
+}
+.route-title {
+  font-weight: 600;
+  color: var(--color-ink);
+  margin-bottom: 0.4rem;
+}
+
+.cmd-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  background: var(--color-bg);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.7rem;
+}
+.cmd-block code {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--color-ink-2);
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.link-list {
+  list-style: none;
+  display: grid;
+  gap: 0.55rem;
+}
+.link-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.link-btn {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--color-accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.link-note {
+  color: var(--color-faint);
+  font-size: 0.8rem;
+}

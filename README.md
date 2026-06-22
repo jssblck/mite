@@ -20,11 +20,11 @@ diagnostics, evals, and developer tooling.
 
 Most people should use the Mite desktop app. Download the installer from the
 [releases page](https://github.com/jssblck/mite/releases) and run it: the app
-walks you through a one-time setup (it installs the engine, downloads the
-recognition models, and, on NVIDIA GPUs, an optional acceleration pack), then
-lets you pick a window from a live preview grid and start reading. No terminal
-required, and it keeps the engine up to date for you. See
-[app/README.md](app/README.md) for what the app manages.
+walks you through a one-time setup (it installs the engine and downloads the
+recognition models, and on NVIDIA GPUs it guides you through installing NVIDIA's
+GPU runtime for the fast path), then lets you pick a window from a live preview
+grid and start reading. No terminal required, and it keeps the engine up to date
+for you. See [app/README.md](app/README.md) for what the app manages.
 
 The rest of this document covers building from source, the path for developers
 and contributors.

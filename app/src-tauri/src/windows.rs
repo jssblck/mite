@@ -49,7 +49,7 @@ pub fn list_windows() -> Result<Vec<WindowSummary>> {
             y: window.y().unwrap_or_default(),
         });
     }
-    out.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    out.sort_by_key(|window| window.title.to_lowercase());
     Ok(out)
 }
 

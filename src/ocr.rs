@@ -375,6 +375,7 @@ pub fn build_ocr_engine(
         RuntimeBackend::Fixture => Ok(Box::new(FixtureOcrEngine::default())),
         RuntimeBackend::NvidiaTensorRtThenCuda
         | RuntimeBackend::Cuda
+        | RuntimeBackend::Cpu
         | RuntimeBackend::DirectMl
         | RuntimeBackend::OpenVino => Ok(Box::new(crate::ort_engine::OrtOcrEngine::new(
             models, config,

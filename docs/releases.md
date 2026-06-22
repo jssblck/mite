@@ -28,9 +28,10 @@ truth for the released version. Do not bump it to mark a release; tag instead.
    git push origin v0.1.0
    ```
 
-3. The `Release` workflow builds the CLI, the GPU runtime pack, and (when the
-   desktop app is buildable) the installer, then creates a DRAFT GitHub Release
-   with notes generated from the pull requests merged since the previous tag.
+3. The `Release` workflow builds the CLI and (when the desktop app is buildable)
+   the installer, then creates a DRAFT GitHub Release with notes generated from
+   the pull requests merged since the previous tag. No NVIDIA GPU runtime asset
+   is built or published: that runtime is user-installed (see below).
 4. Review the draft release, edit the generated notes if needed, then publish it
    by hand. A bare `X.Y.Z` tag is published as the latest stable release; any
    other tag shape (for example a pre-release suffix) is marked as a prerelease.
@@ -42,11 +43,6 @@ Each release attaches the following assets:
 - `mite.exe`: the Windows CLI. Built with `MITE_VERSION` pinned to the tag and
   with the GPU runtime staging skipped, so the GPU DLLs do not get stapled to
   the exe.
-- `mite-gpu-runtime-win64.zip`: the pinned NVIDIA runtime DLL pack (TensorRT,
-  CUDA runtime, NVRTC, cuBLAS, cuDNN). The DLLs sit at the archive root. This is
-  the same set that `scripts\bootstrap-dev.ps1 -GpuRuntimeOnly` produces in
-  `.gpu-runtime\bin`. It ships separately from the exe because it is large and
-  versioned independently of the CLI.
 - `model-manifest.json`: the repo's model manifest, copied as-is. It lists the
   OCR models, dictionaries, and frequency data with their download URLs and
   checksums, so the app can fetch and verify model files.
@@ -61,6 +57,12 @@ Each release attaches the following assets:
   without blocking the rest of the release, so an installer may be absent from
   an early release.
 
+The NVIDIA GPU runtime libraries (TensorRT, the CUDA runtime, NVRTC, cuBLAS,
+cuDNN) are deliberately not among these assets. Mite never redistributes NVIDIA
+binaries: the user installs them directly from NVIDIA, and the desktop app
+detects what is present and guides the rest. See
+[app/README.md](../app/README.md) and `THIRD_PARTY_NOTICES.md`.
+
 ## How the desktop app consumes release.json
 
 The Tauri desktop app polls `release.json` to discover updates. Its shape is:
@@ -69,7 +71,6 @@ The Tauri desktop app polls `release.json` to discover updates. Its shape is:
 {
   "version": "v0.1.0",
   "cli": { "asset": "mite.exe", "sha256": "<hex>" },
-  "gpuRuntime": { "asset": "mite-gpu-runtime-win64.zip", "sha256": "<hex>" },
   "modelManifest": { "asset": "model-manifest.json" },
   "installer": { "asset": "<installer filename>", "sha256": "<hex>" }
 }

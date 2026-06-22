@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, onWatchState, type AppStatus } from "./lib/api";
 import { MiteMark } from "./components/MiteMark";
 import { SetupWizard } from "./views/SetupWizard";
+import { RuntimeSetup } from "./views/RuntimeSetup";
 import { Dashboard } from "./views/Dashboard";
 import { WatchView } from "./views/WatchView";
 import { Settings } from "./views/Settings";
@@ -13,6 +14,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<View>("dashboard");
   const [watching, setWatching] = useState(false);
+  const [runtimeSetup, setRuntimeSetup] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -26,6 +28,23 @@ function App() {
     refresh();
     api.isWatching().then(setWatching).catch(() => undefined);
   }, [refresh]);
+
+  // First-run runtime handling. Once the core install is ready, decide whether
+  // the guided NVIDIA setup is needed: open it when an NVIDIA GPU is present but
+  // not yet at the TensorRT tier; on a machine with no NVIDIA GPU, silently
+  // record CPU so launches stay clean and the flow never nags.
+  useEffect(() => {
+    if (!status || status.runtimeSetupSeen) return;
+    const doctor = status.doctor;
+    if (!doctor) return;
+    if (!doctor.nvidia.available) {
+      api.recordRuntime().then(refresh).catch(() => undefined);
+      return;
+    }
+    if ((doctor.gpu_runtime?.tier ?? "cpu") !== "tensor_rt") {
+      setRuntimeSetup(true);
+    }
+  }, [status, refresh]);
 
   useEffect(() => {
     const unlisten = onWatchState((state) => setWatching(state.running));
@@ -57,11 +76,23 @@ function App() {
             cliInstalled: false,
             cliVersion: null,
             modelsReady: false,
-            gpuPackInstalled: false,
+            runtimeSetupSeen: false,
             doctor: null,
           }
         }
         onDone={refresh}
+      />
+    );
+  }
+
+  if (runtimeSetup) {
+    return (
+      <RuntimeSetup
+        status={status}
+        onClose={() => {
+          setRuntimeSetup(false);
+          refresh();
+        }}
       />
     );
   }
@@ -117,7 +148,13 @@ function App() {
         {view === "watch" && (
           <WatchView watching={watching} onWatchingChange={setWatching} />
         )}
-        {view === "settings" && <Settings status={status} onRefresh={refresh} />}
+        {view === "settings" && (
+          <Settings
+            status={status}
+            onRefresh={refresh}
+            onOpenRuntimeSetup={() => setRuntimeSetup(true)}
+          />
+        )}
       </main>
     </div>
   );

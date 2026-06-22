@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 
 use crate::capture::{WindowCapturePreference, WindowSelector, list_capturable_windows};
-use crate::config::AppConfig;
+use crate::config::{AppConfig, RuntimeBackend};
 use crate::doctor::DoctorReport;
 use crate::{artifact, eval, eval_capture, hotkey, interactive, storage_cleanup};
 
@@ -31,6 +31,12 @@ struct Cli {
     /// precision).
     #[arg(long, global = true)]
     int8_recognizer: bool,
+
+    /// Override the runtime backend from the config. The desktop app passes this
+    /// to launch with the tier it detected (for example `cuda` when only the
+    /// CUDA runtime is installed) instead of implying TensorRT is active.
+    #[arg(long, global = true, value_enum)]
+    backend: Option<RuntimeBackend>,
 
     #[command(subcommand)]
     command: Command,
@@ -188,10 +194,11 @@ enum Command {
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     let int8 = cli.int8_override();
+    let backend = cli.backend;
 
     match cli.command {
         Command::InitConfig { force } => cmd_init_config(&cli.config, force),
-        Command::Doctor { json } => cmd_doctor(&cli.config, int8, json),
+        Command::Doctor { json } => cmd_doctor(&cli.config, int8, backend, json),
         Command::ListWindows => cmd_list_windows(),
         Command::Eval {
             image,
@@ -203,6 +210,7 @@ pub fn run() -> Result<()> {
         } => cmd_eval(EvalCommand {
             config_path: &cli.config,
             int8,
+            backend,
             image: &image,
             labels: &labels,
             lexicon: &lexicon,
@@ -222,6 +230,7 @@ pub fn run() -> Result<()> {
         } => cmd_eval_corpus(EvalCorpusCommand {
             config_path: &cli.config,
             int8,
+            backend,
             root: &root,
             lexicon: &lexicon,
             out,
@@ -232,7 +241,7 @@ pub fn run() -> Result<()> {
             allow_failures,
         }),
         Command::CleanImages { dry_run } => cmd_clean_images(dry_run),
-        Command::Watch(args) => cmd_watch(&cli.config, int8, args),
+        Command::Watch(args) => cmd_watch(&cli.config, int8, backend, args),
     }
 }
 
@@ -248,8 +257,13 @@ fn cmd_init_config(config_path: &Path, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_doctor(config_path: &Path, int8: Int8Override, json: bool) -> Result<()> {
-    let report = DoctorReport::inspect(&load_or_default(config_path, int8)?);
+fn cmd_doctor(
+    config_path: &Path,
+    int8: Int8Override,
+    backend: Option<RuntimeBackend>,
+    json: bool,
+) -> Result<()> {
+    let report = DoctorReport::inspect(&load_or_default(config_path, int8, backend)?);
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -276,6 +290,7 @@ fn cmd_list_windows() -> Result<()> {
 struct EvalCommand<'a> {
     config_path: &'a Path,
     int8: Int8Override,
+    backend: Option<RuntimeBackend>,
     image: &'a Path,
     labels: &'a Path,
     lexicon: &'a Path,
@@ -288,7 +303,7 @@ fn cmd_eval(command: EvalCommand<'_>) -> Result<()> {
     if !(0.0..=1.0).contains(&command.min_iou) {
         bail!("--min-iou must be in [0, 1], got {}", command.min_iou);
     }
-    let config = load_or_default(command.config_path, command.int8)?;
+    let config = load_or_default(command.config_path, command.int8, command.backend)?;
     let report = eval::run_eval(
         &config,
         command.image,
@@ -315,6 +330,7 @@ fn cmd_eval(command: EvalCommand<'_>) -> Result<()> {
 struct EvalCorpusCommand<'a> {
     config_path: &'a Path,
     int8: Int8Override,
+    backend: Option<RuntimeBackend>,
     root: &'a Path,
     lexicon: &'a Path,
     out: Option<PathBuf>,
@@ -335,7 +351,7 @@ fn cmd_eval_corpus(command: EvalCorpusCommand<'_>) -> Result<()> {
             command.min_aggregate
         );
     }
-    let config = load_or_default(command.config_path, command.int8)?;
+    let config = load_or_default(command.config_path, command.int8, command.backend)?;
     let report = eval::run_eval_corpus(
         &config,
         command.root,
@@ -376,8 +392,13 @@ fn cmd_clean_images(dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_watch(config_path: &Path, int8: Int8Override, args: WatchArgs) -> Result<()> {
-    let config = load_or_default(config_path, int8)?;
+fn cmd_watch(
+    config_path: &Path,
+    int8: Int8Override,
+    backend: Option<RuntimeBackend>,
+    args: WatchArgs,
+) -> Result<()> {
+    let config = load_or_default(config_path, int8, backend)?;
     let backend = args.window.capture_backend;
     let eval_hotkey = match args.enable_eval_hotkey {
         Some(combo) => Some(interactive::EvalHotkeyRequest {
@@ -432,7 +453,11 @@ fn resolve_window_id(selector: &WindowSelector) -> Result<u32> {
     Ok(first.id)
 }
 
-fn load_or_default(path: &Path, int8: Int8Override) -> Result<AppConfig> {
+fn load_or_default(
+    path: &Path,
+    int8: Int8Override,
+    backend: Option<RuntimeBackend>,
+) -> Result<AppConfig> {
     let mut config = if path.exists() {
         AppConfig::load(path)?
     } else {
@@ -443,6 +468,9 @@ fn load_or_default(path: &Path, int8: Int8Override) -> Result<AppConfig> {
     }
     if int8.recognizer {
         config.runtime.int8_recognizer = true;
+    }
+    if let Some(backend) = backend {
+        config.runtime.backend = backend;
     }
     Ok(config)
 }
@@ -487,6 +515,30 @@ mod tests {
         assert!(args.hud);
         assert_eq!(args.metrics_interval_secs, 5);
         assert!(args.no_smoothing);
+    }
+
+    #[test]
+    fn parses_backend_override_and_applies_it() {
+        let cli = Cli::try_parse_from(["mite", "--backend", "cuda", "watch"])
+            .expect("backend override parses");
+        assert_eq!(cli.backend, Some(RuntimeBackend::Cuda));
+
+        // The override replaces the config default in load_or_default.
+        let config = load_or_default(
+            Path::new("does-not-exist.toml"),
+            Int8Override {
+                detector: false,
+                recognizer: false,
+            },
+            cli.backend,
+        )
+        .expect("default config loads");
+        assert_eq!(config.runtime.backend, RuntimeBackend::Cuda);
+
+        // The app's CPU tier maps to an explicit CPU backend.
+        let cli =
+            Cli::try_parse_from(["mite", "--backend", "cpu", "watch"]).expect("cpu backend parses");
+        assert_eq!(cli.backend, Some(RuntimeBackend::Cpu));
     }
 
     #[test]
