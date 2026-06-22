@@ -1,0 +1,595 @@
+/*
+  Mite desktop app: component styles layered on the shared design tokens
+  (site/src/styles/tokens.css + global.css). The app borrows the site's
+  "invisible precision instrument" language: near-black surfaces, hairline
+  borders, a single amber accent, mono labels, and the reticle motif. Color
+  beyond the chrome is reserved for meaning (status, part-of-speech).
+*/
+
+:root {
+  /* Status hues, drawn from the colorblind-safe POS palette plus one red that
+     sits in the same lightness band so warnings read without shouting. */
+  --ok: var(--pos-verb);
+  --ok-soft: var(--pos-verb-soft);
+  --warn: var(--pos-adjective);
+  --warn-soft: var(--pos-adjective-soft);
+  --bad: oklch(0.7 0.17 25);
+  --bad-soft: oklch(0.7 0.17 25 / 0.16);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ----------------------------------------------------------------------------
+   App shell
+---------------------------------------------------------------------------- */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.85rem clamp(1rem, 4vw, 2rem);
+  border-bottom: 1px solid var(--color-line);
+  background: oklch(0.16 0.008 256 / 0.85);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--color-ink);
+  font-size: 1.05rem;
+}
+.brand .mark {
+  color: var(--color-ink);
+  font-size: 1.35rem;
+}
+
+.app-nav {
+  display: flex;
+  gap: 0.25rem;
+  margin-left: 0.5rem;
+}
+.nav-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition:
+    color 0.16s var(--ease-out),
+    background-color 0.16s var(--ease-out);
+}
+.nav-btn:hover {
+  color: var(--color-ink);
+  background: var(--color-surface);
+}
+.nav-btn[aria-current="true"] {
+  color: var(--color-ink);
+  background: var(--color-surface-2);
+}
+
+.header-spacer {
+  flex: 1;
+}
+.header-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.85rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--color-faint);
+}
+
+.app-main {
+  flex: 1;
+  width: 100%;
+  max-width: 60rem;
+  margin-inline: auto;
+  padding: clamp(1.25rem, 4vw, 2.25rem) clamp(1rem, 4vw, 2rem) 3rem;
+}
+
+/* ----------------------------------------------------------------------------
+   Cards and panels
+---------------------------------------------------------------------------- */
+
+.card {
+  border: 1px solid var(--color-line);
+  border-radius: 0.8rem;
+  background:
+    linear-gradient(160deg, oklch(0.2 0.011 256), oklch(0.168 0.009 256));
+  box-shadow:
+    0 1px 0 0 oklch(0.99 0 0 / 0.04) inset,
+    0 24px 50px -34px oklch(0 0 0 / 0.8);
+  padding: 1.25rem 1.35rem;
+}
+.card + .card {
+  margin-top: 1rem;
+}
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 0.9rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-ink);
+}
+.card-sub {
+  color: var(--color-muted);
+  font-size: 0.9rem;
+  margin: -0.4rem 0 1rem;
+}
+
+.page-head {
+  margin-bottom: 1.5rem;
+}
+.page-head h1 {
+  font-size: clamp(1.5rem, 4vw, 2rem);
+  margin-bottom: 0.4rem;
+}
+.page-head p {
+  color: var(--color-muted);
+  max-width: 52ch;
+}
+
+/* ----------------------------------------------------------------------------
+   Status rows + pills
+---------------------------------------------------------------------------- */
+
+.stat {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--color-line);
+}
+.stat:first-of-type {
+  border-top: 0;
+}
+.stat-icon {
+  flex: none;
+  width: 1.4rem;
+  height: 1.4rem;
+  display: grid;
+  place-items: center;
+  border-radius: 99px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.stat-icon.ok {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+.stat-icon.warn {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+.stat-icon.bad {
+  color: var(--bad);
+  background: var(--bad-soft);
+}
+.stat-body {
+  flex: 1;
+  min-width: 0;
+}
+.stat-label {
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.stat-detail {
+  font-size: 0.85rem;
+  color: var(--color-muted);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.55rem;
+  border-radius: 99px;
+  border: 1px solid var(--color-line-2);
+  color: var(--color-muted);
+}
+.pill.ok {
+  color: var(--ok);
+  border-color: color-mix(in oklch, var(--ok) 45%, transparent);
+  background: var(--ok-soft);
+}
+.pill.warn {
+  color: var(--warn);
+  border-color: color-mix(in oklch, var(--warn) 45%, transparent);
+  background: var(--warn-soft);
+}
+.pill.live {
+  color: var(--color-accent);
+  border-color: color-mix(in oklch, var(--color-accent) 45%, transparent);
+  background: oklch(0.83 0.115 78 / 0.14);
+}
+.pill .dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 99px;
+  background: currentColor;
+}
+
+/* ----------------------------------------------------------------------------
+   Buttons (small variant + row); .btn family comes from the shared global.css
+---------------------------------------------------------------------------- */
+
+.btn-sm {
+  height: 2.25rem;
+  padding: 0 0.9rem;
+  font-size: 0.85rem;
+}
+.btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 1.1rem;
+}
+.btn-danger {
+  background: transparent;
+  color: var(--bad);
+  border-color: color-mix(in oklch, var(--bad) 45%, transparent);
+}
+.btn-danger:hover {
+  background: var(--bad-soft);
+}
+
+/* ----------------------------------------------------------------------------
+   Progress
+---------------------------------------------------------------------------- */
+
+.progress {
+  height: 0.5rem;
+  border-radius: 99px;
+  background: var(--color-surface-2);
+  overflow: hidden;
+  border: 1px solid var(--color-line);
+}
+.progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-accent-2), var(--color-accent));
+  transition: width 0.2s var(--ease-out);
+}
+.progress-bar.indeterminate {
+  width: 35% !important;
+  animation: progress-slide 1.1s var(--ease-out) infinite;
+}
+@keyframes progress-slide {
+  0% {
+    margin-left: -35%;
+  }
+  100% {
+    margin-left: 100%;
+  }
+}
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--color-faint);
+  margin-top: 0.4rem;
+}
+
+/* ----------------------------------------------------------------------------
+   Setup wizard
+---------------------------------------------------------------------------- */
+
+.wizard {
+  max-width: 40rem;
+  margin-inline: auto;
+}
+.wizard-hero {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+.wizard-hero .mark {
+  font-size: 2.75rem;
+  color: var(--color-ink);
+}
+.wizard-hero h1 {
+  font-size: clamp(1.6rem, 5vw, 2.3rem);
+  margin: 0.75rem 0 0.5rem;
+}
+.wizard-hero p {
+  color: var(--color-muted);
+  max-width: 44ch;
+  margin-inline: auto;
+}
+
+.step {
+  display: flex;
+  gap: 0.9rem;
+  padding: 0.95rem 0;
+  border-top: 1px solid var(--color-line);
+}
+.step:first-child {
+  border-top: 0;
+}
+.step-index {
+  flex: none;
+  width: 1.7rem;
+  height: 1.7rem;
+  display: grid;
+  place-items: center;
+  border-radius: 99px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  border: 1px solid var(--color-line-2);
+  color: var(--color-muted);
+}
+.step.active .step-index {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+.step.done .step-index {
+  border-color: color-mix(in oklch, var(--ok) 50%, transparent);
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+.step-body {
+  flex: 1;
+  min-width: 0;
+}
+.step-title {
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.step-detail {
+  font-size: 0.87rem;
+  color: var(--color-muted);
+  margin-top: 0.15rem;
+}
+.step-detail.error {
+  color: var(--bad);
+}
+
+/* ----------------------------------------------------------------------------
+   Window picker (Discord-style grid of live thumbnails)
+---------------------------------------------------------------------------- */
+
+.picker-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.1rem;
+}
+.window-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.9rem;
+}
+.window-card {
+  text-align: left;
+  appearance: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-line);
+  border-radius: 0.7rem;
+  background: var(--color-surface);
+  transition:
+    border-color 0.16s var(--ease-out),
+    transform 0.16s var(--ease-out),
+    box-shadow 0.16s var(--ease-out);
+}
+.window-card:hover {
+  border-color: var(--color-line-2);
+  transform: translateY(-2px);
+}
+.window-card[aria-selected="true"] {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+.thumb {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      oklch(0.2 0.01 256),
+      oklch(0.2 0.01 256) 10px,
+      oklch(0.185 0.01 256) 10px,
+      oklch(0.185 0.01 256) 20px
+    );
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.thumb .thumb-fallback {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+}
+/* The reticle corner brackets on the selected card, echoing the brand mark. */
+.window-card[aria-selected="true"] .thumb::before,
+.window-card[aria-selected="true"] .thumb::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+}
+.window-card[aria-selected="true"] .thumb::before {
+  top: 6px;
+  left: 6px;
+  border-top: 2px solid var(--color-accent);
+  border-left: 2px solid var(--color-accent);
+}
+.window-card[aria-selected="true"] .thumb::after {
+  right: 6px;
+  bottom: 6px;
+  border-right: 2px solid var(--color-accent);
+  border-bottom: 2px solid var(--color-accent);
+}
+.window-meta {
+  padding: 0.6rem 0.7rem 0.7rem;
+}
+.window-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--color-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.window-detail {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--color-faint);
+  margin-top: 0.2rem;
+}
+
+/* ----------------------------------------------------------------------------
+   Watch options + run view
+---------------------------------------------------------------------------- */
+
+.option-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0;
+  color: var(--color-ink-2);
+}
+.option-row label {
+  font-size: 0.92rem;
+}
+.option-row .hint {
+  font-size: 0.8rem;
+  color: var(--color-faint);
+}
+.number-input {
+  width: 4.5rem;
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-line-2);
+  border-radius: var(--radius);
+  color: var(--color-ink);
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.3rem 0.5rem;
+}
+
+.log-view {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  background: var(--color-bg);
+  border: 1px solid var(--color-line);
+  border-radius: 0.6rem;
+  padding: 0.7rem 0.85rem;
+  height: 18rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.log-line.stderr {
+  color: var(--warn);
+}
+.log-line.stdout {
+  color: var(--color-ink-2);
+}
+.log-empty {
+  color: var(--color-faint);
+}
+
+/* ----------------------------------------------------------------------------
+   Banners + misc
+---------------------------------------------------------------------------- */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.8rem 1rem;
+  border-radius: 0.7rem;
+  border: 1px solid color-mix(in oklch, var(--color-accent) 40%, transparent);
+  background: oklch(0.83 0.115 78 / 0.1);
+  margin-bottom: 1.25rem;
+}
+.banner .banner-text {
+  flex: 1;
+  font-size: 0.9rem;
+  color: var(--color-ink-2);
+}
+
+.error-text {
+  color: var(--bad);
+  font-size: 0.88rem;
+  margin-top: 0.6rem;
+}
+
+.empty-state {
+  text-align: center;
+  color: var(--color-muted);
+  padding: 3rem 1rem;
+}
+
+.inline-spinner {
+  display: inline-block;
+  width: 0.9rem;
+  height: 0.9rem;
+  border: 2px solid var(--color-line-2);
+  border-top-color: var(--color-accent);
+  border-radius: 99px;
+  animation: spin 0.7s linear infinite;
+  vertical-align: -2px;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.code-path {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  word-break: break-all;
+}

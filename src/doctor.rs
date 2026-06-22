@@ -325,6 +325,20 @@ mod tests {
     }
 
     #[test]
+    fn doctor_report_serializes_to_json() {
+        // The desktop app's readiness panel parses `mite doctor --json`, so the
+        // report must serialize to a stable object with the keys it reads.
+        let report = DoctorReport::inspect(&AppConfig::default());
+        let value: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&report).unwrap()).unwrap();
+        assert!(value.get("os").is_some());
+        assert!(value.get("nvidia").is_some());
+        assert!(value.get("models").is_some());
+        assert!(value.get("runtime_backend").is_some());
+        assert!(value.get("warnings").unwrap().is_array());
+    }
+
+    #[test]
     fn missing_dlls_reports_only_absent_files() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("cudart64_12.dll"), b"").unwrap();

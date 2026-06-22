@@ -1,0 +1,31 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Updater signing keys must never be committed. The real private key lives
+# outside the repo (e.g. ~/.tauri/mite-updater.key) and is loaded into CI as the
+# TAURI_SIGNING_PRIVATE_KEY secret; this guards against a stray local copy.
+*.key
+*.key.pub
+.tauri/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

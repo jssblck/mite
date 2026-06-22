@@ -23,6 +23,26 @@ To refresh dependency license metadata locally:
 cargo metadata --format-version 1 --locked
 ```
 
+## Desktop App Dependencies
+
+The desktop app under `app\` is built with Tauri v2 and bundles a web frontend.
+Its dependencies remain under their own terms:
+
+- Tauri and its plugins (Tauri Programme within The Commons Conservancy):
+  dual-licensed Apache-2.0 or MIT.
+- Microsoft Edge WebView2 runtime: the app renders through the system WebView2
+  control, which is governed by Microsoft's WebView2 distribution terms and is
+  preinstalled on current Windows. It is not redistributed in this repository.
+- Frontend libraries (React, Vite, and related tooling): predominantly MIT.
+  JavaScript dependency license metadata is recorded in `app\bun.lock` and the
+  installed packages.
+- Fonts (Hanken Grotesk, Geist Mono, Noto Sans JP) are loaded at runtime from
+  Google Fonts and are licensed under the SIL Open Font License; they are not
+  committed to this repository.
+
+The app does not bundle the OCR models or GPU runtime; it downloads them at
+runtime from the sources described below and in `model-manifest.json`.
+
 ## OCR Models And Character Dictionary
 
 Mite's default OCR assets are downloaded by
