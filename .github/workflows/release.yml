@@ -172,6 +172,15 @@ jobs:
     env:
       # The app reads its version through the same MITE_VERSION override.
       MITE_VERSION: ${{ needs.prepare.outputs.tag }}
+      # Updater signing. When these secrets are set, `tauri build` signs the
+      # installer with the minisign key matching the public key in
+      # tauri.conf.json and emits the .sig the updater verifies. When unset (forks
+      # or a not-yet-configured repo), the build falls back to an unsigned
+      # installer with no updater artifacts. Generate the key with
+      # `bun run tauri signer generate` and store the private key here. See
+      # app/README.md.
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -186,6 +195,33 @@ jobs:
           } else {
             "present=false" >> $env:GITHUB_OUTPUT
             Write-Host "::warning::app\src-tauri not found; skipping desktop app installer build."
+          }
+
+      - name: Stamp app version
+        if: steps.app.outputs.present == 'true'
+        shell: pwsh
+        run: |
+          # Tauri reads the installer version and the updater's "current version"
+          # baseline from tauri.conf.json, so rewrite the 0.0.0 placeholder to the
+          # release version. Without this, every installed build reports 0.0.0 and
+          # the updater would treat every release as an upgrade.
+          $conf = "app\src-tauri\tauri.conf.json"
+          $json = Get-Content -Raw -LiteralPath $conf | ConvertFrom-Json
+          $json.version = "${{ needs.prepare.outputs.version }}"
+          $json | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $conf -Encoding UTF8
+          Write-Host "Stamped app version: $($json.version)"
+
+      - name: Determine updater signing
+        id: signing
+        if: steps.app.outputs.present == 'true'
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            "enabled=false" >> $env:GITHUB_OUTPUT
+            Write-Host "::warning::TAURI_SIGNING_PRIVATE_KEY is not set. Building an UNSIGNED installer with no self-update artifacts (no .sig, no latest.json). Add the secret to enable app self-update."
+          } else {
+            "enabled=true" >> $env:GITHUB_OUTPUT
+            Write-Host "Updater signing key present; the installer will be signed for self-update."
           }
 
       - name: Install stable Rust
@@ -214,10 +250,19 @@ jobs:
       - name: Build Tauri app
         if: steps.app.outputs.present == 'true'
         working-directory: app
+        shell: pwsh
         # The Tauri CLI is a dev dependency, so the package.json tauri script
-        # drives the bundle. Tauri reads its version from tauri.conf.json; the
-        # MITE_VERSION env above is passed through for the app build.rs/config.
-        run: bun run tauri build
+        # drives the bundle. Tauri reads its version from tauri.conf.json (stamped
+        # above). With a signing key present it emits a signed installer plus the
+        # .sig the updater needs; without one we override createUpdaterArtifacts
+        # to false so the build still produces a plain installer instead of
+        # failing on the missing key.
+        run: |
+          if ("${{ steps.signing.outputs.enabled }}" -eq "true") {
+            bun run tauri build
+          } else {
+            bun run tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          }
 
       - name: Collect installers
         if: steps.app.outputs.present == 'true'
@@ -226,16 +271,18 @@ jobs:
           $bundle = "app\src-tauri\target\release\bundle"
           New-Item -ItemType Directory -Force -Path "installers" | Out-Null
           # Collect whatever installer artifacts exist; do not hard-fail if only
-          # one of nsis/msi is produced.
+          # one of nsis/msi is produced. The .sig files (present only when signing
+          # is enabled) ride along so the release job can build latest.json.
           $found = @(
-            Get-ChildItem -Path $bundle -Recurse -File -Include "*.exe", "*.msi" -ErrorAction SilentlyContinue
+            Get-ChildItem -Path $bundle -Recurse -File -Include "*.exe", "*.msi", "*.sig" -ErrorAction SilentlyContinue
           )
-          if (-not $found) {
+          $installers = @($found | Where-Object { $_.Extension -ne ".sig" })
+          if (-not $installers) {
             throw "No NSIS (.exe) or MSI (.msi) installer found under $bundle."
           }
           foreach ($f in $found) {
             Copy-Item -LiteralPath $f.FullName -Destination "installers" -Force
-            Write-Host "Collected installer: $($f.Name)"
+            Write-Host "Collected: $($f.Name)"
           }
 
       - name: Upload installer artifact
@@ -286,6 +333,51 @@ jobs:
           # download URLs and checksums for this release.
           Copy-Item -LiteralPath "model-manifest.json" -Destination "assets\model-manifest.json" -Force
 
+      - name: Generate updater manifest (latest.json)
+        shell: pwsh
+        run: |
+          # The Tauri updater (app/src-tauri/tauri.conf.json plugins.updater)
+          # polls releases/latest/download/latest.json. Build it from the signed
+          # NSIS artifact and its detached minisign signature. This exists only
+          # when the desktop app was built with a signing key; otherwise self-
+          # update is simply unavailable for this release.
+          $tag = "${{ needs.prepare.outputs.tag }}"
+          $version = "${{ needs.prepare.outputs.version }}"
+          $repo = "${{ github.repository }}"
+          $assetsDir = "assets"
+
+          $setup = Get-ChildItem -Path $assetsDir -File -Filter "*-setup.exe" -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          $sig = if ($setup) { Get-Item -LiteralPath "$($setup.FullName).sig" -ErrorAction SilentlyContinue } else { $null }
+
+          if (-not $setup -or -not $sig) {
+            Write-Host "::warning::No signed updater artifact (-setup.exe plus .sig) found; skipping latest.json. App self-update will be unavailable for this release."
+            return
+          }
+
+          $signature = (Get-Content -Raw -LiteralPath $sig.FullName).Trim()
+          $url = "https://github.com/$repo/releases/download/$tag/$($setup.Name)"
+          $pubDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+
+          $manifest = [ordered]@{
+            version = $version
+            notes = "See the release notes at https://github.com/$repo/releases/tag/$tag"
+            pub_date = $pubDate
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{
+                signature = $signature
+                url = $url
+              }
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 8 |
+            Set-Content -LiteralPath (Join-Path $assetsDir "latest.json") -Encoding UTF8
+          Write-Host "Wrote latest.json: version $version -> $url"
+
+          # The detached signature is embedded in latest.json; do not publish the
+          # bare .sig as a separate release asset.
+          Remove-Item -LiteralPath $sig.FullName -Force
+
       - name: Generate release.json and SHA256SUMS
         shell: pwsh
         run: |
@@ -304,7 +396,9 @@ jobs:
 
           # The installer is optional while the desktop app is still in
           # development. Pick the first .exe or .msi installer if one exists.
-          $installer = Get-ChildItem -Path $assetsDir -File -Include "*.exe", "*.msi" |
+          # Use a wildcard path: -Include is ignored unless the path globs or
+          # -Recurse is set, which would otherwise silently match nothing.
+          $installer = Get-ChildItem -Path (Join-Path $assetsDir "*") -File -Include "*.exe", "*.msi" |
             Where-Object { $_.Name -ne "mite.exe" } |
             Sort-Object Name |
             Select-Object -First 1

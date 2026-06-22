@@ -50,7 +50,10 @@ Each release attaches the following assets:
 - `model-manifest.json`: the repo's model manifest, copied as-is. It lists the
   OCR models, dictionaries, and frequency data with their download URLs and
   checksums, so the app can fetch and verify model files.
-- `release.json`: the update feed the desktop app polls (see below).
+- `release.json`: the feed the desktop app polls to update the mite CLI (see
+  below).
+- `latest.json`: the Tauri updater feed the desktop app uses to update **itself**
+  (see below). Present only when the installer was signed.
 - `SHA256SUMS`: a sha256 plus filename line for every published asset, for
   manual verification.
 - The desktop app installer (NSIS `.exe` and/or MSI `.msi`), when the app build
@@ -78,6 +81,49 @@ release and (where a checksum is meaningful) its sha256. The app compares
 the matching GitHub Release, and verifies each download against the listed
 sha256. The `installer` entry is present only when an installer was built for
 that release.
+
+## How the desktop app updates itself (latest.json)
+
+The CLI and the app update along two separate paths. `release.json` (above)
+drives updating the mite **CLI** in place. The app **shell** updates itself with
+`tauri-plugin-updater`, which polls `latest.json`:
+
+```json
+{
+  "version": "0.1.0",
+  "notes": "See the release notes at https://github.com/<owner>/mite/releases/tag/v0.1.0",
+  "pub_date": "2026-01-01T00:00:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "<minisign signature of the installer>",
+      "url": "https://github.com/<owner>/mite/releases/download/v0.1.0/Mite_0.1.0_x64-setup.exe"
+    }
+  }
+}
+```
+
+The app compares `version` against the version baked into the running build
+(CI stamps `tauri.conf.json` from the tag), downloads the installer at `url`,
+verifies it against the minisign **public** key compiled into the app, installs
+it, and relaunches. The release workflow generates `latest.json` from the signed
+installer and its detached `.sig`; the bare `.sig` is not published separately
+because the signature is embedded here.
+
+### Signing secrets
+
+`latest.json` (and a self-updatable installer) is produced only when the release
+build can sign the installer with the updater key. Configure two repository
+secrets:
+
+- `TAURI_SIGNING_PRIVATE_KEY`: the contents of the minisign private key generated
+  by `bun run tauri signer generate`.
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: that key's password (empty if none).
+
+Without these the release still succeeds, but the installer is unsigned and no
+`latest.json` is published, so app self-update is unavailable for that release.
+This updater signing is free and is independent of Authenticode installer
+signing, which is optional and still not enabled. See
+[app/README.md](../app/README.md) for the key setup and the SmartScreen note.
 
 ## Dry run
 

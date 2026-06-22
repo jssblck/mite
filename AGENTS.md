@@ -214,9 +214,12 @@ Notes for changes here:
   and site stay visually cohesive.
 - `.github/workflows/release.yml`: the tag-driven (`v*`) release pipeline that
   publishes `mite.exe`, the GPU runtime pack, the model manifest, the app
-  installer, and `release.json`. The app polls `release.json` to update the CLI.
-  Versioning is git-tag based (build.rs `git describe` into `MITE_VERSION`,
-  overridden by CI with the tag); see `docs/releases.md`.
+  installer, `release.json`, and (when the installer is updater-signed)
+  `latest.json`. The app polls `release.json` to update the CLI and `latest.json`
+  to update itself via `tauri-plugin-updater` (free minisign signing; Authenticode
+  installer signing stays optional and unenabled). Versioning is git-tag based
+  (build.rs `git describe` into `MITE_VERSION`, overridden by CI with the tag);
+  see `docs/releases.md`.
 
 ## Development Rules
 

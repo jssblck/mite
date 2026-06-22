@@ -19,8 +19,19 @@ use watch::WatchState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
+    let mut builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+
+    // Self-update: the updater downloads and verifies the next signed installer,
+    // and the process plugin lets the frontend relaunch into it. Both are
+    // desktop-only, which matches this Windows-only app.
+    #[cfg(desktop)]
+    {
+        builder = builder
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_process::init());
+    }
+
+    builder
         .manage(WatchState::default())
         .invoke_handler(tauri::generate_handler![
             commands::app_version,

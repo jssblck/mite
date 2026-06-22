@@ -80,13 +80,64 @@ does it: `app/src-tauri/build.rs` runs `git describe` into an `APP_VERSION` env,
 and release CI overrides it with the release tag. One `v*` tag stream versions
 the whole repo (CLI and app), published together in a single GitHub release.
 
-## Not done yet (needs signing keys)
+## App self-update (signed, free)
 
-Silent app self-update via `tauri-plugin-updater` is intentionally not wired up:
-it requires a code-signing certificate and an updater signing key, which are the
-maintainer's to provide. Today the app checks the release feed and surfaces a
-"newer engine available" banner, and updates the CLI in place; updating the app
-shell itself is done by downloading a new installer. Wiring the signed updater
-(and Authenticode signing of the installer) is the documented follow-up: add the
-signing secrets to CI, set `plugins.updater` in `tauri.conf.json` with the
-public key, and register the updater plugin in `lib.rs`.
+The app updates itself with `tauri-plugin-updater`. This is separate from the
+"Update engine" control, which updates the mite CLI: the updater here replaces
+the app shell. It uses Tauri's own minisign signature (not Authenticode), which
+is free and unrelated to a code-signing certificate.
+
+How it fits together:
+
+- `tauri.conf.json` carries the updater `endpoints` (the release feed's
+  `latest.json`) and the minisign **public** key.
+- The release workflow signs each installer with the matching **private** key
+  and publishes `latest.json` (version, notes, signed download URL) alongside the
+  installer. The app polls that file, downloads the next installer, verifies it
+  against the public key, installs it, and offers a relaunch (Settings -> App
+  updates).
+
+### One-time key setup
+
+Generate the updater keypair once and keep the private key safe (losing it means
+you can no longer ship updates that existing installs will accept):
+
+```powershell
+cd app
+bun run tauri signer generate -w "$HOME\.tauri\mite-updater.key"
+```
+
+This writes the private key to `~/.tauri/mite-updater.key` (kept out of the repo;
+`app/.gitignore` also blocks stray `*.key` files) and prints the public key. The
+public key already lives in `tauri.conf.json` `plugins.updater.pubkey`; if you
+rotate the key, replace it there.
+
+Then add two GitHub Actions secrets so CI can sign releases:
+
+- `TAURI_SIGNING_PRIVATE_KEY`: the **contents** of `~/.tauri/mite-updater.key`.
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: the password you set (empty if none).
+
+Until those secrets exist, the release job still builds, but it produces an
+unsigned installer with no `latest.json`, so self-update is simply unavailable
+for that release (logged as a warning, not a failure). Building the installer
+locally with `bun run tauri build` needs the same `TAURI_SIGNING_PRIVATE_KEY`
+env set, or pass `--config '{"bundle":{"createUpdaterArtifacts":false}}'` to
+build an unsigned installer.
+
+## Code signing (Authenticode) is optional and not enabled
+
+The installer is **not** Authenticode code-signed, because that needs a paid
+certificate from a certificate authority (an updater key, above, is a different
+and free thing). The practical consequence: on first run users see a Windows
+SmartScreen "Windows protected your PC / unknown publisher" prompt and have to
+click **More info -> Run anyway**. The app still installs and works normally.
+
+To enable it later, sign through Tauri's own bundling rather than a separate
+`signtool` step. The updater signature must be computed over the *final, signed*
+installer, and Tauri signs before generating that signature; signing the
+installer after the fact would invalidate the updater signature. Set
+`bundle.windows.certificateThumbprint` (or a `signCommand`) in `tauri.conf.json`,
+supply the certificate to CI as secrets, and the same release flow produces a
+signed, self-updatable installer. EV certificates also clear the SmartScreen
+prompt immediately; OV certificates clear it after some download reputation
+accrues.

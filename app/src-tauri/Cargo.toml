@@ -20,6 +20,11 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+# Signed app self-update. The updater verifies each release's installer against
+# the minisign public key in tauri.conf.json; tauri-plugin-process relaunches the
+# app after an update is applied.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

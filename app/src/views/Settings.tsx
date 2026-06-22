@@ -6,6 +6,7 @@ import {
   type DownloadProgress,
 } from "../lib/api";
 import { ProgressBar } from "../components/ProgressBar";
+import { AppUpdateCard } from "../components/AppUpdateCard";
 
 interface SettingsProps {
   status: AppStatus;
@@ -72,6 +73,8 @@ export function Settings({ status, onRefresh }: SettingsProps) {
           </button>
         </div>
       </div>
+
+      <AppUpdateCard appVersion={status.appVersion} />
 
       <div className="card">
         <div className="card-title">GPU acceleration</div>

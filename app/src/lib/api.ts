@@ -4,6 +4,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { check, type Update, type DownloadEvent } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 
 /** A subset of the CLI's `doctor --json` report that the UI surfaces. */
 export interface DoctorReport {
@@ -106,3 +108,22 @@ export function onWatchState(
 ): Promise<UnlistenFn> {
   return listen<WatchStateEvent>("watch-state", (event) => cb(event.payload));
 }
+
+/** Handle to a pending signed app update returned by `appUpdater.check()`. */
+export type AppUpdate = Update;
+/** Download lifecycle event passed to `update.downloadAndInstall(cb)`. */
+export type AppUpdateEvent = DownloadEvent;
+
+/**
+ * Signed self-update for the desktop app itself (distinct from the mite CLI
+ * update path above). Backed by tauri-plugin-updater, which verifies each
+ * release's installer against the minisign public key baked into the build.
+ * These calls only resolve inside the packaged app; in `tauri dev` there is no
+ * updater runtime and `check()` rejects.
+ */
+export const appUpdater = {
+  /** A handle when a newer signed release is published, otherwise null. */
+  check: (): Promise<AppUpdate | null> => check(),
+  /** Relaunch into the freshly installed version. */
+  relaunch: (): Promise<void> => relaunch(),
+};
