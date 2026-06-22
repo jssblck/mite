@@ -225,7 +225,7 @@ jobs:
 
       - name: Cache bun dependencies
         if: steps.app.outputs.present == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           # setup-bun does not cache the global module store; cache it ourselves
           # keyed on the lockfile so bun install is a near-noop on a cache hit.
