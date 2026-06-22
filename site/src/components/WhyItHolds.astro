@@ -8,28 +8,28 @@ const READOUTS = [
     value: "~200",
     unit: "ms",
     label: "p95",
-    desc: "A fresh, full-screen read of a 4K frame on the reference NVIDIA setup (the native TensorRT path). Fast enough to feel instant.",
+    desc: "A fresh, full-screen read of a 4K frame on the native TensorRT path.",
   },
   {
     icon: "target",
     value: "94",
     unit: "/ 100",
     label: "lines perfect",
-    desc: "Measured against several hundred hand-checked 4K screenshots, about 94 of every 100 text lines are read with zero errors.",
+    desc: "About 94 of every 100 text lines are read with zero errors.",
   },
   {
     icon: "scan-text",
     value: "1",
     unit: "in 80",
     label: "characters off",
-    desc: "Roughly one character in eighty is wrong or missing. Errors cluster in tiny, faint, or heavily stylized text. Ordinary dialogue and menus read reliably.",
+    desc: "Roughly one character in eighty is wrong or missing. Errors cluster in tiny, faint, or heavily stylized text; ordinary dialogue and menus read reliably.",
   },
   {
     icon: "lock",
     value: "0",
     unit: "bytes",
     label: "leave the device",
-    desc: "All OCR and dictionary lookup run locally. No cloud OCR, no network round-trip, nothing sent off your machine.",
+    desc: "All OCR and dictionary lookup run locally; nothing is sent off your machine.",
   },
 ] as const;
 
@@ -42,28 +42,26 @@ const TRAITS = [
   {
     icon: "palette",
     t: "Grammar-aware color",
-    d: "Word-category colors are an information channel tied to grammar, not decoration. Part of speech is legible at a glance.",
+    d: "Each word is colored by its part of speech, so grammar is legible at a glance.",
   },
   {
     icon: "shield-check",
-    t: "Fails honestly",
-    d: "When a read misses, it usually surfaces as an unknown word rather than a confident wrong definition. You can trust what it shows.",
+    t: "When it's unsure",
+    d: "When a read misses, it usually surfaces as an unknown word rather than a confident wrong definition.",
   },
   {
     icon: "github",
     t: "Open source",
-    d: "Licensed AGPL-3.0. The capture, the models, the lookup: all of it is open to read, audit, and build on.",
+    d: "Licensed AGPL-3.0. The capture path, the models, and the lookup are all open to read and audit.",
   },
 ] as const;
 ---
 
 <section id="why" class="container section why">
   <SectionHead>
-    <span slot="title"
-      >Built to be trusted in the half-second you give it.</span
-    >
-    A reading tool earns its place on latency and accuracy. A slow or wrong
-    pop-up is worse than none, so these are the numbers that matter.
+    <span slot="title">Accuracy and speed</span>
+    Measured on a reference NVIDIA box against a few hundred hand-labeled 4K
+    screenshots.
   </SectionHead>
 
   <div class="readouts">
