@@ -1,9 +1,10 @@
 //! `mite watch`: a persistent, yomichan-style OCR overlay.
 //!
 //! While the **Shift** key is held, the foreground window is captured and OCR'd
-//! and each recognized word is drawn with a POS-coloured underline (and, when
-//! `overlay.furigana` is enabled, furigana above it). Hovering the cursor over a
-//! word draws a definition popup.
+//! and each recognized word is drawn with a POS-coloured underline (unless
+//! `overlay.word_underlines` is off, and, when `overlay.furigana` is enabled,
+//! furigana above it). Hovering the cursor over a word draws a definition popup
+//! regardless of those settings.
 //! Releasing Shift clears the overlay; **Esc** quits.
 //!
 //! Some games intercept Shift while focused, so the trigger never fires. For
@@ -141,6 +142,7 @@ pub fn run_watch(config: &AppConfig, request: &WatchRequest) -> Result<()> {
         overlay.enable_hud();
     }
     overlay.set_furigana_visible(config.overlay.furigana);
+    overlay.set_underlines_visible(config.overlay.word_underlines);
 
     println!(
         "watching: hold SHIFT over a window to OCR it, hover a word to look it up, ESC to quit."

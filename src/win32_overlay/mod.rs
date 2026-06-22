@@ -2,11 +2,12 @@
 //!
 //! Renders into a 32-bit BGRA DIB and presents it with `UpdateLayeredWindow`,
 //! so decoration can be genuinely translucent (colour-key transparency is only
-//! binary). Recognized words get a part-of-speech-coloured underline and,
-//! when `overlay.furigana` is enabled, furigana drawn above them; the hovered
-//! word is tinted and the definition popup is an opaque, rounded, furigana-topped
-//! panel with a category pill and a tail pointing at the word. The window stays
-//! click-through (`WS_EX_TRANSPARENT`).
+//! binary). Recognized words get a part-of-speech-coloured underline (unless
+//! `overlay.word_underlines` is off) and, when `overlay.furigana` is enabled,
+//! furigana drawn above them; the hovered word is tinted and the definition
+//! popup is an opaque, rounded, furigana-topped panel with a category pill and a
+//! tail pointing at the word. The window stays click-through
+//! (`WS_EX_TRANSPARENT`).
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -209,6 +210,11 @@ pub struct Win32Overlay {
     /// `overlay.furigana` config option). Off by default; underlines and the
     /// hover popup are unaffected.
     furigana_visible: bool,
+    /// Whether to draw the per-word category underlines and hover tint (the
+    /// `overlay.word_underlines` config option). When false the word layer is
+    /// transparent, but highlights are still stored so hover hit-testing and the
+    /// popup keep working.
+    underlines_visible: bool,
 }
 
 impl std::fmt::Debug for Canvas {
@@ -245,6 +251,7 @@ impl Win32Overlay {
             hud: LatencyHud::new(HUD_WINDOW),
             hud_visible: false,
             furigana_visible: false,
+            underlines_visible: true,
         })
     }
 
@@ -278,6 +285,13 @@ impl Win32Overlay {
     /// and the hover popup (which has its own furigana) are unaffected.
     pub fn set_furigana_visible(&mut self, enabled: bool) {
         self.furigana_visible = enabled;
+    }
+
+    /// Enable or disable the per-word category underlines and hover tint. When
+    /// disabled the word layer is transparent, but the popup still appears on
+    /// hover (hit-testing uses word geometry, not the drawn pixels).
+    pub fn set_underlines_visible(&mut self, enabled: bool) {
+        self.underlines_visible = enabled;
     }
 
     /// Append one pass's timings + content counts + capture extras. Always
@@ -415,9 +429,11 @@ impl Win32Overlay {
         }
 
         // Then the category underlines and the hovered word's selection tint.
-        for (index, highlight) in self.highlights.iter().enumerate() {
-            let hovered = self.hovered == Some(index);
-            draw_word_underline(canvas.bits, width, height, highlight, hovered);
+        if self.underlines_visible {
+            for (index, highlight) in self.highlights.iter().enumerate() {
+                let hovered = self.hovered == Some(index);
+                draw_word_underline(canvas.bits, width, height, highlight, hovered);
+            }
         }
 
         let mut panel_rect = None;

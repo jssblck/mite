@@ -163,6 +163,20 @@ fn main() -> Result<()> {
         overlay.present_snapshot(screen, &highlights);
     }
 
+    // "Invisible" mode: word underlines and furigana both off. The word layer is
+    // transparent, but hovering still raises the popup.
+    overlay.set_underlines_visible(false);
+    overlay.set_furigana_visible(false);
+    let index = names.iter().position(|&s| s == "朝").context("word")?;
+    overlay.set_interaction(
+        Some(index),
+        Some(Popup {
+            word_rect: words[index].rect,
+            content: noun_popup(),
+        }),
+    );
+    save_composite(&scene, &overlay, out_dir.join("invisible-mode.png"))?;
+
     println!("wrote previews to {}", out_dir.display());
     Ok(())
 }
