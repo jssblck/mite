@@ -87,6 +87,10 @@ body,
   color: var(--color-ink);
   font-size: 1.35rem;
 }
+/* The brand word set as みて in the Japanese face, mirroring the site wordmark. */
+.brand-name {
+  font-family: var(--font-jp);
+}
 
 .app-nav {
   display: flex;
@@ -119,6 +123,30 @@ body,
 
 .header-spacer {
   flex: 1;
+}
+
+/* Icon-only header control (Settings gear), sitting right of the version. */
+.icon-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  display: inline-grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius);
+  transition:
+    color 0.16s var(--ease-out),
+    background-color 0.16s var(--ease-out);
+}
+.icon-btn:hover {
+  color: var(--color-ink);
+  background: var(--color-surface);
+}
+.icon-btn.active {
+  color: var(--color-ink);
+  background: var(--color-surface-2);
 }
 .header-meta {
   display: inline-flex;

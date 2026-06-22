@@ -102,7 +102,7 @@ impl DoctorReport {
         if nvidia.available {
             match gpu_runtime.tier {
                 RuntimeTier::Cpu => warnings.push(
-                    "An NVIDIA GPU was detected but no NVIDIA GPU runtime (TensorRT or CUDA DLLs) \
+                    "An NVIDIA GPU was detected but no NVIDIA GPU runtime (TensorRT or CUDA) \
                      was found, so Mite will run on the CPU. Install NVIDIA's runtime to enable GPU \
                      acceleration and ensure it is on PATH (the desktop app guides this; for local \
                      development see docs/local-windows.md)."

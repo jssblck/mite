@@ -66,10 +66,6 @@ export function Settings({ status, onRefresh, onOpenRuntimeSetup }: SettingsProp
 
   return (
     <div>
-      <div className="page-head">
-        <h1>Settings</h1>
-      </div>
-
       <div className="card settings-list">
         <SettingRow
           label="Engine"

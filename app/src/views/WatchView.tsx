@@ -103,9 +103,6 @@ export function WatchView({ watching, onWatchingChange }: WatchViewProps) {
     return (
       <div>
         <div className="page-head">
-          <h1>
-            Watching <span className="pill live"><span className="dot" /> live</span>
-          </h1>
           <p>
             {target ? `Reading "${target.title || target.appName}". ` : ""}
             {auto
@@ -130,7 +127,6 @@ export function WatchView({ watching, onWatchingChange }: WatchViewProps) {
   return (
     <div>
       <div className="page-head">
-        <h1>Choose a window</h1>
         <p>
           Pick the game or app you want to read. Its live preview updates so you
           can confirm the right window before you start.
