@@ -23,5 +23,10 @@
 # delete; this guard just keeps it from ever being staged or cluttering status.
 /dev/
 
-# Local design-review hook cache (impeccable). Tooling artifact, not source.
-.impeccable/
+# Design-review hook (impeccable). Track the shared root config so its rule and
+# value ignores travel with the repo; never track caches or per-machine state.
+/.impeccable/*
+!/.impeccable/config.json
+**/.impeccable/hook.cache.json
+**/.impeccable/hook.pending.json
+**/.impeccable/config.local.json
