@@ -225,14 +225,18 @@ Notes for changes here:
 - `site/`: the Astro marketing site. Its `site/src/styles/tokens.css` and
   `global.css` are the shared design source that `app/` also imports, so the app
   and site stay visually cohesive.
-- `.github/workflows/release.yml`: the tag-driven (`v*`) release pipeline that
-  publishes `mite.exe`, the GPU runtime pack, the model manifest, the app
-  installer, `release.json`, and (when the installer is updater-signed)
-  `latest.json`. The app polls `release.json` to update the CLI and `latest.json`
-  to update itself via `tauri-plugin-updater` (free minisign signing; Authenticode
-  installer signing stays optional and unenabled). Versioning is git-tag based
-  (build.rs `git describe` into `MITE_VERSION`, overridden by CI with the tag);
-  see `docs/releases.md`.
+- `.github/workflows/release.yml`: the `v*` tag release pipeline that publishes
+  `mite.exe`, the GPU runtime pack, the model manifest, the app installer,
+  `release.json`, and (when the installer is updater-signed) `latest.json`. The
+  same workflow also runs as a DRY RUN on every pull request and every push to
+  `main` (and on manual dispatch): it builds and packages every asset but skips
+  creating the GitHub Release, so the release path is a PR-time gate. main runs
+  also keep the shared-key Rust/Bun caches warm for those PR dry runs. The app
+  polls `release.json` to update the CLI and `latest.json` to update itself via
+  `tauri-plugin-updater` (free minisign signing; Authenticode installer signing
+  stays optional and unenabled). Versioning is git-tag based (build.rs `git
+  describe` into `MITE_VERSION`, overridden by CI with the tag); see
+  `docs/releases.md`.
 
 ## Development Rules
 

@@ -52,10 +52,9 @@ Each release attaches the following assets:
   (see below). Present only when the installer was signed.
 - `SHA256SUMS`: a sha256 plus filename line for every published asset, for
   manual verification.
-- The desktop app installer (NSIS `.exe` and/or MSI `.msi`), when the app build
-  succeeds. While the app is still in development its build is allowed to fail
-  without blocking the rest of the release, so an installer may be absent from
-  an early release.
+- The desktop app installer (NSIS `.exe` and/or MSI `.msi`). The app build is a
+  required job: if it fails, the release (and every PR dry run) fails, so a
+  release never ships without an installer.
 
 The NVIDIA GPU runtime libraries (TensorRT, the CUDA runtime, NVRTC, cuBLAS,
 cuDNN) are deliberately not among these assets. Mite never redistributes NVIDIA
@@ -80,8 +79,8 @@ The Tauri desktop app polls `release.json` to discover updates. Its shape is:
 release and (where a checksum is meaningful) its sha256. The app compares
 `version` against the version it currently has, downloads the named assets from
 the matching GitHub Release, and verifies each download against the listed
-sha256. The `installer` entry is present only when an installer was built for
-that release.
+sha256. The `installer` entry is always present: the desktop app build is a
+required release job, so every release ships an installer.
 
 ## How the desktop app updates itself (latest.json)
 
@@ -128,9 +127,29 @@ signing, which is optional and still not enabled. See
 
 ## Dry run
 
-To exercise the pipeline without cutting a tag, run the `Release` workflow
-manually from the Actions tab (a `workflow_dispatch`) with `dry_run` set to
-true. It builds and packages every asset, generates `release.json` and
-`SHA256SUMS`, and writes a job summary, but it does not create a GitHub Release.
-On a non-tag ref the version is derived from `git describe` and treated as a
-prerelease.
+The `Release` workflow runs as a dry run whenever it is not triggered by a
+version tag:
+
+- On every pull request (so a change that breaks the release build fails on the
+  PR, not when a tag is cut).
+- On every push to `main`.
+- On a manual `workflow_dispatch` from the Actions tab.
+
+A dry run builds and packages every asset, generates `release.json`,
+`latest.json` (when signing is configured), and `SHA256SUMS`, and writes a job
+summary, but it does not create a GitHub Release. The only thing that turns a dry
+run into a real release is the trigger being a `vX.Y.Z` tag. On a non-tag ref the
+version is derived from `git describe` and treated as a prerelease.
+
+Site-only pull requests (`site/**`) skip the release dry run; the site has its
+own deploy workflow and never affects release artifacts. (main pushes and tags
+are not path-filtered, so a release is never silently skipped.)
+
+### Build caching
+
+The CLI and app builds are cached with `Swatinem/rust-cache` (and a Bun module
+cache for the app's frontend deps). Caches are written only by `main` and tag
+builds and restored read-only by pull requests, because GitHub only lets a PR
+restore caches its base branch populated. That is why the release workflow also
+runs on `main`: those runs keep the shared-key caches warm so PR dry runs reuse
+them instead of compiling from scratch.

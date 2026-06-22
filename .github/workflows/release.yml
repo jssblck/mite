@@ -2,32 +2,47 @@ name: Release
 
 # Build and publish mite releases to GitHub Releases.
 #
-# Triggered on version tags (v*). Builds the Windows CLI and the Tauri desktop
-# app installer, computes checksums, writes the release.json update feed consumed
-# by the desktop app, then creates a DRAFT GitHub Release whose notes are
-# generated from the pull requests merged since the previous tag
-# (--generate-notes, the "releases as changelog" pattern). The draft is reviewed
-# and published by hand.
+# On a version tag (v*) this builds the Windows CLI and the Tauri desktop app
+# installer, computes checksums, writes the release.json update feed consumed by
+# the desktop app, then creates a DRAFT GitHub Release whose notes are generated
+# from the pull requests merged since the previous tag (--generate-notes, the
+# "releases as changelog" pattern). The draft is reviewed and published by hand.
+#
+# On every pull request and every push to main this runs as a DRY RUN: it
+# executes the exact same build and packaging jobs (CLI, installer, model
+# manifest, release.json, latest.json, SHA256SUMS) but stops short of creating a
+# GitHub Release. That makes the release pipeline a PR-time gate, so a change
+# that breaks the release build fails on the PR instead of when a tag is cut.
+# Running on main pushes is also what keeps the per-job Rust/Bun caches warm:
+# GitHub only lets a PR restore caches its base branch populated, so the main
+# runs prime the shared-key caches that PR dry runs then reuse.
+#
+# The only difference between a dry run and a real release is whether the ref is
+# a version tag; nothing else is built or skipped. workflow_dispatch triggers a
+# manual dry run on any ref.
 #
 # The NVIDIA GPU runtime (TensorRT, CUDA, cuDNN, NVRTC, cuBLAS) is NOT built or
 # shipped here. Mite never redistributes NVIDIA binaries; the desktop app detects
 # what the user installed from NVIDIA and guides the rest. See app/README.md.
-#
-# workflow_dispatch with dry_run builds and packages everything but does not
-# create a release, so the pipeline can be exercised without cutting a tag.
 
 on:
   push:
+    # No paths filter here. A tag push must always run (path filtering on tags is
+    # unreliable, and a release must never be silently skipped), and main pushes
+    # are cheap enough to always run since they prime the build caches.
     tags:
       - "v*"
+    branches: ["main"]
+  pull_request:
+    # The site has its own deploy workflow and never affects release artifacts,
+    # so a site-only PR does not need a full Windows release dry run.
+    paths-ignore:
+      - "site/**"
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: "Dry run (build and package, but do not create a release)"
-        type: boolean
-        default: false
 
 concurrency:
+  # Coalesce per ref. cancel-in-progress is safe here: a superseded dry run has
+  # nothing worth finishing, and tag refs are unique per release.
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
@@ -42,6 +57,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
       prerelease: ${{ steps.version.outputs.prerelease }}
+      dry_run: ${{ steps.version.outputs.dry_run }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -54,17 +70,19 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            # A version tag is the one and only path that publishes a release.
             TAG="${{ github.ref_name }}"
             # Strip the leading v: v0.1.0 becomes 0.1.0.
             VERSION="${TAG#v}"
-          elif [[ "${{ inputs.dry_run }}" == "true" ]]; then
-            # Allow dry runs on any branch using git describe.
+            DRY_RUN=false
+          else
+            # Pull requests, main pushes, and manual dispatch all build and
+            # package the full release but never publish it. git describe gives a
+            # sensible version stamp without a tag.
             TAG="$(git describe --always --tags)"
             VERSION="${TAG#v}"
-            echo "::notice::Dry run on a non-tag ref; using git describe version: $TAG"
-          else
-            echo "::error::Release must be triggered by a version tag (v*)"
-            exit 1
+            DRY_RUN=true
+            echo "::notice::Dry run (${{ github.event_name }} on ${{ github.ref }}); using git describe version: $TAG"
           fi
 
           # Anything that is not a bare X.Y.Z (a pre-release suffix, or a
@@ -79,8 +97,13 @@ jobs:
             echo "tag=${TAG}"
             echo "version=${VERSION}"
             echo "prerelease=${PRERELEASE}"
+            echo "dry_run=${DRY_RUN}"
           } >> "$GITHUB_OUTPUT"
-          echo "Releasing ${TAG} (version ${VERSION}, prerelease ${PRERELEASE})"
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "Dry run for ${TAG} (version ${VERSION}, prerelease ${PRERELEASE}); no release will be created."
+          else
+            echo "Releasing ${TAG} (version ${VERSION}, prerelease ${PRERELEASE})"
+          fi
 
   build-cli:
     name: Build CLI
@@ -105,6 +128,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: release-cli
+          # Only main pushes (and tags) write the cache; PRs restore from it.
+          # This keeps the shared release-profile cache stable instead of letting
+          # every PR branch evict it with its own short-lived copy.
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Build mite.exe
         run: cargo build --release --bin mite
@@ -121,10 +148,6 @@ jobs:
     name: Build desktop app installer
     needs: prepare
     runs-on: windows-latest
-    # The Tauri app under ./app is built in parallel and may not be fully
-    # buildable yet. Surface failures clearly, but do not let a build-in-progress
-    # app block the rest of the release pipeline.
-    continue-on-error: true
     env:
       # The app reads its version through the same MITE_VERSION override.
       MITE_VERSION: ${{ needs.prepare.outputs.tag }}
@@ -193,15 +216,28 @@ jobs:
         with:
           workspaces: app/src-tauri
           shared-key: release-app
+          # Same policy as build-cli: main and tags write, PRs restore.
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Install bun
         if: steps.app.outputs.present == 'true'
         uses: oven-sh/setup-bun@v2
 
+      - name: Cache bun dependencies
+        if: steps.app.outputs.present == 'true'
+        uses: actions/cache@v4
+        with:
+          # setup-bun does not cache the global module store; cache it ourselves
+          # keyed on the lockfile so bun install is a near-noop on a cache hit.
+          path: ~/.bun/install/cache
+          key: bun-release-app-${{ runner.os }}-${{ hashFiles('app/bun.lock') }}
+          restore-keys: |
+            bun-release-app-${{ runner.os }}-
+
       - name: Install app dependencies
         if: steps.app.outputs.present == 'true'
         working-directory: app
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Build Tauri app
         if: steps.app.outputs.present == 'true'
@@ -268,9 +304,8 @@ jobs:
           path: assets
 
       - name: Download installer artifact
-        # The desktop app job may have failed (it is allowed to during
-        # development), so do not require its artifact to be present.
-        continue-on-error: true
+        # The desktop app build is a required job now, so its installer artifact
+        # must be present. Fail loudly if it is missing.
         uses: actions/download-artifact@v8
         with:
           name: installer
@@ -342,14 +377,15 @@ jobs:
           $cliPath = Join-Path $assetsDir "mite.exe"
           if (-not (Test-Path $cliPath)) { throw "Missing required asset: mite.exe" }
 
-          # The installer is optional while the desktop app is still in
-          # development. Pick the first .exe or .msi installer if one exists.
+          # The installer is a required asset: the desktop app build is a
+          # required job, so its .exe/.msi must be here. Pick the first installer.
           # Use a wildcard path: -Include is ignored unless the path globs or
           # -Recurse is set, which would otherwise silently match nothing.
           $installer = Get-ChildItem -Path (Join-Path $assetsDir "*") -File -Include "*.exe", "*.msi" |
             Where-Object { $_.Name -ne "mite.exe" } |
             Sort-Object Name |
             Select-Object -First 1
+          if (-not $installer) { throw "Missing required asset: desktop app installer (.exe or .msi)" }
 
           # release.json: the feed the desktop app polls for updates.
           $release = [ordered]@{
@@ -362,13 +398,9 @@ jobs:
               asset = "model-manifest.json"
             }
           }
-          if ($installer) {
-            $release.installer = [ordered]@{
-              asset = $installer.Name
-              sha256 = Get-Hash $installer.FullName
-            }
-          } else {
-            Write-Host "::warning::No installer asset present; release.json will omit the installer entry."
+          $release.installer = [ordered]@{
+            asset = $installer.Name
+            sha256 = Get-Hash $installer.FullName
           }
 
           $release | ConvertTo-Json -Depth 6 |
@@ -387,7 +419,7 @@ jobs:
           Get-Content -LiteralPath (Join-Path $assetsDir "SHA256SUMS")
 
       - name: Create draft GitHub release
-        if: ${{ !inputs.dry_run }}
+        if: ${{ needs.prepare.outputs.dry_run == 'false' }}
         shell: pwsh
         run: |
           $tag = "${{ needs.prepare.outputs.tag }}"
@@ -407,7 +439,7 @@ jobs:
             @assets
 
       - name: Write release summary
-        if: ${{ !inputs.dry_run }}
+        if: ${{ needs.prepare.outputs.dry_run == 'false' }}
         shell: pwsh
         run: |
           $tag = "${{ needs.prepare.outputs.tag }}"
@@ -430,7 +462,7 @@ jobs:
           $summary -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
       - name: Write dry run summary
-        if: ${{ inputs.dry_run }}
+        if: ${{ needs.prepare.outputs.dry_run == 'true' }}
         shell: pwsh
         run: |
           $tag = "${{ needs.prepare.outputs.tag }}"

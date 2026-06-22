@@ -27,6 +27,13 @@ jobs:
           rustup toolchain install stable --profile minimal --no-self-update
           rustup default stable
 
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-rust
+          # Only main writes the cache; PRs restore from it.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -47,8 +54,23 @@ jobs:
           rustup toolchain install stable --profile minimal --no-self-update
           rustup default stable
 
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+          shared-key: ci-app
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Install bun
         uses: oven-sh/setup-bun@v2
+
+      - name: Cache bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-ci-app-${{ runner.os }}-${{ hashFiles('app/bun.lock') }}
+          restore-keys: |
+            bun-ci-app-${{ runner.os }}-
 
       - name: Install frontend dependencies
         working-directory: app
