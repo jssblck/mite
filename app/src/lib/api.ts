@@ -123,6 +123,7 @@ export const api = {
   detectRuntime: () => invoke<DoctorReport>("detect_runtime"),
   recordRuntime: () => invoke<AppSettings>("record_runtime"),
   getSettings: () => invoke<AppSettings>("get_settings"),
+  pipAvailable: () => invoke<boolean>("pip_available"),
   writeDefaultConfig: () => invoke<void>("write_default_config"),
   listWindows: () => invoke<WindowSummary[]>("list_windows"),
   captureThumbnail: (windowId: number, maxWidth: number) =>

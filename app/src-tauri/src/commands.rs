@@ -190,6 +190,22 @@ pub fn get_settings() -> AppSettings {
     settings::load()
 }
 
+/// Whether a `pip` executable is discoverable on `PATH`. The guided runtime
+/// setup defaults to the pip install route when it is, since that route is a
+/// single copy-paste command. Pure PATH inspection: it never spawns pip.
+#[tauri::command]
+pub fn pip_available() -> bool {
+    let names: &[&str] = if cfg!(windows) {
+        &["pip.exe", "pip3.exe"]
+    } else {
+        &["pip", "pip3"]
+    };
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| names.iter().any(|name| dir.join(name).is_file()))
+}
+
 #[tauri::command]
 pub async fn write_default_config() -> Result<(), String> {
     blocking(|| {

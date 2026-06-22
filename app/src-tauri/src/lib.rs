@@ -15,6 +15,7 @@ mod release;
 mod settings;
 mod status;
 mod watch;
+mod window;
 mod windows;
 
 use watch::WatchState;
@@ -24,16 +25,25 @@ pub fn run() {
     let mut builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
 
     // Self-update: the updater downloads and verifies the next signed installer,
-    // and the process plugin lets the frontend relaunch into it. Both are
-    // desktop-only, which matches this Windows-only app.
+    // and the process plugin lets the frontend relaunch into it. The window-state
+    // plugin remembers the main window's size and position across launches. All
+    // three are desktop-only, which matches this Windows-only app.
     #[cfg(desktop)]
     {
         builder = builder
             .plugin(tauri_plugin_updater::Builder::new().build())
-            .plugin(tauri_plugin_process::init());
+            .plugin(tauri_plugin_process::init())
+            .plugin(tauri_plugin_window_state::Builder::default().build());
     }
 
     builder
+        .setup(|app| {
+            // On the first launch there is no saved window state to restore, so
+            // size the window to the screen instead of the small config default.
+            #[cfg(desktop)]
+            apply_first_run_window_size(app);
+            Ok(())
+        })
         .manage(WatchState::default())
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
@@ -45,6 +55,7 @@ pub fn run() {
             commands::detect_runtime,
             commands::record_runtime,
             commands::get_settings,
+            commands::pip_available,
             commands::write_default_config,
             commands::list_windows,
             commands::capture_thumbnail,
@@ -57,4 +68,37 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running mite app");
+}
+
+/// Size and center the main window on first launch only.
+///
+/// The window-state plugin restores the saved size and position whenever its
+/// state file exists, so we defer to it on every later launch and only impose a
+/// screen-relative default when that file is absent.
+#[cfg(desktop)]
+fn apply_first_run_window_size(app: &tauri::App) {
+    use tauri::Manager;
+
+    let restored = app
+        .path()
+        .app_config_dir()
+        .map(|dir| {
+            dir.join(tauri_plugin_window_state::DEFAULT_FILENAME)
+                .exists()
+        })
+        .unwrap_or(false);
+    if restored {
+        return;
+    }
+
+    let Some(main) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(Some(monitor)) = main.current_monitor() else {
+        return;
+    };
+    let screen = monitor.size().to_logical::<f64>(monitor.scale_factor());
+    let (width, height) = window::pick_window_size(screen.width, screen.height);
+    let _ = main.set_size(tauri::LogicalSize::new(width, height));
+    let _ = main.center();
 }

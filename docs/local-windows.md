@@ -252,13 +252,20 @@ through. Pick one:
   that match the ONNX Runtime build are:
 
   ```powershell
-  pip install tensorrt-cu12==10.16.1.11 nvidia-cuda-runtime-cu12==12.9.79 `
+  pip install --extra-index-url https://pypi.nvidia.com `
+    tensorrt-cu12-libs==10.16.1.11 nvidia-cuda-runtime-cu12==12.9.79 `
     nvidia-cuda-nvrtc-cu12==12.9.86 nvidia-cublas-cu12==12.9.2.10 `
     nvidia-cudnn-cu12==9.23.1.3
   ```
 
-  ORT imports `nvinfer_10.dll` directly, so use a TensorRT 10.x wheel: the 11.x
-  wheels ship only `nvinfer_11.dll`.
+  Two details matter here. First, install `tensorrt-cu12-libs` (the runtime
+  DLLs), not the `tensorrt-cu12` meta-package: ORT loads `nvinfer_10.dll`
+  natively, so Mite needs only the libraries, and the meta-package additionally
+  pulls the Python `tensorrt` bindings, which have no wheel for current Python
+  versions and fail the install. Second, the TensorRT runtime wheel is hosted on
+  NVIDIA's own index, so `--extra-index-url https://pypi.nvidia.com` is required.
+  Use a TensorRT 10.x wheel: the 11.x wheels ship only `nvinfer_11.dll`, which
+  ORT does not load.
 
 Then build as usual:
 

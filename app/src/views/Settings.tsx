@@ -82,9 +82,9 @@ export function Settings({ status, onRefresh, onOpenRuntimeSetup }: SettingsProp
         <div className="card-title">GPU acceleration</div>
         <p className="card-sub">{runtimeSummary(status)}</p>
         <p className="card-sub subtle">
-          Mite does not install NVIDIA's runtime: because of NVIDIA's license
-          terms you install it yourself from NVIDIA. This guided step detects
-          what is present and walks you through the rest.
+          NVIDIA's license does not let us install their runtime for you, so you
+          install it yourself from NVIDIA. This guided step detects what is
+          present and walks you through the rest.
         </p>
         <div className="btn-row">
           <button
