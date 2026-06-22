@@ -16,6 +16,19 @@ diagnostics, evals, and developer tooling.
 > webpages, browser-native tools such as Yomitan, Yomichan, or 10ten are usually
 > the better fit.
 
+## Install
+
+Most people should use the Mite desktop app. Download the installer from the
+[releases page](https://github.com/jssblck/mite/releases) and run it: the app
+walks you through a one-time setup (it installs the engine, downloads the
+recognition models, and, on NVIDIA GPUs, an optional acceleration pack), then
+lets you pick a window from a live preview grid and start reading. No terminal
+required, and it keeps the engine up to date for you. See
+[app/README.md](app/README.md) for what the app manages.
+
+The rest of this document covers building from source, the path for developers
+and contributors.
+
 ## How well does it read?
 
 Measured against several hundred hand-checked 4K game screenshots, about 94 of
@@ -45,7 +58,7 @@ Important details:
   not committed to the source repository.
 - Real-image eval data lives in the private `eval/` submodule.
 
-## Quick Start
+## Quick start (build from source)
 
 Run the consolidated developer setup script from PowerShell:
 
@@ -109,19 +122,19 @@ cargo run -- clean-images [--dry-run]
 
 ## Documentation
 
-- [Local Windows usage](docs/local-windows.md) — setup, running the overlay,
+- [Local Windows usage](docs/local-windows.md): setup, running the overlay,
   capture troubleshooting.
-- [Character accuracy](docs/accuracy.md) — how accurate the OCR is, why, and
+- [Character accuracy](docs/accuracy.md): how accurate the OCR is, why, and
   where the limits are. Start here if you want to know whether to trust a popup.
-- [Architecture](docs/architecture.md) — runtime boundaries, GPU pipeline, and
+- [Architecture](docs/architecture.md): runtime boundaries, GPU pipeline, and
   latency.
-- [Model setup and provenance](docs/models.md) — the OCR models and their
+- [Model setup and provenance](docs/models.md): the OCR models and their
   trade-offs.
-- [Performance evidence guide](docs/performance.md) — how latency claims are
+- [Performance evidence guide](docs/performance.md): how latency claims are
   measured, with current reference numbers.
-- [Eval metadata policy](docs/eval-metadata.md) — which dictionary
+- [Eval metadata policy](docs/eval-metadata.md): which dictionary
   interpretation mite teaches when several are valid.
-- [Pure-GPU exploration notes](docs/future/pure-gpu.md) — exploratory, not
+- [Pure-GPU exploration notes](docs/future/pure-gpu.md): exploratory, not
   scheduled.
 - [Third-party notices](THIRD_PARTY_NOTICES.md) and
   [model manifest](model-manifest.json)

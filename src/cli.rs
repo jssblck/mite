@@ -12,6 +12,7 @@ use crate::{artifact, eval, eval_capture, hotkey, interactive, storage_cleanup};
 #[derive(Debug, Parser)]
 #[command(name = "mite")]
 #[command(about = "Local-first low-latency OCR overlay pipeline for Windows/NVIDIA systems.")]
+#[command(version = crate::version::VERSION)]
 struct Cli {
     #[arg(short, long, default_value = "mite.toml")]
     config: PathBuf,
@@ -125,7 +126,11 @@ enum Command {
         force: bool,
     },
     /// Probe the GPU and model files and report readiness.
-    Doctor,
+    Doctor {
+        /// Emit the readiness report as JSON (for the desktop app) instead of text.
+        #[arg(long)]
+        json: bool,
+    },
     /// List capturable windows (id, pid, geometry, title).
     ListWindows,
     /// Score one full image against manual eval labels.
@@ -186,7 +191,7 @@ pub fn run() -> Result<()> {
 
     match cli.command {
         Command::InitConfig { force } => cmd_init_config(&cli.config, force),
-        Command::Doctor => cmd_doctor(&cli.config, int8),
+        Command::Doctor { json } => cmd_doctor(&cli.config, int8, json),
         Command::ListWindows => cmd_list_windows(),
         Command::Eval {
             image,
@@ -243,9 +248,13 @@ fn cmd_init_config(config_path: &Path, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_doctor(config_path: &Path, int8: Int8Override) -> Result<()> {
+fn cmd_doctor(config_path: &Path, int8: Int8Override, json: bool) -> Result<()> {
     let report = DoctorReport::inspect(&load_or_default(config_path, int8)?);
-    print!("{}", report.render_text());
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print!("{}", report.render_text());
+    }
     Ok(())
 }
 

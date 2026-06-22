@@ -44,6 +44,10 @@ dictionary segmentation, or overlay presentation.
   and data that need explicit attribution or license awareness.
 - `eval\AGENTS.md` documents the private eval data submodule and how to manually
   load the data-specific annotation skill when that submodule is initialized.
+- `app\README.md` documents the desktop app: the "mite home" layout, the launch
+  contract, the shared design tokens, and the build/dev commands.
+- `docs\releases.md` documents tag-based versioning and the release pipeline that
+  the desktop app installs and updates from.
 - `LICENSE` is the repository license. `CLAUDE.md` files are intentionally bare
   `@AGENTS.md` imports of their sibling so agent guidance does not drift
   between agent surfaces; keep all real guidance in the `AGENTS.md` files.
@@ -198,6 +202,20 @@ Notes for changes here:
   manually authored labels.
 - `src/debug_capture.rs`, `src/artifact.rs`: self-contained diagnostic output.
 - `examples/`: profiling and lookup/sense stress harnesses.
+- `app/`: the Tauri desktop app (a separate, non-Rust-core surface) that
+  installs, updates, and launches the CLI for non-technical users. Rust backend
+  in `app/src-tauri/src/` (downloaders, `xcap` window picker, watch supervisor),
+  React + Vite frontend in `app/src/`. It manages a per-user "mite home" and
+  spawns the CLI with that as the working directory; it does not change CLI
+  behavior. See `app/README.md`.
+- `site/`: the Astro marketing site. Its `site/src/styles/tokens.css` and
+  `global.css` are the shared design source that `app/` also imports, so the app
+  and site stay visually cohesive.
+- `.github/workflows/release.yml`: the tag-driven (`v*`) release pipeline that
+  publishes `mite.exe`, the GPU runtime pack, the model manifest, the app
+  installer, and `release.json`. The app polls `release.json` to update the CLI.
+  Versioning is git-tag based (build.rs `git describe` into `MITE_VERSION`,
+  overridden by CI with the tag); see `docs/releases.md`.
 
 ## Development Rules
 

@@ -23,5 +23,6 @@ pub mod script;
 pub mod storage_cleanup;
 pub mod text_blocks;
 pub mod text_corrections;
+pub mod version;
 pub mod wgc_capture;
 pub mod win32_overlay;

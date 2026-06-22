@@ -1,0 +1,37 @@
+[package]
+name = "app"
+version = "0.0.0"
+description = "Mite desktop app: installs, updates, and launches the mite OCR overlay CLI."
+authors = ["Mite"]
+edition = "2021"
+
+# The reported app version is derived from git tags at build time by build.rs
+# (see the APP_VERSION env). Release CI rewrites tauri.conf.json's version with
+# the release tag for the installer; this placeholder keeps local builds happy.
+
+[lib]
+# The `_lib` suffix keeps the lib name distinct from the bin on Windows.
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# HTTP downloads (blocking; driven off the async executor via spawn_blocking).
+ureq = { version = "2", features = ["json"] }
+# Integrity + archive handling for the CLI binary, model archives, and GPU pack.
+sha2 = "0.10"
+hex = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# Window enumeration and live picker thumbnails. Pinned to the mite CLI's xcap
+# so the window id (an HWND) matches what `watch --window-id` consumes.
+xcap = "0.9.6"
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
+anyhow = "1"

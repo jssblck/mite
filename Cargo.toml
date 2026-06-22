@@ -1,6 +1,8 @@
 [package]
 name = "mite"
-version = "0.1.0"
+# Placeholder only. The reported version is derived from git tags at build time
+# by build.rs (see src/version.rs); release CI overrides it with the release tag.
+version = "0.0.0"
 edition = "2024"
 description = "Local-first low-latency OCR overlay pipeline for Windows/NVIDIA systems."
 license = "AGPL-3.0-only"

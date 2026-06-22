@@ -1,0 +1,415 @@
+name: Release
+
+# Build and publish mite releases to GitHub Releases.
+#
+# Triggered on version tags (v*). Builds the Windows CLI, the GPU runtime DLL
+# pack, and the Tauri desktop app installer, computes checksums, writes the
+# release.json update feed consumed by the desktop app, then creates a DRAFT
+# GitHub Release whose notes are generated from the pull requests merged since
+# the previous tag (--generate-notes, the "releases as changelog" pattern). The
+# draft is reviewed and published by hand.
+#
+# workflow_dispatch with dry_run builds and packages everything but does not
+# create a release, so the pipeline can be exercised without cutting a tag.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (build and package, but do not create a release)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history so git describe can find the previous tag on dry runs.
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG="${{ github.ref_name }}"
+            # Strip the leading v: v0.1.0 becomes 0.1.0.
+            VERSION="${TAG#v}"
+          elif [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            # Allow dry runs on any branch using git describe.
+            TAG="$(git describe --always --tags)"
+            VERSION="${TAG#v}"
+            echo "::notice::Dry run on a non-tag ref; using git describe version: $TAG"
+          else
+            echo "::error::Release must be triggered by a version tag (v*)"
+            exit 1
+          fi
+
+          # Anything that is not a bare X.Y.Z (a pre-release suffix, or a
+          # non-semver describe string) is treated as a prerelease.
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            PRERELEASE=false
+          else
+            PRERELEASE=true
+          fi
+
+          {
+            echo "tag=${TAG}"
+            echo "version=${VERSION}"
+            echo "prerelease=${PRERELEASE}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing ${TAG} (version ${VERSION}, prerelease ${PRERELEASE})"
+
+  build-cli:
+    name: Build CLI
+    needs: prepare
+    runs-on: windows-latest
+    env:
+      # Pin the binary's reported --version to the release tag so it is correct
+      # regardless of clone depth. build.rs honors this override.
+      MITE_VERSION: ${{ needs.prepare.outputs.tag }}
+      # The GPU runtime DLLs ship as their own asset (mite-gpu-runtime-win64.zip),
+      # so do not let build.rs stage them next to the exe in this job.
+      MITE_SKIP_GPU_RUNTIME_STAGE: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install stable Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-cli
+
+      - name: Build mite.exe
+        run: cargo build --release --bin mite
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli
+          path: target/release/mite.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  build-gpu-runtime:
+    name: Build GPU runtime pack
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        shell: pwsh
+        run: |
+          # bootstrap-dev.ps1 -GpuRuntimeOnly drives uv to fetch the pinned
+          # TensorRT/CUDA/cuDNN wheels and copy their DLLs into .gpu-runtime\bin.
+          python -m pip install --upgrade uv
+
+      - name: Materialize GPU runtime DLL cache
+        shell: pwsh
+        run: |
+          # -SkipDriverCheck because GitHub runners have no NVIDIA GPU; the wheel
+          # download and DLL copy do not need a live driver.
+          pwsh scripts\bootstrap-dev.ps1 -GpuRuntimeOnly -SkipDriverCheck
+
+      - name: Package GPU runtime pack
+        shell: pwsh
+        run: |
+          $bin = ".gpu-runtime\bin"
+          if (-not (Test-Path $bin)) {
+            throw "GPU runtime bin directory not found at $bin; bootstrap-dev.ps1 -GpuRuntimeOnly did not produce the DLL cache."
+          }
+          $dlls = Get-ChildItem -Path $bin -Filter "*.dll" -File
+          if (-not $dlls) {
+            throw "GPU runtime bin directory contains no DLLs: $bin"
+          }
+          # Zip the DLLs at the archive root (the contents of bin, not the bin
+          # folder itself) so consumers extract DLLs directly.
+          Compress-Archive -Path (Join-Path $bin "*") -DestinationPath "mite-gpu-runtime-win64.zip" -Force
+          Write-Host "Packed $($dlls.Count) DLL(s) into mite-gpu-runtime-win64.zip"
+
+      - name: Upload GPU runtime artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: gpu-runtime
+          path: mite-gpu-runtime-win64.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  build-app:
+    name: Build desktop app installer
+    needs: prepare
+    runs-on: windows-latest
+    # The Tauri app under ./app is built in parallel and may not be fully
+    # buildable yet. Surface failures clearly, but do not let a build-in-progress
+    # app block the rest of the release pipeline.
+    continue-on-error: true
+    env:
+      # The app reads its version through the same MITE_VERSION override.
+      MITE_VERSION: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check for app directory
+        id: app
+        shell: pwsh
+        run: |
+          if (Test-Path "app\src-tauri") {
+            "present=true" >> $env:GITHUB_OUTPUT
+          } else {
+            "present=false" >> $env:GITHUB_OUTPUT
+            Write-Host "::warning::app\src-tauri not found; skipping desktop app installer build."
+          }
+
+      - name: Install stable Rust
+        if: steps.app.outputs.present == 'true'
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+
+      - name: Setup Rust cache
+        if: steps.app.outputs.present == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+          shared-key: release-app
+
+      - name: Install bun
+        if: steps.app.outputs.present == 'true'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install app dependencies
+        if: steps.app.outputs.present == 'true'
+        working-directory: app
+        run: bun install
+
+      - name: Build Tauri app
+        if: steps.app.outputs.present == 'true'
+        working-directory: app
+        # The Tauri CLI is a dev dependency, so the package.json tauri script
+        # drives the bundle. Tauri reads its version from tauri.conf.json; the
+        # MITE_VERSION env above is passed through for the app build.rs/config.
+        run: bun run tauri build
+
+      - name: Collect installers
+        if: steps.app.outputs.present == 'true'
+        shell: pwsh
+        run: |
+          $bundle = "app\src-tauri\target\release\bundle"
+          New-Item -ItemType Directory -Force -Path "installers" | Out-Null
+          # Collect whatever installer artifacts exist; do not hard-fail if only
+          # one of nsis/msi is produced.
+          $found = @(
+            Get-ChildItem -Path $bundle -Recurse -File -Include "*.exe", "*.msi" -ErrorAction SilentlyContinue
+          )
+          if (-not $found) {
+            throw "No NSIS (.exe) or MSI (.msi) installer found under $bundle."
+          }
+          foreach ($f in $found) {
+            Copy-Item -LiteralPath $f.FullName -Destination "installers" -Force
+            Write-Host "Collected installer: $($f.Name)"
+          }
+
+      - name: Upload installer artifact
+        if: steps.app.outputs.present == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: installer
+          path: installers/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Release
+    needs: [prepare, build-cli, build-gpu-runtime, build-app]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download CLI artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: cli
+          path: assets
+
+      - name: Download GPU runtime artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: gpu-runtime
+          path: assets
+
+      - name: Download installer artifact
+        # The desktop app job may have failed (it is allowed to during
+        # development), so do not require its artifact to be present.
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: installer
+          path: assets
+
+      - name: Stage model manifest
+        shell: pwsh
+        run: |
+          # Ship the repo's model manifest as-is so the app can resolve model
+          # download URLs and checksums for this release.
+          Copy-Item -LiteralPath "model-manifest.json" -Destination "assets\model-manifest.json" -Force
+
+      - name: Generate release.json and SHA256SUMS
+        shell: pwsh
+        run: |
+          $tag = "${{ needs.prepare.outputs.tag }}"
+          $assetsDir = "assets"
+
+          function Get-Hash([string]$path) {
+            return (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+          }
+
+          # Required assets.
+          $cliPath = Join-Path $assetsDir "mite.exe"
+          $gpuPath = Join-Path $assetsDir "mite-gpu-runtime-win64.zip"
+          if (-not (Test-Path $cliPath)) { throw "Missing required asset: mite.exe" }
+          if (-not (Test-Path $gpuPath)) { throw "Missing required asset: mite-gpu-runtime-win64.zip" }
+
+          # The installer is optional while the desktop app is still in
+          # development. Pick the first .exe or .msi installer if one exists.
+          $installer = Get-ChildItem -Path $assetsDir -File -Include "*.exe", "*.msi" |
+            Where-Object { $_.Name -ne "mite.exe" } |
+            Sort-Object Name |
+            Select-Object -First 1
+
+          # release.json: the feed the desktop app polls for updates.
+          $release = [ordered]@{
+            version = $tag
+            cli = [ordered]@{
+              asset = "mite.exe"
+              sha256 = Get-Hash $cliPath
+            }
+            gpuRuntime = [ordered]@{
+              asset = "mite-gpu-runtime-win64.zip"
+              sha256 = Get-Hash $gpuPath
+            }
+            modelManifest = [ordered]@{
+              asset = "model-manifest.json"
+            }
+          }
+          if ($installer) {
+            $release.installer = [ordered]@{
+              asset = $installer.Name
+              sha256 = Get-Hash $installer.FullName
+            }
+          } else {
+            Write-Host "::warning::No installer asset present; release.json will omit the installer entry."
+          }
+
+          $release | ConvertTo-Json -Depth 6 |
+            Set-Content -LiteralPath (Join-Path $assetsDir "release.json") -Encoding UTF8
+
+          # SHA256SUMS: sha256 + filename for every published asset.
+          $lines = foreach ($f in (Get-ChildItem -Path $assetsDir -File | Sort-Object Name)) {
+            "$(Get-Hash $f.FullName)  $($f.Name)"
+          }
+          $lines | Set-Content -LiteralPath (Join-Path $assetsDir "SHA256SUMS") -Encoding ascii
+
+          Write-Host "Staged assets:"
+          Get-ChildItem -Path $assetsDir -File | ForEach-Object { Write-Host "  $($_.Name)" }
+          Write-Host ""
+          Write-Host "SHA256SUMS:"
+          Get-Content -LiteralPath (Join-Path $assetsDir "SHA256SUMS")
+
+      - name: Create draft GitHub release
+        if: ${{ !inputs.dry_run }}
+        shell: pwsh
+        run: |
+          $tag = "${{ needs.prepare.outputs.tag }}"
+          $prerelease = "${{ needs.prepare.outputs.prerelease }}"
+
+          # Stable releases are marked latest; everything else is a prerelease.
+          $channel = if ($prerelease -eq "true") { "--prerelease" } else { "--latest" }
+
+          # Attach every staged asset (the installer is included when present).
+          $assets = Get-ChildItem -Path "assets" -File | ForEach-Object { $_.FullName }
+
+          gh release create "$tag" `
+            --draft `
+            --generate-notes `
+            $channel `
+            --title "$tag" `
+            @assets
+
+      - name: Write release summary
+        if: ${{ !inputs.dry_run }}
+        shell: pwsh
+        run: |
+          $tag = "${{ needs.prepare.outputs.tag }}"
+          $summary = @()
+          $summary += "## Draft release created: $tag"
+          $summary += ""
+          $summary += "A draft release was created with auto-generated notes (the merged PRs since the previous tag)."
+          $summary += ""
+          $summary += "### Next steps"
+          $summary += ""
+          $summary += "1. Review the draft release at https://github.com/${{ github.repository }}/releases"
+          $summary += "2. Edit the generated notes if needed"
+          $summary += "3. Publish when ready"
+          $summary += ""
+          $summary += "### SHA256SUMS"
+          $summary += ""
+          $summary += '```'
+          $summary += (Get-Content -LiteralPath "assets\SHA256SUMS")
+          $summary += '```'
+          $summary -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: Write dry run summary
+        if: ${{ inputs.dry_run }}
+        shell: pwsh
+        run: |
+          $tag = "${{ needs.prepare.outputs.tag }}"
+          $summary = @()
+          $summary += "## Dry run: $tag"
+          $summary += ""
+          $summary += "No release was created. This was a dry run."
+          $summary += ""
+          $summary += "### Staged assets"
+          $summary += ""
+          $summary += '```'
+          $summary += (Get-ChildItem -Path "assets" -File | ForEach-Object { $_.Name })
+          $summary += '```'
+          $summary += ""
+          $summary += "### SHA256SUMS"
+          $summary += ""
+          $summary += '```'
+          $summary += (Get-Content -LiteralPath "assets\SHA256SUMS")
+          $summary += '```'
+          $summary -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
