@@ -1,76 +1,53 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Claude Code cloud environment setup for mite.
+#
+# Runs as root on Ubuntu 24.04 before the session starts, per
+# https://code.claude.com/docs/en/claude-code-on-the-web#setup-scripts
+# Point an environment's Setup script at:  bash scripts/setup-claude-env.sh
+#
+# IMPORTANT: mite is a Windows-first project. The capture/overlay path depends on
+# the `windows` crate and `xcap` (Direct3D / Windows Graphics Capture), and CI
+# runs on windows-latest. A full `cargo build` will likely NOT compile on a Linux
+# cloud container. This script therefore only fetches crates (so the lookup core
+# can be built in-session) and does NOT run a full build, which would also risk
+# the ~5-minute setup-cache timeout given mite's large dependency tree (ort,
+# aws-lc, lindera, image). The GPU/model runtime and the private eval submodule
+# are intentionally not fetched.
+# Idempotent and cached; safe to re-run.
 
-# setup-claude-env.sh
-#
-# Provision a fresh Claude Code cloud environment for mite.
-# Targets a Debian/Ubuntu Linux container that starts with nothing installed.
-# Idempotent: safe to re-run. Invoke as: ./scripts/setup-claude-env.sh
-#
-# IMPORTANT: mite is a Windows-first project. The capture/overlay path depends
-# on the `windows` crate and `xcap` (Direct3D / Windows Graphics Capture), and
-# CI runs on windows-latest. On a Linux container the lookup/segmentation core
-# may build, but a full `cargo build` can fail on the Windows-only crates. This
-# script installs the toolchain and dependencies and attempts a build, but it
-# treats build failure as a warning rather than aborting, so the environment
-# still provisions. The GPU/model runtime (TensorRT/CUDA) is never fetched here;
-# unit tests and the lookup core run without a GPU or models.
-#
-# What it does:
-#   - installs build tooling (git, build-essential, pkg-config, libssl-dev)
-#   - installs the Rust stable toolchain
-#   - creates the runtime model/cache directories
-#   - fetches dependencies and attempts to warm the build (non-fatal)
-#
-# Optional, not done here (needs SSH + Git LFS + real data):
-#   - eval submodule:  git submodule update --init eval
-#   - OCR models:       see model-manifest.json / docs
+set -uo pipefail
 
-GREEN='\033[0;32m'; YELLOW='\033[0;33m'; NC='\033[0m'
-log()  { printf "${GREEN}==>${NC} %s\n" "$1"; }
-warn() { printf "${YELLOW}warn:${NC} %s\n" "$1" >&2; }
+log()  { printf '==> %s\n' "$1"; }
+warn() { printf 'warn: %s\n' "$1" >&2; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-SUDO=""
-if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then SUDO="sudo"; fi
-
-apt_install() {
-  if ! command -v apt-get >/dev/null 2>&1; then
-    warn "apt-get not found; please install manually: $*"
-    return 0
-  fi
-  $SUDO apt-get update -y
-  $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"
+persist_path() {
+  [ -n "${CLAUDE_ENV_FILE:-}" ] || return 0
+  printf 'export PATH="%s:$PATH"\n' "$1" >> "$CLAUDE_ENV_FILE"
 }
 
-log "Installing system build dependencies"
-apt_install git build-essential pkg-config libssl-dev ca-certificates curl
-
 if ! command -v cargo >/dev/null 2>&1; then
-  log "Installing Rust (stable)"
+  log "cargo not found; installing Rust via rustup"
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-    | sh -s -- -y --default-toolchain stable --profile minimal
+    | sh -s -- -y --default-toolchain stable --profile minimal || warn "rustup install failed"
+  # shellcheck disable=SC1091
+  . "$HOME/.cargo/env" 2>/dev/null || true
+  persist_path "$HOME/.cargo/bin"
 fi
-# shellcheck disable=SC1091
-. "$HOME/.cargo/env"
-rustup component add clippy rustfmt >/dev/null 2>&1 || warn "could not add clippy/rustfmt"
+command -v rustup >/dev/null 2>&1 && { rustup component add clippy rustfmt >/dev/null 2>&1 || true; }
 
 log "Creating runtime directories (models/, cache/engines/)"
-mkdir -p models cache/engines
+mkdir -p models cache/engines || true
 
-log "Fetching dependencies"
-cargo fetch --locked || cargo fetch
+log "Fetching crates (the lookup core can then be built in-session)"
+cargo fetch --locked || cargo fetch || warn "cargo fetch failed (check the environment's network access level)"
 
-log "Attempting to warm the build (non-fatal: mite is Windows-first)"
-if cargo build --all-targets; then
-  log "Build succeeded on this platform"
-else
-  warn "cargo build did not complete on Linux. This is expected if the Windows-only"
-  warn "crates (windows, xcap) are reached. mite is intended for local Windows dev;"
-  warn "the lookup/segmentation core and its unit tests may still build and run."
-fi
+warn "Skipping 'cargo build': mite is Windows-first, so a full Linux build will likely"
+warn "fail on the windows/xcap crates, and the heavy dep tree risks the setup timeout."
+warn "Build the platform-independent lookup core in-session, e.g. 'cargo build --lib'."
 
-log "mite environment ready (see notes above for GPU/model and eval-data setup)"
+log "mite environment ready (crates fetched; see notes above for GPU/model and eval-data setup)"
+exit 0
