@@ -39,6 +39,13 @@ from the release's `model-manifest.json` (the same manifest, URLs, and SHA256s
 that `scripts\bootstrap-dev.ps1` uses). It does not download the NVIDIA runtime:
 that is user-installed (see below). See [docs/releases.md](../docs/releases.md).
 
+The app and the engine update in lockstep, app-first: the app prompts to update
+itself before anything else, and the engine it installs is the newest release
+within the app's own caret/semver range (a `0.2.0` app takes engine `0.2.x` but
+never `0.3.0`), not always-latest. When the installed engine is older than or
+outside that range, the app reconciles it on startup with no prompt. See
+[docs/releases.md](../docs/releases.md) for the full model.
+
 ## NVIDIA runtime setup
 
 Mite's GPU pipeline needs NVIDIA runtime libraries (TensorRT, the CUDA runtime,
@@ -139,10 +146,10 @@ the whole repo (CLI and app), published together in a single GitHub release.
 
 ## App self-update (signed, free)
 
-The app updates itself with `tauri-plugin-updater`. This is separate from the
-"Update engine" control, which updates the mite CLI: the updater here replaces
-the app shell. It uses Tauri's own minisign signature (not Authenticode), which
-is free and unrelated to a code-signing certificate.
+The app updates itself with `tauri-plugin-updater`. This is separate from (and
+takes priority over) the engine reconcile, which installs the mite CLI: the
+updater here replaces the app shell. It uses Tauri's own minisign signature (not
+Authenticode), which is free and unrelated to a code-signing certificate.
 
 How it fits together:
 
@@ -150,9 +157,14 @@ How it fits together:
   `latest.json`) and the minisign **public** key.
 - The release workflow signs each installer with the matching **private** key
   and publishes `latest.json` (version, notes, signed download URL) alongside the
-  installer. The app polls that file, downloads the next installer, verifies it
-  against the public key, installs it, and offers a relaunch (Settings -> App
-  updates).
+  installer. The app polls that file on launch and, when a newer signed build
+  exists, shows a priority banner ("Update Mite") that downloads the next
+  installer, verifies it against the public key, installs it, and relaunches. The
+  same control is also available on demand in Settings -> App version.
+- The engine then follows: the relaunched app pulls the engine matching its new
+  version's caret range automatically (see the lockstep model in
+  [docs/releases.md](../docs/releases.md)). So the user-facing order is always
+  app-first, engine-after, with only the app step prompted.
 
 ### One-time key setup
 

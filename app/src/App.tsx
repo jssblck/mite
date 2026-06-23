@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, onWatchState, type AppStatus } from "./lib/api";
+import { useAppUpdate } from "./lib/useAppUpdate";
+import { useEngineReconcile } from "./lib/useEngineReconcile";
 import { MiteMark } from "./components/MiteMark";
+import { AppUpdateBanner } from "./components/AppUpdateBanner";
+import { EngineReconcileNotice } from "./components/EngineReconcileNotice";
 import { SetupWizard } from "./views/SetupWizard";
 import { RuntimeSetup } from "./views/RuntimeSetup";
 import { Dashboard } from "./views/Dashboard";
@@ -23,6 +27,14 @@ function App() {
       setLoading(false);
     }
   }, []);
+
+  // Once the core install is ready, drive the two update clocks: prompt for the
+  // app's own signed update first (it takes priority), and silently reconcile the
+  // engine to the version this app build wants. Gated on `ready` so neither runs
+  // during first-time setup; both no-op under `tauri dev` (no updater runtime).
+  const ready = Boolean(status?.cliInstalled && status?.modelsReady);
+  const appUpdate = useAppUpdate(ready);
+  const engineReconcile = useEngineReconcile(ready, refresh);
 
   useEffect(() => {
     refresh();
@@ -65,7 +77,6 @@ function App() {
     );
   }
 
-  const ready = Boolean(status?.cliInstalled && status?.modelsReady);
   if (!ready || !status) {
     return (
       <SetupWizard
@@ -154,6 +165,11 @@ function App() {
         </button>
       </header>
       <main className="app-main">
+        <AppUpdateBanner state={appUpdate} />
+        {/* The app update takes priority; only nudge about the engine while no
+            app update is pending (after an app update the engine reconciles to
+            the new version anyway). */}
+        {!appUpdate.pending && <EngineReconcileNotice state={engineReconcile} />}
         {view === "dashboard" && (
           <Dashboard
             status={status}

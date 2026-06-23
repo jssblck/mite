@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { api, type AppStatus, type UpdateInfo } from "../lib/api";
+import { useEffect } from "react";
+import { type AppStatus } from "../lib/api";
 
 interface DashboardProps {
   status: AppStatus;
@@ -43,14 +43,6 @@ export function Dashboard({
   onWatch,
   onSetupGpu,
 }: DashboardProps) {
-  const [update, setUpdate] = useState<UpdateInfo | null>(null);
-  const [updating, setUpdating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    api.checkForUpdates().then(setUpdate).catch(() => setUpdate(null));
-  }, []);
-
   // Auto-refresh the install status while the Dashboard is on screen (it only
   // mounts when its tab is active). Debounced so a slow probe never overlaps the
   // next tick, paused while the window is hidden, and re-run on regaining focus.
@@ -95,39 +87,8 @@ export function Dashboard({
   // An NVIDIA GPU is present but not at the fastest path: setup can still help.
   const needsGpuSetup = Boolean(gpu?.available) && tier !== "tensor_rt";
 
-  async function updateCli() {
-    setUpdating(true);
-    setError(null);
-    try {
-      await api.installOrUpdateCli();
-      const fresh = await api.checkForUpdates();
-      setUpdate(fresh);
-      onRefresh();
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setUpdating(false);
-    }
-  }
-
   return (
     <div>
-      {update?.cliUpdateAvailable && (
-        <div className="banner">
-          <span className="banner-text">
-            A newer mite engine is available
-            {update.latestCli ? ` (${update.latestCli})` : ""}.
-          </span>
-          <button
-            className="btn btn-sm btn-primary"
-            onClick={updateCli}
-            disabled={updating}
-          >
-            {updating ? "Updating..." : "Update"}
-          </button>
-        </div>
-      )}
-
       <div className="card">
         <div className="card-title">Status</div>
         <Stat
@@ -161,7 +122,6 @@ export function Dashboard({
             detail={firstSentence(doctor.warnings[0])}
           />
         )}
-        {error && <div className="error-text">{error}</div>}
         <div className="btn-row">
           <button className="btn btn-primary" onClick={onWatch}>
             {watching ? "Go to watch" : "Start watching"}
