@@ -30,18 +30,36 @@ pub fn run() {
     // three are desktop-only, which matches this Windows-only app.
     #[cfg(desktop)]
     {
+        use tauri_plugin_window_state::StateFlags;
+
         builder = builder
             .plugin(tauri_plugin_updater::Builder::new().build())
             .plugin(tauri_plugin_process::init())
-            .plugin(tauri_plugin_window_state::Builder::default().build());
+            .plugin(
+                tauri_plugin_window_state::Builder::default()
+                    // Restore size and position, but never the visibility flag.
+                    // The window is created hidden and revealed only after the
+                    // frontend paints its first (already-dark) frame, which is
+                    // what removes the blank white startup flash. Letting the
+                    // plugin restore VISIBLE would re-show the blank window early
+                    // on later launches and defeat that.
+                    .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
+                    .build(),
+            );
     }
 
     builder
         .setup(|app| {
-            // On the first launch there is no saved window state to restore, so
-            // size the window to the screen instead of the small config default.
             #[cfg(desktop)]
-            apply_first_run_window_size(app);
+            {
+                // On the first launch there is no saved window state to restore,
+                // so size the window to the screen instead of the small config
+                // default. This runs while the window is still hidden, so the
+                // user never sees the resize.
+                apply_first_run_window_size(app);
+                // Safety net in case the frontend never asks to be shown.
+                schedule_window_show_fallback(app);
+            }
             Ok(())
         })
         .manage(WatchState::default())
@@ -101,4 +119,30 @@ fn apply_first_run_window_size(app: &tauri::App) {
     let (width, height) = window::pick_window_size(screen.width, screen.height);
     let _ = main.set_size(tauri::LogicalSize::new(width, height));
     let _ = main.center();
+}
+
+/// Reveal the main window after a grace period if the frontend never does.
+///
+/// The window is created hidden (`visible: false` in `tauri.conf.json`) and is
+/// normally revealed by the frontend the moment it has painted its first frame
+/// (see `app/src/main.tsx`). Painting first, showing second is what removes the
+/// blank white default-position window Tauri would otherwise flash before the
+/// dark UI mounts. If the frontend fails to load and never makes that call, this
+/// fallback shows the window anyway so the user is never left staring at nothing.
+#[cfg(desktop)]
+fn schedule_window_show_fallback(app: &tauri::App) {
+    use tauri::Manager;
+
+    let Some(main) = app.get_webview_window("main") else {
+        return;
+    };
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        // Only force it visible if the frontend has not already done so, to avoid
+        // stealing focus back from the user seconds after a normal startup.
+        if !matches!(main.is_visible(), Ok(true)) {
+            let _ = main.show();
+            let _ = main.set_focus();
+        }
+    });
 }
