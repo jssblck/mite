@@ -16,7 +16,7 @@ anyhow = "1.0.102"
 base64 = "0.22"
 clap = { version = "4.6.1", features = ["derive"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
-lindera = { version = "3.0.7", features = ["embed-ipadic"] }
+lindera = { version = "4.0.0", features = ["embed-ipadic"] }
 ort = { version = "2.0.0-rc.12", features = ["cuda", "tensorrt"] }
 rayon = "1.12.0"
 serde = { version = "1.0.228", features = ["derive"] }
