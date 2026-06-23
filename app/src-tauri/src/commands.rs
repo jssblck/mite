@@ -50,14 +50,61 @@ fn emit_progress(app: &AppHandle, task: &str, file: &str, received: u64, total: 
     );
 }
 
+/// How the installed engine relates to the engine this app build wants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineState {
+    /// The newest compatible engine is installed; nothing to do.
+    Ok,
+    /// A newer engine within the app's compatible range is available.
+    Update,
+    /// The engine is missing or outside the app's compatible range (for example
+    /// the app self-updated past it); it must be reconciled before mite runs.
+    Required,
+    /// The target engine could not be resolved (offline, or no compatible
+    /// release found); don't act on it.
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateInfo {
-    pub current_cli: Option<String>,
-    pub latest_tag: Option<String>,
-    pub latest_cli: Option<String>,
-    pub cli_update_available: bool,
     pub app_version: String,
+    /// The installed engine version, if the CLI is present.
+    pub current_cli: Option<String>,
+    /// The engine version this app build should run (newest compatible).
+    pub target_cli: Option<String>,
+    /// The release tag the target engine comes from.
+    pub target_tag: Option<String>,
+    pub engine_state: EngineState,
+}
+
+/// Classify the installed engine against the target (newest compatible) engine.
+///
+/// Pure so it can be unit tested without a release feed. `app_version` is used to
+/// decide whether the *installed* engine is still inside the app's caret range:
+/// when it is not (e.g. the app self-updated to a new minor), reconciling is
+/// required rather than a mere optional update.
+fn engine_state(app_version: &str, current: Option<&str>, target: Option<&str>) -> EngineState {
+    let Some(target) = target.and_then(release::parse_version) else {
+        return EngineState::Unknown;
+    };
+    let Some(current) = current else {
+        return EngineState::Required;
+    };
+    let Some(current) = release::parse_version(current) else {
+        return EngineState::Required;
+    };
+    if let Some(req) = release::engine_requirement(app_version) {
+        if !req.matches(&current) {
+            return EngineState::Required;
+        }
+    }
+    if current < target {
+        EngineState::Update
+    } else {
+        EngineState::Ok
+    }
 }
 
 #[tauri::command]
@@ -80,23 +127,22 @@ pub async fn get_status() -> Result<AppStatus, String> {
 #[tauri::command]
 pub async fn check_for_updates() -> Result<UpdateInfo, String> {
     blocking(|| {
+        let app_version = env!("APP_VERSION").to_string();
         let current_cli = cli::installed_version();
-        let latest = release::fetch_latest().ok();
-        let latest_tag = latest.as_ref().map(|rel| rel.tag.clone());
-        let latest_cli = latest.as_ref().map(|rel| rel.manifest.version.clone());
-        let cli_update_available = match (&current_cli, &latest_cli) {
-            (Some(current), Some(latest)) => {
-                normalize_version(current) != normalize_version(latest)
-            }
-            (None, Some(_)) => true,
-            _ => false,
-        };
+        // Resolve the engine compatible with this app build, not always-latest.
+        let resolved = release::resolve_engine_release(&app_version).ok().flatten();
+        let target_tag = resolved.as_ref().map(|rel| rel.tag.clone());
+        let target_cli = resolved
+            .as_ref()
+            .map(|rel| normalize_version(&rel.manifest.version).to_string());
+        let engine_state =
+            engine_state(&app_version, current_cli.as_deref(), target_cli.as_deref());
         Ok(UpdateInfo {
+            app_version,
             current_cli,
-            latest_tag,
-            latest_cli,
-            cli_update_available,
-            app_version: env!("APP_VERSION").to_string(),
+            target_cli,
+            target_tag,
+            engine_state,
         })
     })
     .await
@@ -105,7 +151,10 @@ pub async fn check_for_updates() -> Result<UpdateInfo, String> {
 #[tauri::command]
 pub async fn install_or_update_cli(app: AppHandle) -> Result<(), String> {
     blocking(move || {
-        let rel = release::fetch_latest()?;
+        let app_version = env!("APP_VERSION");
+        let rel = release::resolve_engine_release(app_version)?.ok_or_else(|| {
+            anyhow::anyhow!("no engine release compatible with app {app_version} was found")
+        })?;
         let url = rel
             .asset_url(&rel.manifest.cli.asset)
             .ok_or_else(|| anyhow::anyhow!("release is missing {}", rel.manifest.cli.asset))?;
@@ -125,7 +174,12 @@ pub async fn install_or_update_cli(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn download_models(app: AppHandle) -> Result<(), String> {
     blocking(move || {
-        let rel = release::fetch_latest()?;
+        let app_version = env!("APP_VERSION");
+        // Models are versioned with the engine, so pin them to the same
+        // compatible release the engine comes from.
+        let rel = release::resolve_engine_release(app_version)?.ok_or_else(|| {
+            anyhow::anyhow!("no engine release compatible with app {app_version} was found")
+        })?;
         let manifest_url = rel
             .asset_url(&rel.manifest.model_manifest.asset)
             .ok_or_else(|| {
@@ -287,4 +341,75 @@ pub async fn uninstall_data() -> Result<(), String> {
         Ok(())
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn engine_ok_when_newest_compatible_is_installed() {
+        assert_eq!(
+            engine_state("v0.2.0", Some("0.2.0"), Some("0.2.0")),
+            EngineState::Ok
+        );
+        // A newer-but-still-compatible target with current already there is Ok.
+        assert_eq!(
+            engine_state("v0.2.1", Some("0.2.1"), Some("0.2.1")),
+            EngineState::Ok
+        );
+    }
+
+    #[test]
+    fn engine_update_when_newer_compatible_exists() {
+        assert_eq!(
+            engine_state("v0.2.0", Some("0.2.0"), Some("0.2.1")),
+            EngineState::Update
+        );
+    }
+
+    #[test]
+    fn engine_required_when_installed_is_out_of_range() {
+        // The classic case: the app self-updated to 0.2.0 but the engine is the
+        // old 0.1.0. 0.1.0 is outside ^0.2.0, so reconciling is required.
+        assert_eq!(
+            engine_state("v0.2.0", Some("0.1.0"), Some("0.2.0")),
+            EngineState::Required
+        );
+        // An engine ahead of the app's range is equally incompatible.
+        assert_eq!(
+            engine_state("v0.2.0", Some("0.3.0"), Some("0.2.0")),
+            EngineState::Required
+        );
+    }
+
+    #[test]
+    fn engine_required_when_missing() {
+        assert_eq!(
+            engine_state("v0.2.0", None, Some("0.2.0")),
+            EngineState::Required
+        );
+    }
+
+    #[test]
+    fn engine_unknown_when_target_unresolved() {
+        assert_eq!(
+            engine_state("v0.2.0", Some("0.2.0"), None),
+            EngineState::Unknown
+        );
+    }
+
+    #[test]
+    fn placeholder_app_version_compares_against_target_only() {
+        // Untagged local build (no caret pin): fall back to plain version compare
+        // against the latest target.
+        assert_eq!(
+            engine_state("0.0.0", Some("0.1.0"), Some("0.2.0")),
+            EngineState::Update
+        );
+        assert_eq!(
+            engine_state("0.0.0", Some("0.2.0"), Some("0.2.0")),
+            EngineState::Ok
+        );
+    }
 }

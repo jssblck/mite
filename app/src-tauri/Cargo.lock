@@ -53,6 +53,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "hex",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

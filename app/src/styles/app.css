@@ -697,6 +697,18 @@ body,
   font-size: 0.9rem;
   color: var(--color-ink-2);
 }
+/* Stacked layout for a banner that carries a progress bar under its text. */
+.banner .banner-text.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+/* Priority emphasis for the app's own update, which leads the engine reconcile. */
+.banner.banner-strong {
+  border-color: color-mix(in oklch, var(--color-accent) 70%, transparent);
+  background: oklch(0.83 0.115 78 / 0.16);
+}
 
 .error-text {
   color: var(--bad);

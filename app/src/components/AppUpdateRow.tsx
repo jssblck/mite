@@ -1,89 +1,20 @@
-import { useState } from "react";
-import { appUpdater, type AppUpdate } from "../lib/api";
+import { useAppUpdate } from "../lib/useAppUpdate";
 import { ProgressBar } from "./ProgressBar";
-
-type Phase =
-  | "idle"
-  | "checking"
-  | "available"
-  | "downloading"
-  | "ready"
-  | "uptodate"
-  | "error";
 
 interface AppUpdateRowProps {
   appVersion: string;
 }
 
 /**
- * Self-update control for the desktop app, rendered as a settings row. Checks
- * the release feed, and when a newer signed build exists, downloads and verifies
- * it, then offers a relaunch. This is separate from the "Update" control in the
- * Engine row, which updates the mite CLI.
+ * Manual self-update control for the desktop app, rendered as a settings row.
+ * Shares its lifecycle with the priority banner on the dashboard via
+ * `useAppUpdate`; this row is the on-demand entry point ("Check for updates")
+ * for when no banner is showing. Separate from the "Update" control in the
+ * Engine row, which reinstalls the mite CLI.
  */
 export function AppUpdateRow({ appVersion }: AppUpdateRowProps) {
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [update, setUpdate] = useState<AppUpdate | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [received, setReceived] = useState(0);
-  const [total, setTotal] = useState(0);
-
-  async function check() {
-    setPhase("checking");
-    setError(null);
-    try {
-      const found = await appUpdater.check();
-      if (found) {
-        setUpdate(found);
-        setPhase("available");
-      } else {
-        setPhase("uptodate");
-      }
-    } catch (err) {
-      setError(String(err));
-      setPhase("error");
-    }
-  }
-
-  async function install() {
-    if (!update) return;
-    setPhase("downloading");
-    setError(null);
-    setReceived(0);
-    setTotal(0);
-    let got = 0;
-    try {
-      await update.downloadAndInstall((event) => {
-        switch (event.event) {
-          case "Started":
-            got = 0;
-            setReceived(0);
-            setTotal(event.data.contentLength ?? 0);
-            break;
-          case "Progress":
-            got += event.data.chunkLength;
-            setReceived(got);
-            break;
-          case "Finished":
-            break;
-        }
-      });
-      setPhase("ready");
-    } catch (err) {
-      setError(String(err));
-      setPhase("error");
-    }
-  }
-
-  async function restart() {
-    setError(null);
-    try {
-      await appUpdater.relaunch();
-    } catch (err) {
-      setError(String(err));
-      setPhase("error");
-    }
-  }
+  const { phase, update, error, received, total, check, install, restart } =
+    useAppUpdate();
 
   const summary =
     phase === "available" && update

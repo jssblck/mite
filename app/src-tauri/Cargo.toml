@@ -29,6 +29,9 @@ tauri-plugin-process = "2"
 tauri-plugin-window-state = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Semver parsing for the app<->engine compatibility window. The app pulls the
+# newest engine within its own caret range, not always-latest.
+semver = "1"
 
 # HTTP downloads (blocking; driven off the async executor via spawn_blocking).
 ureq = { version = "2", features = ["json"] }
