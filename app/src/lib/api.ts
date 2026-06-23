@@ -89,6 +89,11 @@ export interface WindowSummary {
   height: number;
   x: number;
   y: number;
+  /**
+   * WGC thumbnail as a PNG data URL, captured by the CLI alongside the listing.
+   * Absent when the window could not be captured (the card shows a placeholder).
+   */
+  thumbnail?: string;
 }
 
 export interface DownloadProgress {
@@ -124,8 +129,6 @@ export const api = {
   pipAvailable: () => invoke<boolean>("pip_available"),
   writeDefaultConfig: () => invoke<void>("write_default_config"),
   listWindows: () => invoke<WindowSummary[]>("list_windows"),
-  captureThumbnail: (windowId: number, maxWidth: number) =>
-    invoke<string>("capture_thumbnail", { windowId, maxWidth }),
   startWatch: (windowId: number) => invoke<void>("start_watch", { windowId }),
   stopWatch: () => invoke<void>("stop_watch"),
   isWatching: () => invoke<boolean>("is_watching"),

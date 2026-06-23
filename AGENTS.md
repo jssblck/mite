@@ -93,6 +93,7 @@ Product commands:
 
 ```powershell
 cargo run -- list-windows
+cargo run -- list-windows --json --thumbnails   # what the desktop picker calls
 cargo run -- watch
 cargo run -- watch --title "Window title" --auto
 cargo run -- watch --hud
@@ -218,10 +219,15 @@ Notes for changes here:
 - `examples/`: profiling and lookup/sense stress harnesses.
 - `app/`: the Tauri desktop app (a separate, non-Rust-core surface) that
   installs, updates, and launches the CLI for non-technical users. Rust backend
-  in `app/src-tauri/src/` (downloaders, `xcap` window picker, watch supervisor),
+  in `app/src-tauri/src/` (downloaders, window picker, watch supervisor),
   React + Vite frontend in `app/src/`. It manages a per-user "mite home" and
   spawns the CLI with that as the working directory; it does not change CLI
-  behavior. See `app/README.md`.
+  behavior. The picker does not capture windows itself: it runs `mite
+  list-windows --json --thumbnails`, so thumbnails come from the same WGC engine
+  the watch path uses (no second capture implementation in the app), and the CLI
+  drops windows that are not viable watch targets (uncapturable, timed out,
+  blank, or a single solid colour) rather than returning a dead tile. See
+  `app/README.md`.
 - `site/`: the Astro marketing site. Its `site/src/styles/tokens.css` and
   `global.css` are the shared design source that `app/` also imports, so the app
   and site stay visually cohesive.

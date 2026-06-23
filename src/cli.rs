@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
+use rayon::prelude::*;
 
 use crate::capture::{WindowCapturePreference, WindowSelector, list_capturable_windows};
 use crate::config::{AppConfig, RuntimeBackend};
@@ -138,7 +139,24 @@ enum Command {
         json: bool,
     },
     /// List capturable windows (id, pid, geometry, title).
-    ListWindows,
+    ListWindows {
+        /// Emit the window list as JSON (for the desktop app) instead of text.
+        #[arg(long)]
+        json: bool,
+        /// Capture a live thumbnail of each window with the same WGC engine the
+        /// watch path uses (in parallel) and include it as a base64 PNG data URL.
+        /// Implies --json. GPU/DWM-composited apps (Discord, Chromium, games) that
+        /// a GDI grab returns black are captured correctly. Windows that are not
+        /// viable watch targets are dropped from the output entirely: a capture
+        /// that fails or times out (apps that block screen capture for privacy,
+        /// like Signal) or a frame that is a single solid colour (a blank or
+        /// capture-excluded surface).
+        #[arg(long)]
+        thumbnails: bool,
+        /// Long-edge cap, in pixels, for --thumbnails (clamped to 64..=1024).
+        #[arg(long, value_name = "PX", default_value_t = 360)]
+        thumbnail_max_width: u32,
+    },
     /// Score one full image against manual eval labels.
     Eval {
         #[arg(long)]
@@ -199,7 +217,11 @@ pub fn run() -> Result<()> {
     match cli.command {
         Command::InitConfig { force } => cmd_init_config(&cli.config, force),
         Command::Doctor { json } => cmd_doctor(&cli.config, int8, backend, json),
-        Command::ListWindows => cmd_list_windows(),
+        Command::ListWindows {
+            json,
+            thumbnails,
+            thumbnail_max_width,
+        } => cmd_list_windows(json, thumbnails, thumbnail_max_width),
         Command::Eval {
             image,
             labels,
@@ -272,19 +294,237 @@ fn cmd_doctor(
     Ok(())
 }
 
-fn cmd_list_windows() -> Result<()> {
-    for window in list_capturable_windows()? {
-        let label = if window.title.is_empty() {
-            window.app_name
-        } else {
-            window.title
-        };
-        println!(
-            "{} | pid={} | {}x{} @ {},{} | {}",
-            window.id, window.pid, window.width, window.height, window.x, window.y, label
+/// One window in the `--json` output. Field names are camelCase because the
+/// desktop app deserializes this directly into its picker model.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowListing {
+    id: u32,
+    pid: u32,
+    title: String,
+    app_name: String,
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    /// WGC thumbnail as a PNG data URL, present only with `--thumbnails` and only
+    /// for windows that captured successfully (a closed or protected window is
+    /// simply omitted, so the consumer shows a placeholder).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thumbnail: Option<String>,
+}
+
+impl WindowListing {
+    fn new(window: crate::capture::WindowInfo, thumbnail: Option<String>) -> Self {
+        Self {
+            id: window.id,
+            pid: window.pid,
+            title: window.title,
+            app_name: window.app_name,
+            width: window.width,
+            height: window.height,
+            x: window.x,
+            y: window.y,
+            thumbnail,
+        }
+    }
+}
+
+fn cmd_list_windows(json: bool, thumbnails: bool, thumbnail_max_width: u32) -> Result<()> {
+    // Thumbnails only make sense in the structured output the app consumes.
+    let json = json || thumbnails;
+    let windows = list_capturable_windows()?;
+
+    if !json {
+        for window in windows {
+            let label = if window.title.is_empty() {
+                window.app_name
+            } else {
+                window.title
+            };
+            println!(
+                "{} | pid={} | {}x{} @ {},{} | {}",
+                window.id, window.pid, window.width, window.height, window.x, window.y, label
+            );
+        }
+        return Ok(());
+    }
+
+    let listings: Vec<WindowListing> = if thumbnails {
+        // Capture every window's thumbnail at once. Each grab waits roughly one
+        // compositor frame, so doing them in parallel keeps a busy desktop's
+        // picker responsive instead of paying that wait once per window. A window
+        // we cannot get a usable frame from is not a viable watch target, so it is
+        // dropped from the list entirely rather than shown as a dead tile: this
+        // covers captures that fail or time out (apps that block screen capture
+        // for privacy, like Signal) and frames that come back a single solid
+        // colour (a blank or capture-excluded surface). The geometry and
+        // shell-surface exclusions already happened in `list_capturable_windows`.
+        //
+        // `into_par_iter().filter_map().collect()` keeps the title-sorted order.
+        let _mta = ensure_multithreaded_apartment();
+        windows
+            .into_par_iter()
+            .filter_map(
+                |window| match capture_thumbnail_data_url(&window, thumbnail_max_width) {
+                    Ok(thumbnail) => Some(WindowListing::new(window, Some(thumbnail))),
+                    Err(error) => {
+                        tracing::debug!(
+                            window_id = window.id,
+                            title = %window.title,
+                            "dropping non-viable window: {error:#}"
+                        );
+                        None
+                    }
+                },
+            )
+            .collect()
+    } else {
+        windows
+            .into_iter()
+            .map(|window| WindowListing::new(window, None))
+            .collect()
+    };
+    println!("{}", serde_json::to_string(&listings)?);
+    Ok(())
+}
+
+/// Keep the process in a multithreaded apartment for the lifetime of the
+/// returned cookie. WGC's WinRT calls require an initialized apartment; the watch
+/// path gets one implicitly on its single worker thread, but the parallel
+/// thumbnail capture runs on rayon threads that have none, so we establish a
+/// process-wide MTA they all default into. Best-effort: a failure just means a
+/// thread without its own apartment may fail to capture and fall out as `None`.
+fn ensure_multithreaded_apartment() -> Option<windows::Win32::System::Com::CO_MTA_USAGE_COOKIE> {
+    unsafe { windows::Win32::System::Com::CoIncrementMTAUsage().ok() }
+}
+
+/// Capture one frame of `window` via WGC (the same engine the watch path uses),
+/// downscale it so the long edge is at most `max_width`, and return it as a
+/// base64 PNG data URL ready for an `<img src>`.
+fn capture_thumbnail_data_url(
+    window: &crate::capture::WindowInfo,
+    max_width: u32,
+) -> Result<String> {
+    use base64::Engine;
+    use image::ImageEncoder;
+
+    if window.width == 0 || window.height == 0 {
+        bail!(
+            "window has no capturable area: {}x{}",
+            window.width,
+            window.height
         );
     }
-    Ok(())
+
+    // First-frame wait, tuned for a picker rather than the watch path's one-time
+    // 3 s: every capturable window observed delivers its first compositor frame
+    // well under half a second, so this is generous headroom for a slow one while
+    // still failing fast on windows that never deliver a frame at all (some apps,
+    // Signal among them, block screen capture for privacy and time out at any
+    // length). Captures run in parallel, so this bounds the whole batch; keeping
+    // it short keeps the picker's periodic refresh from stalling on such a window.
+    let mut session = crate::wgc_capture::WindowCaptureSession::new(
+        window.id,
+        window.width,
+        window.height,
+        Duration::from_millis(1000),
+    )?;
+    let (image, _stats) = session.capture_next()?;
+
+    let max_width = max_width.clamp(64, 1024);
+    let (width, height) = (image.width(), image.height());
+    let scaled = if width > max_width {
+        let new_height = ((height as f64) * (max_width as f64 / width as f64))
+            .round()
+            .max(1.0) as u32;
+        image::imageops::thumbnail(&*image, max_width, new_height)
+    } else {
+        (*image).clone()
+    };
+
+    // A frame that is a single solid colour carries no readable text and is not a
+    // viable watch target: a blank window, or one the compositor handed us as a
+    // flat fill because it excludes itself from capture. Drop it (the caller turns
+    // this error into "leave the window out of the list").
+    if is_solid_colour(&scaled) {
+        bail!("captured frame is a single solid colour");
+    }
+
+    let mut png: Vec<u8> = Vec::new();
+    image::codecs::png::PngEncoder::new(std::io::Cursor::new(&mut png))
+        .write_image(
+            scaled.as_raw(),
+            scaled.width(),
+            scaled.height(),
+            image::ExtendedColorType::Rgb8,
+        )
+        .context("encoding thumbnail PNG")?;
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&png);
+    Ok(format!("data:image/png;base64,{encoded}"))
+}
+
+/// Largest per-channel spread (max minus min over the whole frame) still treated
+/// as a single solid colour. A real window's text and chrome push every channel
+/// far past this; a blank or capture-excluded surface sits at ~0. Small but
+/// non-zero so downscaling and mild dithering on an otherwise-flat fill do not
+/// read as content.
+const SOLID_COLOUR_MAX_SPREAD: u8 = 8;
+
+/// Whether `image` is effectively one solid colour: every channel varies by at
+/// most [`SOLID_COLOUR_MAX_SPREAD`] across all pixels. Cheap on a thumbnail-sized
+/// frame and pure, so the policy is unit-tested without a live capture.
+fn is_solid_colour(image: &image::RgbImage) -> bool {
+    let raw = image.as_raw();
+    if raw.len() < 3 {
+        return true;
+    }
+    let mut min = [255u8; 3];
+    let mut max = [0u8; 3];
+    for pixel in raw.chunks_exact(3) {
+        for channel in 0..3 {
+            min[channel] = min[channel].min(pixel[channel]);
+            max[channel] = max[channel].max(pixel[channel]);
+        }
+    }
+    (0..3).all(|channel| max[channel] - min[channel] <= SOLID_COLOUR_MAX_SPREAD)
+}
+
+#[cfg(test)]
+mod list_windows_tests {
+    use super::*;
+
+    #[test]
+    fn flat_and_near_flat_frames_are_solid() {
+        // Pure black, pure white, and a flat mid-grey are all solid.
+        assert!(is_solid_colour(&image::RgbImage::from_pixel(
+            8,
+            8,
+            image::Rgb([0, 0, 0])
+        )));
+        assert!(is_solid_colour(&image::RgbImage::from_pixel(
+            8,
+            8,
+            image::Rgb([255, 255, 255])
+        )));
+        // A fill jittered within the tolerance still counts as solid.
+        let mut near_flat = image::RgbImage::from_pixel(4, 4, image::Rgb([40, 40, 40]));
+        near_flat.put_pixel(0, 0, image::Rgb([44, 44, 44]));
+        assert!(is_solid_colour(&near_flat));
+    }
+
+    #[test]
+    fn frames_with_real_content_are_not_solid() {
+        // One bright pixel on a black field is enough spread to be content.
+        let mut one_dot = image::RgbImage::from_pixel(8, 8, image::Rgb([0, 0, 0]));
+        one_dot.put_pixel(3, 3, image::Rgb([255, 255, 255]));
+        assert!(!is_solid_colour(&one_dot));
+
+        // A horizontal gradient is obviously not solid.
+        let gradient = image::RgbImage::from_fn(16, 4, |x, _| image::Rgb([(x * 16) as u8, 0, 0]));
+        assert!(!is_solid_colour(&gradient));
+    }
 }
 
 struct EvalCommand<'a> {

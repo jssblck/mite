@@ -59,7 +59,6 @@ pub fn run() {
             commands::pip_available,
             commands::write_default_config,
             commands::list_windows,
-            commands::capture_thumbnail,
             commands::start_watch,
             commands::stop_watch,
             commands::is_watching,
