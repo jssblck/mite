@@ -102,6 +102,13 @@ clocks, and the app's clock leads:
    matching engine on startup with no prompt, because which engine is correct is
    a consequence of which app version is running.
 
+   If no release satisfies the range, the app falls back to the release tagged
+   exactly its own version. This is what lets a prerelease app reach its matching
+   prerelease engine: prereleases are skipped by the rules above, so a
+   `0.3.0-rc.1` app would otherwise find nothing and instead pins to the
+   `v0.3.0-rc.1` engine. (An untagged `0.0.0` local build has no pin at all and
+   falls back to the latest release so dev installs still work.)
+
 Together these mean an old app never eagerly jumps to a breaking new engine: it
 updates itself first, and the relaunched app then reconciles the engine to the
 range it understands. The model files are versioned with the engine, so they are

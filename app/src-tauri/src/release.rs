@@ -113,14 +113,62 @@ pub fn engine_requirement(app_version: &str) -> Option<VersionReq> {
 
 /// Resolve the engine release this app build should run.
 ///
-/// For a real app version this is the newest published, non-draft, non-prerelease
-/// release whose tag satisfies the app's caret range. For the `0.0.0` placeholder
-/// (untagged local build) it falls back to the latest release.
+/// In order of preference: the newest published, non-draft, non-prerelease
+/// release whose tag satisfies the app's caret range; then, as a last resort, the
+/// release whose tag equals the app's own version exactly. That last step is what
+/// lets a prerelease app reach its corresponding prerelease engine: prereleases
+/// are excluded by the caret/non-prerelease rules above, so a `0.3.0-rc.1` app
+/// would otherwise find nothing, and instead pins to the `v0.3.0-rc.1` engine.
+///
+/// For the `0.0.0` placeholder (untagged local build) it falls back to the latest
+/// release so dev installs still work.
 pub fn resolve_engine_release(app_version: &str) -> Result<Option<ResolvedRelease>> {
-    match engine_requirement(app_version) {
-        Some(req) => fetch_compatible(&req),
-        None => Ok(Some(fetch_latest()?)),
+    if engine_requirement(app_version).is_none() {
+        // Untagged local build: no caret pin, use the latest release.
+        return Ok(Some(fetch_latest()?));
     }
+    let releases = list_releases()?;
+    for rel in engine_candidates(app_version, &releases) {
+        if let Some(resolved) = resolve_manifest(rel.clone())? {
+            return Ok(Some(resolved));
+        }
+    }
+    Ok(None)
+}
+
+/// The releases to try for this app version, best first: newest compatible
+/// (caret, non-draft, non-prerelease) releases, then the release matching the
+/// app's own version exactly as a fallback (prerelease-friendly). Pure so the
+/// selection order is unit tested without the network.
+fn engine_candidates<'a>(app_version: &str, releases: &'a [GhRelease]) -> Vec<&'a GhRelease> {
+    let mut out: Vec<&GhRelease> = Vec::new();
+
+    if let Some(req) = engine_requirement(app_version) {
+        let mut compatible: Vec<(Version, &GhRelease)> = releases
+            .iter()
+            .filter(|rel| !rel.draft && !rel.prerelease)
+            .filter_map(|rel| parse_version(&rel.tag_name).map(|v| (v, rel)))
+            .filter(|(v, _)| req.matches(v))
+            .collect();
+        // Newest compatible first.
+        compatible.sort_by(|a, b| b.0.cmp(&a.0));
+        out.extend(compatible.into_iter().map(|(_, rel)| rel));
+    }
+
+    // Fallback: the release whose tag is exactly the app's own version, including
+    // prereleases. Drafts stay excluded (they have no public download URL).
+    if let Some(app_v) = parse_version(app_version) {
+        if let Some(rel) = releases
+            .iter()
+            .find(|rel| !rel.draft && parse_version(&rel.tag_name).as_ref() == Some(&app_v))
+        {
+            if !out.iter().any(|existing| existing.tag_name == rel.tag_name) {
+                out.push(rel);
+            }
+        }
+    }
+
+    out
 }
 
 /// Resolve the latest published release and its manifest. Used as the dev/local
@@ -130,27 +178,6 @@ pub fn fetch_latest() -> Result<ResolvedRelease> {
     let release: GhRelease =
         download::get_json(&api).with_context(|| format!("querying latest release for {REPO}"))?;
     resolve_manifest(release)?.context("latest release is missing release.json")
-}
-
-/// The newest compatible release with a usable `release.json`, if any.
-fn fetch_compatible(req: &VersionReq) -> Result<Option<ResolvedRelease>> {
-    let releases = list_releases()?;
-    // Newest compatible first, so we settle on the highest version whose
-    // release.json actually resolves.
-    let mut candidates: Vec<(Version, GhRelease)> = releases
-        .into_iter()
-        .filter(|rel| !rel.draft && !rel.prerelease)
-        .filter_map(|rel| parse_version(&rel.tag_name).map(|v| (v, rel)))
-        .filter(|(v, _)| req.matches(v))
-        .collect();
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
-
-    for (_, rel) in candidates {
-        if let Some(resolved) = resolve_manifest(rel)? {
-            return Ok(Some(resolved));
-        }
-    }
-    Ok(None)
 }
 
 /// All releases on the first page (newest first), with their assets.
@@ -200,22 +227,13 @@ mod tests {
         }
     }
 
-    /// Mirror of `fetch_compatible`'s selection without the network: pick the tag
-    /// of the newest compatible, non-draft, non-prerelease release that has a
-    /// `release.json`.
+    /// The tag `resolve_engine_release` would settle on: the first of the ordered
+    /// `engine_candidates` that actually has a `release.json`.
     fn pick(app_version: &str, releases: &[GhRelease]) -> Option<String> {
-        let req = engine_requirement(app_version)?;
-        let mut candidates: Vec<(Version, &GhRelease)> = releases
-            .iter()
-            .filter(|r| !r.draft && !r.prerelease)
-            .filter_map(|r| parse_version(&r.tag_name).map(|v| (v, r)))
-            .filter(|(v, _)| req.matches(v))
-            .collect();
-        candidates.sort_by(|a, b| b.0.cmp(&a.0));
-        candidates
+        engine_candidates(app_version, releases)
             .into_iter()
-            .find(|(_, r)| r.assets.iter().any(|a| a.name == "release.json"))
-            .map(|(_, r)| r.tag_name.clone())
+            .find(|r| r.assets.iter().any(|a| a.name == "release.json"))
+            .map(|r| r.tag_name.clone())
     }
 
     #[test]
@@ -304,7 +322,43 @@ mod tests {
 
     #[test]
     fn no_compatible_release_yields_none() {
+        // 0.3.0 is out of ^0.2.0, and there is no release tagged exactly 0.2.0
+        // to fall back to.
         let releases = vec![rel("v0.3.0", false, false, true)];
         assert_eq!(pick("v0.2.0", &releases), None);
+    }
+
+    #[test]
+    fn prerelease_app_falls_back_to_its_own_prerelease_engine() {
+        let releases = vec![
+            rel("v0.3.0-rc.1", false, true, true), // prerelease engine
+            rel("v0.2.0", false, false, true),     // newest stable
+        ];
+        // The caret/non-prerelease rules find nothing for an rc app, so it pins
+        // to its own exact prerelease engine rather than a stale stable one.
+        assert_eq!(
+            pick("v0.3.0-rc.1", &releases).as_deref(),
+            Some("v0.3.0-rc.1")
+        );
+    }
+
+    #[test]
+    fn own_version_fallback_only_when_no_compatible_release() {
+        // When a compatible stable release exists, the exact-own-version match is
+        // the same release and not a separate fallback: a 0.2.0 app on a feed with
+        // 0.2.1 still prefers the newest compatible.
+        let releases = vec![
+            rel("v0.2.1", false, false, true),
+            rel("v0.2.0", false, false, true),
+        ];
+        assert_eq!(pick("v0.2.0", &releases).as_deref(), Some("v0.2.1"));
+    }
+
+    #[test]
+    fn own_version_fallback_skips_drafts() {
+        // A draft tagged like the app's own version is not publicly downloadable,
+        // so it is not a usable fallback.
+        let releases = vec![rel("v0.3.0-rc.1", true, true, true)];
+        assert_eq!(pick("v0.3.0-rc.1", &releases), None);
     }
 }
