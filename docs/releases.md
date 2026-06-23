@@ -76,11 +76,38 @@ The Tauri desktop app polls `release.json` to discover updates. Its shape is:
 ```
 
 `version` is the release tag. Each entry names an asset attached to the same
-release and (where a checksum is meaningful) its sha256. The app compares
-`version` against the version it currently has, downloads the named assets from
-the matching GitHub Release, and verifies each download against the listed
-sha256. The `installer` entry is always present: the desktop app build is a
-required release job, so every release ships an installer.
+release and (where a checksum is meaningful) its sha256. The app resolves which
+release to read (see lockstep below), downloads the named assets from that
+GitHub Release, and verifies each download against the listed sha256. The
+`installer` entry is always present: the desktop app build is a required release
+job, so every release ships an installer.
+
+## How the app and CLI stay in lockstep
+
+The app shell and the CLI engine ship in the same release, but they update on two
+clocks, and the app's clock leads:
+
+1. **The app updates itself first.** On launch the app polls `latest.json` (the
+   Tauri updater feed) and, when a newer signed build exists, shows a priority
+   banner with a single "Update Mite" action that downloads, verifies, installs,
+   and relaunches. Nothing about the app self-update is silent: it is always a
+   prompt.
+2. **The engine follows the app, automatically.** A given app build does not pull
+   "latest"; it pulls the newest engine within its own caret/semver range. For a
+   `0.x` app that is the same `0.MINOR` line (so a `0.2.0` app accepts engine
+   `0.2.1` but not `0.3.0`); for `>=1.0` it is the same major. The app resolves
+   that by listing releases and picking the newest non-draft, non-prerelease tag
+   that satisfies the range, then reading that release's `release.json`. If the
+   installed engine is older than (or outside) that range, the app downloads the
+   matching engine on startup with no prompt, because which engine is correct is
+   a consequence of which app version is running.
+
+Together these mean an old app never eagerly jumps to a breaking new engine: it
+updates itself first, and the relaunched app then reconciles the engine to the
+range it understands. The model files are versioned with the engine, so they are
+fetched from the same resolved release. An untagged local build (the `0.0.0`
+placeholder) has no caret pin and falls back to the latest release so dev installs
+still work.
 
 ## How the desktop app updates itself (latest.json)
 

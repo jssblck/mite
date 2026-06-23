@@ -23,7 +23,7 @@ interface StepView {
 }
 
 const STEPS: StepView[] = [
-  { id: "cli", title: "Install the mite engine", detail: "Downloads the latest mite CLI." },
+  { id: "cli", title: "Install the mite engine", detail: "Downloads the mite engine for this app version." },
   { id: "config", title: "Write configuration", detail: "Creates a default mite.toml." },
   { id: "models", title: "Download recognition models", detail: "OCR models and the JMdict dictionary (a few hundred MB)." },
 ];

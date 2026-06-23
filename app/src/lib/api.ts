@@ -72,12 +72,18 @@ export interface AppSettings {
   watchMetricsIntervalSecs: number;
 }
 
+/** How the installed engine relates to the engine this app build wants. */
+export type EngineState = "ok" | "update" | "required" | "unknown";
+
 export interface UpdateInfo {
-  currentCli: string | null;
-  latestTag: string | null;
-  latestCli: string | null;
-  cliUpdateAvailable: boolean;
   appVersion: string;
+  /** The installed engine version, if the CLI is present. */
+  currentCli: string | null;
+  /** The engine version this app build should run (newest compatible). */
+  targetCli: string | null;
+  /** The release tag the target engine comes from. */
+  targetTag: string | null;
+  engineState: EngineState;
 }
 
 export interface WindowSummary {
