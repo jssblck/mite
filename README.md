@@ -119,7 +119,7 @@ Use `--auto` for games that consume the `Shift` key, and pin the target with
 ```powershell
 cargo run -- init-config [--force]
 cargo run -- doctor
-cargo run -- list-windows
+cargo run -- list-windows [--json] [--thumbnails] [--thumbnail-max-width PX]
 cargo run -- watch [--title T | --window-id N | --pid P] [--auto] [--hud]
 cargo run -- eval --image path\to\underlying.png --labels path\to\eval.json
 cargo run -- eval-corpus --root eval --out target\eval\corpus-summary.json --allow-failures

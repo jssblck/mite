@@ -55,7 +55,8 @@ before adopting them.
 Find the target window, then watch it:
 
 ```powershell
-cargo run -- list-windows
+cargo run -- list-windows                            # human-readable: id | pid | WxH @ x,y | title
+cargo run -- list-windows --json --thumbnails        # JSON + base64 WGC thumbnails (what the desktop picker calls)
 cargo run -- watch                                   # OCR the foreground window while SHIFT is held
 cargo run -- watch --window-id 2100328 --auto        # pin a window, run continuously (games that eat Shift)
 cargo run -- watch --title "Target Game" --auto

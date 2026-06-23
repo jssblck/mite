@@ -295,11 +295,6 @@ pub async fn list_windows() -> Result<Vec<windows::WindowSummary>, String> {
 }
 
 #[tauri::command]
-pub async fn capture_thumbnail(window_id: u32, max_width: u32) -> Result<String, String> {
-    blocking(move || windows::capture_thumbnail(window_id, max_width)).await
-}
-
-#[tauri::command]
 pub fn start_watch(app: AppHandle, state: State<WatchState>, window_id: u32) -> Result<(), String> {
     watch::start(&app, &state, window_id).map_err(|err| format!("{err:#}"))
 }
