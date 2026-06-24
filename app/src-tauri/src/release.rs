@@ -27,13 +27,27 @@ pub const REPO: &str = "jssblck/mite";
 #[serde(rename_all = "camelCase")]
 pub struct ReleaseManifest {
     pub version: String,
-    pub cli: AssetRef,
+    pub cli: CliAsset,
     pub model_manifest: AssetName,
     // The app-shell installer asset. The app self-update path consumes this via
     // `latest.json` (the Tauri updater), not from here; kept for completeness.
     #[serde(default)]
     #[allow(dead_code)]
     pub installer: Option<AssetRef>,
+}
+
+/// The engine asset: `mite.exe` plus the sidecar files that must be installed
+/// next to it. `extra_files` carries ONNX Runtime's provider bridge DLLs
+/// (`onnxruntime_providers_*.dll`); without them the engine cannot register any
+/// GPU execution provider and silently runs on the CPU. The field defaults to
+/// empty so a release.json predating it (an older engine) still parses.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliAsset {
+    pub asset: String,
+    pub sha256: String,
+    #[serde(default)]
+    pub extra_files: Vec<AssetRef>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -240,15 +254,41 @@ mod tests {
     fn parses_release_manifest() {
         let json = r#"{
             "version": "v0.1.0",
-            "cli": { "asset": "mite.exe", "sha256": "abc" },
+            "cli": {
+                "asset": "mite.exe",
+                "sha256": "abc",
+                "extraFiles": [
+                    { "asset": "onnxruntime_providers_shared.dll", "sha256": "d1" },
+                    { "asset": "onnxruntime_providers_cuda.dll", "sha256": "d2" }
+                ]
+            },
             "modelManifest": { "asset": "model-manifest.json" },
             "installer": { "asset": "mite-setup.exe", "sha256": "ghi" }
         }"#;
         let manifest: ReleaseManifest = serde_json::from_str(json).unwrap();
         assert_eq!(manifest.version, "v0.1.0");
         assert_eq!(manifest.cli.asset, "mite.exe");
+        assert_eq!(manifest.cli.extra_files.len(), 2);
+        assert_eq!(
+            manifest.cli.extra_files[0].asset,
+            "onnxruntime_providers_shared.dll"
+        );
+        assert_eq!(manifest.cli.extra_files[1].sha256, "d2");
         assert_eq!(manifest.model_manifest.asset, "model-manifest.json");
         assert_eq!(manifest.installer.unwrap().sha256, "ghi");
+    }
+
+    #[test]
+    fn release_manifest_without_extra_files_defaults_empty() {
+        // An older release.json (engine predating the provider-DLL sidecars) must
+        // still parse; the app then installs just mite.exe as before.
+        let json = r#"{
+            "version": "v0.2.3",
+            "cli": { "asset": "mite.exe", "sha256": "abc" },
+            "modelManifest": { "asset": "model-manifest.json" }
+        }"#;
+        let manifest: ReleaseManifest = serde_json::from_str(json).unwrap();
+        assert!(manifest.cli.extra_files.is_empty());
     }
 
     #[test]

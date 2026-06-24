@@ -37,6 +37,18 @@ const CUDA_DLLS: &[&str] = &[
 /// it is matched by prefix rather than an exact file name.
 const NVRTC_PREFIX: &str = "nvrtc64_";
 
+/// ONNX Runtime's execution-provider bridge DLLs. Unlike the NVIDIA runtime,
+/// these ship WITH Mite: they are part of ONNX Runtime (MIT-licensed Microsoft
+/// software, not NVIDIA binaries) and the `ort` build emits them next to
+/// `mite.exe`. They must sit beside the engine for any GPU execution provider to
+/// load. `onnxruntime_providers_shared.dll` is the bridge every GPU EP needs;
+/// without it ONNX Runtime cannot register CUDA or TensorRT and silently falls
+/// back to the CPU even when the full NVIDIA runtime is installed. A missing
+/// entry here is therefore an engine-packaging problem, not a user install gap.
+const ORT_SHARED_DLL: &str = "onnxruntime_providers_shared.dll";
+const ORT_CUDA_DLL: &str = "onnxruntime_providers_cuda.dll";
+const ORT_TENSORRT_DLL: &str = "onnxruntime_providers_tensorrt.dll";
+
 /// The execution tier the detected NVIDIA runtime can support, slowest-safe to
 /// fastest. This is the app-facing summary of `GpuRuntimeStatus`; it maps to a
 /// concrete `RuntimeBackend` for launch.
@@ -76,6 +88,50 @@ fn decide_tier(tensorrt_present: bool, cuda_present: bool) -> RuntimeTier {
         RuntimeTier::Cuda
     } else {
         RuntimeTier::Cpu
+    }
+}
+
+/// Reduce the NVIDIA-supported tier to the tier the engine can actually reach,
+/// given which ONNX Runtime provider DLLs are present next to it. The NVIDIA
+/// runtime alone is not enough: ONNX Runtime needs its own provider bridge to
+/// register any GPU execution provider, and that bridge ships with the engine,
+/// not with NVIDIA. A TensorRT-capable machine missing the TensorRT provider DLL
+/// can still fall back to CUDA; one missing the shared bridge runs on the CPU.
+fn effective_tier(nvidia_tier: RuntimeTier, ort: &OrtProviderStatus) -> RuntimeTier {
+    match nvidia_tier {
+        RuntimeTier::TensorRt if ort.tensorrt_ready() => RuntimeTier::TensorRt,
+        RuntimeTier::TensorRt | RuntimeTier::Cuda if ort.cuda_ready() => RuntimeTier::Cuda,
+        _ => RuntimeTier::Cpu,
+    }
+}
+
+/// The ONNX Runtime provider gap warning, if any: the NVIDIA runtime can support
+/// a faster tier than the engine can currently reach because Mite's ONNX Runtime
+/// provider DLLs are missing next to it. This is the actionable misconfiguration
+/// behind a "TensorRT detected but running on CPU" report.
+fn ort_provider_gap_warning(runtime: &GpuRuntimeStatus) -> Option<String> {
+    if runtime.effective_tier == runtime.tier {
+        return None;
+    }
+    Some(format!(
+        "The installed NVIDIA runtime supports the {} tier, but Mite's ONNX Runtime \
+         provider libraries are missing next to the engine ({}), so the overlay will run \
+         at the {} tier. Update or reinstall the Mite engine to restore GPU acceleration.",
+        tier_name(runtime.tier),
+        runtime
+            .ort_providers
+            .missing_for_tier(runtime.tier)
+            .join(", "),
+        tier_name(runtime.effective_tier),
+    ))
+}
+
+/// A friendly name for a tier, for human-facing warnings and text output.
+fn tier_name(tier: RuntimeTier) -> &'static str {
+    match tier {
+        RuntimeTier::Cpu => "CPU",
+        RuntimeTier::Cuda => "CUDA",
+        RuntimeTier::TensorRt => "TensorRT",
     }
 }
 
@@ -128,6 +184,12 @@ impl DoctorReport {
             }
         }
 
+        // The NVIDIA runtime can support a GPU tier, but ONNX Runtime needs its
+        // own provider DLLs next to the engine to use it. When those are missing
+        // the overlay silently runs on the CPU even though `doctor` would
+        // otherwise report a green TensorRT/CUDA tier; surface that gap plainly.
+        warnings.extend(ort_provider_gap_warning(&gpu_runtime));
+
         if matches!(
             config.runtime.backend,
             RuntimeBackend::NvidiaTensorRtThenCuda | RuntimeBackend::Cuda
@@ -179,12 +241,25 @@ impl DoctorReport {
         out.push_str(&format!("Runtime backend: {:?}\n", self.runtime_backend));
 
         let runtime = &self.gpu_runtime;
-        out.push_str(&format!("Detected runtime tier: {:?}\n", runtime.tier));
+        out.push_str(&format!(
+            "NVIDIA-supported tier: {}\n",
+            tier_name(runtime.tier)
+        ));
+        out.push_str(&format!(
+            "Effective tier (engine runs at): {}\n",
+            tier_name(runtime.effective_tier)
+        ));
         out.push_str(&format!(
             "TensorRT runtime: {}\n",
             tier_label(&runtime.tensorrt)
         ));
         out.push_str(&format!("CUDA runtime: {}\n", tier_label(&runtime.cuda)));
+        out.push_str(&format!(
+            "ONNX Runtime providers: shared {}, cuda {}, tensorrt {}\n",
+            exists_label(runtime.ort_providers.shared.present),
+            exists_label(runtime.ort_providers.cuda.present),
+            exists_label(runtime.ort_providers.tensorrt.present),
+        ));
         out.push_str(&format!(
             "TensorRT engine builder: {}\n",
             exists_label(runtime.builder_present)
@@ -255,6 +330,53 @@ impl TierStatus {
     }
 }
 
+/// Presence of ONNX Runtime's execution-provider bridge DLLs next to the engine.
+///
+/// These are shipped by Mite itself (ONNX Runtime, MIT), so a missing entry here
+/// is an engine-packaging problem, not something the user installs from NVIDIA.
+/// When they are absent the engine cannot reach any GPU tier regardless of the
+/// detected NVIDIA runtime, which is why `effective_tier` gates on them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrtProviderStatus {
+    /// The shared bridge every GPU EP loads (`onnxruntime_providers_shared.dll`).
+    pub shared: DllPresence,
+    /// The CUDA execution-provider library.
+    pub cuda: DllPresence,
+    /// The TensorRT execution-provider library.
+    pub tensorrt: DllPresence,
+}
+
+impl OrtProviderStatus {
+    /// CUDA registers only when both the shared bridge and the CUDA EP are present.
+    fn cuda_ready(&self) -> bool {
+        self.shared.present && self.cuda.present
+    }
+
+    /// TensorRT needs the shared bridge and its own EP. It does NOT need the CUDA
+    /// provider: `commit_trt_session` registers TensorRT as the hard requirement
+    /// and CUDA only as a tolerated fallback, so the engine reaches TensorRT with
+    /// just these two present (any subgraph TensorRT declines runs on the CPU EP).
+    fn tensorrt_ready(&self) -> bool {
+        self.shared.present && self.tensorrt.present
+    }
+
+    /// The provider DLLs required to reach `tier` that are currently missing.
+    /// Scoped to the tier so a CUDA-only machine is not told it is missing the
+    /// TensorRT provider, which it does not need.
+    fn missing_for_tier(&self, tier: RuntimeTier) -> Vec<&str> {
+        let required: &[&DllPresence] = match tier {
+            RuntimeTier::Cpu => &[],
+            RuntimeTier::Cuda => &[&self.shared, &self.cuda],
+            RuntimeTier::TensorRt => &[&self.shared, &self.tensorrt],
+        };
+        required
+            .iter()
+            .filter(|component| !component.present)
+            .map(|component| component.name.as_str())
+            .collect()
+    }
+}
+
 /// The result of searching the system for the NVIDIA runtime DLLs Mite needs.
 ///
 /// Mite never downloads, hosts, or installs these: it only detects what the user
@@ -262,12 +384,22 @@ impl TierStatus {
 /// directories the launcher must put on the CLI's `PATH`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpuRuntimeStatus {
-    /// The best tier the detected DLLs support.
+    /// The best tier the detected NVIDIA DLLs support. This reflects only the
+    /// user's NVIDIA install, which is what the guided runtime setup cares about.
     pub tier: RuntimeTier,
+    /// The tier the engine can actually reach right now: `tier` gated by whether
+    /// Mite's ONNX Runtime provider DLLs (`ort_providers`) are present next to
+    /// the engine. This is what the overlay really runs at, so the desktop app's
+    /// status surface should read this rather than `tier`.
+    pub effective_tier: RuntimeTier,
     /// The TensorRT-tier DLLs (beyond the shared CUDA set).
     pub tensorrt: TierStatus,
     /// The CUDA-tier DLLs.
     pub cuda: TierStatus,
+    /// ONNX Runtime's provider bridge DLLs next to the engine. Shipped by Mite,
+    /// required for any GPU EP to load. `tier` ignores these; `effective_tier`
+    /// does not.
+    pub ort_providers: OrtProviderStatus,
     /// Whether the on-device TensorRT engine builder component is present.
     pub builder_present: bool,
     /// Whether a versioned NVRTC DLL is present.
@@ -293,6 +425,15 @@ impl GpuRuntimeStatus {
 
         let tensorrt = tier_status(TENSORRT_DLLS, &resolve);
         let cuda = tier_status(CUDA_DLLS, &resolve);
+        // ONNX Runtime's own provider bridge DLLs. The `ort` build emits these
+        // next to the engine, and the exe directory is part of the search set, so
+        // they resolve from there for the installed app exactly as the OS loader
+        // would find them.
+        let ort_providers = OrtProviderStatus {
+            shared: dll_presence(ORT_SHARED_DLL, &resolve),
+            cuda: dll_presence(ORT_CUDA_DLL, &resolve),
+            tensorrt: dll_presence(ORT_TENSORRT_DLL, &resolve),
+        };
         // The builder resource has a versioned, per-SM file name in the pip
         // wheels, so it is matched by prefix across the TensorRT directories.
         let builder_dir = dirs
@@ -322,10 +463,13 @@ impl GpuRuntimeStatus {
             found_dirs.insert(dir.clone());
         }
 
+        let tier = decide_tier(tensorrt.present, cuda.present);
         Self {
-            tier: decide_tier(tensorrt.present, cuda.present),
+            tier,
+            effective_tier: effective_tier(tier, &ort_providers),
             tensorrt,
             cuda,
+            ort_providers,
             builder_present: builder_dir.is_some(),
             nvrtc_present: nvrtc_dir.is_some(),
             dll_dirs: found_dirs.into_iter().collect(),
@@ -334,17 +478,20 @@ impl GpuRuntimeStatus {
     }
 }
 
+/// Resolve a single DLL by name across the search dirs into a `DllPresence`.
+fn dll_presence(name: &str, resolve: &impl Fn(&str) -> Option<PathBuf>) -> DllPresence {
+    let found_in = resolve(name);
+    DllPresence {
+        name: name.to_string(),
+        present: found_in.is_some(),
+        found_in,
+    }
+}
+
 fn tier_status(required: &[&str], resolve: &impl Fn(&str) -> Option<PathBuf>) -> TierStatus {
     let components: Vec<DllPresence> = required
         .iter()
-        .map(|name| {
-            let found_in = resolve(name);
-            DllPresence {
-                name: (*name).to_string(),
-                present: found_in.is_some(),
-                found_in,
-            }
-        })
+        .map(|name| dll_presence(name, resolve))
         .collect();
     let present = components.iter().all(|component| component.present);
     TierStatus {
@@ -665,6 +812,108 @@ mod tests {
     }
 
     #[test]
+    fn effective_tier_gates_on_ort_providers() {
+        // A full NVIDIA runtime but no ONNX Runtime provider DLLs: the user's
+        // install supports TensorRT, but the engine can only reach the CPU. This
+        // is exactly the "TensorRT detected, running on CPU" disconnect.
+        let dir = tempfile::tempdir().unwrap();
+        for name in CUDA_DLLS {
+            touch(dir.path(), name);
+        }
+        for name in TENSORRT_DLLS {
+            touch(dir.path(), name);
+        }
+        let status = GpuRuntimeStatus::detect_in(&[dir.path().to_path_buf()]);
+        assert_eq!(status.tier, RuntimeTier::TensorRt);
+        assert_eq!(status.effective_tier, RuntimeTier::Cpu);
+        assert!(!status.ort_providers.shared.present);
+
+        // Drop in the ONNX Runtime provider DLLs and the engine reaches TensorRT.
+        touch(dir.path(), ORT_SHARED_DLL);
+        touch(dir.path(), ORT_CUDA_DLL);
+        touch(dir.path(), ORT_TENSORRT_DLL);
+        let status = GpuRuntimeStatus::detect_in(&[dir.path().to_path_buf()]);
+        assert_eq!(status.tier, RuntimeTier::TensorRt);
+        assert_eq!(status.effective_tier, RuntimeTier::TensorRt);
+        assert!(status.ort_providers.tensorrt.present);
+    }
+
+    #[test]
+    fn effective_tier_reaches_tensorrt_without_the_cuda_provider() {
+        // The engine registers TensorRT as a hard requirement and CUDA only as a
+        // tolerated fallback, so shared + tensorrt providers are enough to reach
+        // TensorRT even with the CUDA provider DLL absent. Doctor must agree.
+        let dir = tempfile::tempdir().unwrap();
+        for name in CUDA_DLLS {
+            touch(dir.path(), name);
+        }
+        for name in TENSORRT_DLLS {
+            touch(dir.path(), name);
+        }
+        touch(dir.path(), ORT_SHARED_DLL);
+        touch(dir.path(), ORT_TENSORRT_DLL);
+        let status = GpuRuntimeStatus::detect_in(&[dir.path().to_path_buf()]);
+        assert_eq!(status.tier, RuntimeTier::TensorRt);
+        assert_eq!(status.effective_tier, RuntimeTier::TensorRt);
+        // No gap, so no warning, even though the CUDA provider is absent.
+        assert!(ort_provider_gap_warning(&status).is_none());
+    }
+
+    #[test]
+    fn effective_tier_degrades_tensorrt_to_cuda_without_trt_provider() {
+        // NVIDIA supports TensorRT and the shared+CUDA provider bridge is present,
+        // but the TensorRT provider DLL is not: the engine can still run on CUDA.
+        let dir = tempfile::tempdir().unwrap();
+        for name in CUDA_DLLS {
+            touch(dir.path(), name);
+        }
+        for name in TENSORRT_DLLS {
+            touch(dir.path(), name);
+        }
+        touch(dir.path(), ORT_SHARED_DLL);
+        touch(dir.path(), ORT_CUDA_DLL);
+        let status = GpuRuntimeStatus::detect_in(&[dir.path().to_path_buf()]);
+        assert_eq!(status.tier, RuntimeTier::TensorRt);
+        assert_eq!(status.effective_tier, RuntimeTier::Cuda);
+    }
+
+    #[test]
+    fn ort_provider_gap_warning_fires_only_on_a_real_gap() {
+        // CUDA supported by NVIDIA, but no ONNX Runtime providers: the warning
+        // names the shortfall and the fix.
+        let dir = tempfile::tempdir().unwrap();
+        for name in CUDA_DLLS {
+            touch(dir.path(), name);
+        }
+        let status = GpuRuntimeStatus::detect_in(&[dir.path().to_path_buf()]);
+        let warning = ort_provider_gap_warning(&status).expect("a gap warning");
+        assert!(warning.contains("ONNX Runtime"));
+        assert!(warning.contains("CUDA"));
+        assert!(warning.contains(ORT_SHARED_DLL));
+        // A CUDA-only machine does not need the TensorRT provider, so the warning
+        // must not list it as missing.
+        assert!(!warning.contains(ORT_TENSORRT_DLL));
+
+        // Add the providers CUDA needs: no gap, no warning.
+        touch(dir.path(), ORT_SHARED_DLL);
+        touch(dir.path(), ORT_CUDA_DLL);
+        let status = GpuRuntimeStatus::detect_in(&[dir.path().to_path_buf()]);
+        assert!(ort_provider_gap_warning(&status).is_none());
+    }
+
+    #[test]
+    fn no_gap_warning_when_no_nvidia_runtime() {
+        // Nothing installed at all: the effective tier equals the (CPU) tier, so
+        // there is no provider gap to warn about. The "no NVIDIA runtime" guidance
+        // is a separate warning produced by `inspect`.
+        let dir = tempfile::tempdir().unwrap();
+        let status = GpuRuntimeStatus::detect_in(&[dir.path().to_path_buf()]);
+        assert_eq!(status.tier, RuntimeTier::Cpu);
+        assert_eq!(status.effective_tier, RuntimeTier::Cpu);
+        assert!(ort_provider_gap_warning(&status).is_none());
+    }
+
+    #[test]
     fn detect_in_finds_dlls_across_multiple_dirs() {
         // A required DLL present in a later directory still counts.
         let empty = tempfile::tempdir().unwrap();
@@ -695,6 +944,7 @@ mod tests {
         assert!(value.get("warnings").unwrap().is_array());
         let gpu = value.get("gpu_runtime").unwrap();
         assert!(gpu.get("tier").is_some());
+        assert!(gpu.get("effective_tier").is_some());
         assert!(
             gpu.get("cuda")
                 .unwrap()
@@ -703,5 +953,9 @@ mod tests {
                 .is_array()
         );
         assert!(gpu.get("dll_dirs").unwrap().is_array());
+        let ort = gpu.get("ort_providers").unwrap();
+        assert!(ort.get("shared").unwrap().get("present").is_some());
+        assert!(ort.get("cuda").unwrap().get("present").is_some());
+        assert!(ort.get("tensorrt").unwrap().get("present").is_some());
     }
 }
