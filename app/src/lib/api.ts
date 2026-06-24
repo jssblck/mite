@@ -24,14 +24,29 @@ export interface TierStatus {
 }
 
 /**
- * The system-wide NVIDIA runtime detection. Mite never installs these binaries;
- * this only reports what the user has installed from NVIDIA and which tier it
- * supports. Field names are snake_case because this is the CLI's JSON verbatim.
+ * Presence of ONNX Runtime's provider bridge DLLs next to the engine. Unlike the
+ * NVIDIA runtime, Mite ships these itself; when one is missing the engine cannot
+ * register a GPU execution provider and runs on the CPU regardless of `tier`.
+ */
+export interface OrtProviderStatus {
+  shared: DllPresence;
+  cuda: DllPresence;
+  tensorrt: DllPresence;
+}
+
+/**
+ * The runtime detection from `doctor --json`. `tier` reflects only the user's
+ * NVIDIA install (what the guided setup cares about); `effective_tier` is what
+ * the engine can actually reach, i.e. `tier` gated by `ort_providers`. The
+ * status surface should read `effective_tier`. Field names are snake_case
+ * because this is the CLI's JSON verbatim.
  */
 export interface GpuRuntimeStatus {
   tier: RuntimeTier;
+  effective_tier: RuntimeTier;
   tensorrt: TierStatus;
   cuda: TierStatus;
+  ort_providers: OrtProviderStatus;
   builder_present: boolean;
   nvrtc_present: boolean;
   dll_dirs: string[];

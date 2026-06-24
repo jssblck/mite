@@ -136,11 +136,39 @@ jobs:
       - name: Build mite.exe
         run: cargo build --release --bin mite
 
+      - name: Stage engine assets
+        shell: pwsh
+        # mite.exe plus ONNX Runtime's provider bridge DLLs. The `ort` build emits
+        # the providers next to the exe; ONNX Runtime loads them from there to
+        # register the CUDA/TensorRT execution providers. Shipping the exe alone
+        # leaves the engine unable to reach the GPU (it silently runs on the CPU),
+        # so these MUST ride along. They are ONNX Runtime (MIT) binaries, not
+        # NVIDIA binaries: the NVIDIA runtime is still user-installed and never
+        # staged here. Fail loudly if `ort` stops emitting one so the gap is
+        # caught on the PR dry run rather than in a shipped release.
+        run: |
+          New-Item -ItemType Directory -Force -Path engine | Out-Null
+          Copy-Item -LiteralPath "target/release/mite.exe" -Destination "engine" -Force
+          $providers = @(
+            "onnxruntime_providers_shared.dll",
+            "onnxruntime_providers_cuda.dll",
+            "onnxruntime_providers_tensorrt.dll"
+          )
+          foreach ($dll in $providers) {
+            $src = Join-Path "target/release" $dll
+            if (-not (Test-Path -LiteralPath $src)) {
+              throw "Expected ONNX Runtime provider DLL missing from the ort build: $dll"
+            }
+            Copy-Item -LiteralPath $src -Destination "engine" -Force
+          }
+          Write-Host "Staged engine assets:"
+          Get-ChildItem -Path "engine" -File | ForEach-Object { Write-Host "  $($_.Name)" }
+
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v7
         with:
           name: cli
-          path: target/release/mite.exe
+          path: engine/*
           if-no-files-found: error
           retention-days: 7
 
@@ -377,6 +405,21 @@ jobs:
           $cliPath = Join-Path $assetsDir "mite.exe"
           if (-not (Test-Path $cliPath)) { throw "Missing required asset: mite.exe" }
 
+          # ONNX Runtime provider bridge DLLs that ship next to the engine. The
+          # app installs these into bin\ alongside mite.exe; without them no GPU
+          # execution provider can register. Hash each so the app verifies the
+          # download, and fail if the build stopped producing one.
+          $engineExtras = @(
+            "onnxruntime_providers_shared.dll",
+            "onnxruntime_providers_cuda.dll",
+            "onnxruntime_providers_tensorrt.dll"
+          )
+          $extraFiles = foreach ($dll in $engineExtras) {
+            $p = Join-Path $assetsDir $dll
+            if (-not (Test-Path $p)) { throw "Missing required engine asset: $dll" }
+            [ordered]@{ asset = $dll; sha256 = Get-Hash $p }
+          }
+
           # The installer is a required asset: the desktop app build is a
           # required job, so its .exe/.msi must be here. Pick the first installer.
           # Use a wildcard path: -Include is ignored unless the path globs or
@@ -393,6 +436,7 @@ jobs:
             cli = [ordered]@{
               asset = "mite.exe"
               sha256 = Get-Hash $cliPath
+              extraFiles = @($extraFiles)
             }
             modelManifest = [ordered]@{
               asset = "model-manifest.json"

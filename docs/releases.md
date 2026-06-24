@@ -40,9 +40,14 @@ truth for the released version. Do not bump it to mark a release; tag instead.
 
 Each release attaches the following assets:
 
-- `mite.exe`: the Windows CLI. Built with `MITE_VERSION` pinned to the tag and
-  with the GPU runtime staging skipped, so the GPU DLLs do not get stapled to
-  the exe.
+- `mite.exe`: the Windows CLI. Built with `MITE_VERSION` pinned to the tag.
+- `onnxruntime_providers_shared.dll`, `onnxruntime_providers_cuda.dll`,
+  `onnxruntime_providers_tensorrt.dll`: ONNX Runtime's provider bridge DLLs
+  (ONNX Runtime is MIT-licensed). The `ort` build emits them next to `mite.exe`,
+  and ONNX Runtime loads them from there to register the CUDA/TensorRT execution
+  providers, so they are installed alongside the engine. Without them the engine
+  cannot reach the GPU and silently runs on the CPU. These are the only GPU-path
+  binaries Mite ships; the NVIDIA runtime is still user-installed (see below).
 - `model-manifest.json`: the repo's model manifest, copied as-is. It lists the
   OCR models, dictionaries, and frequency data with their download URLs and
   checksums, so the app can fetch and verify model files.
@@ -69,7 +74,15 @@ The Tauri desktop app polls `release.json` to discover updates. Its shape is:
 ```json
 {
   "version": "v0.1.0",
-  "cli": { "asset": "mite.exe", "sha256": "<hex>" },
+  "cli": {
+    "asset": "mite.exe",
+    "sha256": "<hex>",
+    "extraFiles": [
+      { "asset": "onnxruntime_providers_shared.dll", "sha256": "<hex>" },
+      { "asset": "onnxruntime_providers_cuda.dll", "sha256": "<hex>" },
+      { "asset": "onnxruntime_providers_tensorrt.dll", "sha256": "<hex>" }
+    ]
+  },
   "modelManifest": { "asset": "model-manifest.json" },
   "installer": { "asset": "<installer filename>", "sha256": "<hex>" }
 }
@@ -81,6 +94,13 @@ release to read (see lockstep below), downloads the named assets from that
 GitHub Release, and verifies each download against the listed sha256. The
 `installer` entry is always present: the desktop app build is a required release
 job, so every release ships an installer.
+
+`cli.extraFiles` lists the engine sidecars the app installs into `bin\` next to
+`mite.exe`: ONNX Runtime's provider bridge DLLs, which the engine needs to
+register a GPU execution provider. The field is additive and defaults to empty,
+so an older `release.json` without it still parses (the app then installs just
+the exe, as before). Each entry is verified against its sha256 like any other
+asset.
 
 ## How the app and CLI stay in lockstep
 
