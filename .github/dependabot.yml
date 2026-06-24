@@ -7,6 +7,13 @@ updates:
       time: "04:00"
       timezone: "America/Los_Angeles"
 
+  - package-ecosystem: "npm"
+    directory: "/site"
+    schedule:
+      interval: "daily"
+      time: "04:00"
+      timezone: "America/Los_Angeles"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
