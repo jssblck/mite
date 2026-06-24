@@ -7,10 +7,10 @@
   capture. Keep it that way.
 */
 
-// Canonical outbound links. The product is open source; the site links out to
-// the repo rather than duplicating install docs.
+// Canonical outbound links. Mite ships as a desktop app: the primary path is
+// the installer on the releases page, with the open-source repo for everyone
+// who wants to read the code or build it themselves.
 export const GITHUB_URL = "https://github.com/jssblck/mite";
-export const GITHUB_BOOTSTRAP_URL = `${GITHUB_URL}#quick-start`;
 export const LICENSE_URL = `${GITHUB_URL}/blob/main/LICENSE`;
 export const RELEASES_URL = `${GITHUB_URL}/releases`;
 

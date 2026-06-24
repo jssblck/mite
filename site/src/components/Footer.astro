@@ -1,7 +1,5 @@
 ---
 import { GITHUB_URL, RELEASES_URL } from "../data/sentences";
-import MiteMark from "./MiteMark.astro";
-import MiteTerm from "./MiteTerm.astro";
 import Wordmark from "./Wordmark.astro";
 
 type Link = { href: string; label: string; ext?: boolean };
@@ -69,17 +67,6 @@ const columns: { title: string; links: Link[] }[] = [
         </div>
       </div>
     </div>
-
-    <div class="footer-bottom">
-      <p class="footer-license">
-        <MiteMark size="1rem" />
-        <span><MiteTerm />: open source, licensed AGPL-3.0.</span>
-      </p>
-      <p class="footer-fine">
-        Dictionary data from JMdict. Sample Japanese on this site is original and
-        illustrative.
-      </p>
-    </div>
   </div>
 </footer>
 
@@ -136,35 +123,9 @@ const columns: { title: string; links: Link[] }[] = [
   .footer-credits {
     color: var(--color-muted);
   }
-  .footer-bottom {
-    margin-top: 3rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    border-top: 1px solid var(--color-line);
-    padding-top: 1.5rem;
-    font-size: 0.875rem;
-    color: var(--color-muted);
-  }
-  .footer-license {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin: 0;
-  }
-  .footer-fine {
-    margin: 0;
-    color: var(--color-faint);
-  }
-
   @media (min-width: 640px) {
     .footer-cols {
       grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-    .footer-bottom {
-      flex-direction: row;
-      align-items: center;
-      justify-content: space-between;
     }
   }
   @media (min-width: 768px) {
