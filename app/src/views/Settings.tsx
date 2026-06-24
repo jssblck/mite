@@ -44,8 +44,14 @@ function runtimeSummary(status: AppStatus): string {
   const doctor = status.doctor;
   if (!doctor) return "Not yet detected.";
   if (!doctor.nvidia.available) return "No NVIDIA GPU; running on the CPU.";
-  const tier: RuntimeTier = doctor.gpu_runtime?.tier ?? "cpu";
-  switch (tier) {
+  const supportedTier: RuntimeTier = doctor.gpu_runtime?.tier ?? "cpu";
+  const effectiveTier: RuntimeTier = doctor.gpu_runtime?.effective_tier ?? "cpu";
+  // The NVIDIA install is capable but the engine's own ONNX Runtime provider
+  // DLLs are missing, so it runs on the CPU. An engine update (above) fixes it.
+  if (effectiveTier !== supportedTier) {
+    return "GPU runtime ready, but the engine's ONNX Runtime libraries are missing; use Engine > Update.";
+  }
+  switch (effectiveTier) {
     case "tensor_rt":
       return "TensorRT active (fastest path).";
     case "cuda":
