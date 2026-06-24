@@ -71,11 +71,24 @@ export function Dashboard({
 
   const doctor = status.doctor;
   const gpu = doctor?.nvidia;
-  const tier = doctor?.gpu_runtime?.tier ?? "cpu";
-  const accel =
-    tier === "tensor_rt"
+  // `tier` is what the user's NVIDIA install supports; `effectiveTier` is what
+  // the engine can actually run at (gated by Mite's ONNX Runtime provider DLLs).
+  // The status line must reflect reality, so it reads the effective tier.
+  const supportedTier = doctor?.gpu_runtime?.tier ?? "cpu";
+  const effectiveTier = doctor?.gpu_runtime?.effective_tier ?? "cpu";
+  // The NVIDIA runtime can do better than the engine reaches: the provider DLLs
+  // are missing next to the engine. Reinstalling the engine fixes it, not GPU
+  // setup, so call that out specifically.
+  const providersMissing = effectiveTier !== supportedTier;
+  const accel = providersMissing
+    ? {
+        ok: "warn" as const,
+        detail:
+          "GPU runtime ready, but the engine's ONNX Runtime libraries are missing. Update the Mite engine.",
+      }
+    : effectiveTier === "tensor_rt"
       ? { ok: "ok" as const, detail: "TensorRT (fastest path)" }
-      : tier === "cuda"
+      : effectiveTier === "cuda"
         ? { ok: "warn" as const, detail: "CUDA backend (TensorRT not installed)" }
         : gpu?.available
           ? {
@@ -84,8 +97,11 @@ export function Dashboard({
             }
           : { ok: "warn" as const, detail: "Running on CPU (no NVIDIA GPU)." };
 
-  // An NVIDIA GPU is present but not at the fastest path: setup can still help.
-  const needsGpuSetup = Boolean(gpu?.available) && tier !== "tensor_rt";
+  // An NVIDIA GPU is present but its install is not at the fastest path: guided
+  // setup can still help. When the gap is instead the engine's own provider DLLs,
+  // setup will not fix it (an engine update will), so do not offer it.
+  const needsGpuSetup =
+    Boolean(gpu?.available) && supportedTier !== "tensor_rt" && !providersMissing;
 
   return (
     <div>

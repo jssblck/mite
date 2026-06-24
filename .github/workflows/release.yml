@@ -34,10 +34,14 @@ on:
       - "v*"
     branches: ["main"]
   pull_request:
-    # The site has its own deploy workflow and never affects release artifacts,
-    # so a site-only PR does not need a full Windows release dry run.
-    paths-ignore:
-      - "site/**"
+    # No paths filter here on purpose. A site-only PR does not need the Windows
+    # release dry run, but the build/release jobs are required status checks, and
+    # a workflow skipped by a path filter leaves those checks pending forever,
+    # which blocks the PR from merging. So the workflow always starts and the
+    # `changes` job decides per PR whether the build jobs run; on a site-only PR
+    # they are skipped at the job level, which reports a "skipped" conclusion that
+    # satisfies the required checks instead of leaving them pending. See the
+    # `changes` job below and docs/releases.md.
   workflow_dispatch:
 
 concurrency:
@@ -50,8 +54,48 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      # "true" when the release build should run, "false" only for a pull request
+      # whose every changed file is under site/. Consumed by the gated jobs below.
+      code: ${{ steps.decide.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history so the PR's merge-base is reachable for the diff below.
+          fetch-depth: 0
+
+      - name: Decide whether to run the release build
+        id: decide
+        shell: bash
+        run: |
+          # Default to building. Only a pull request whose every changed file is
+          # under site/ skips the release dry run. Everything else (code PRs, main
+          # pushes, tag pushes, manual dispatch, or any error computing the diff)
+          # builds, so the release gate is never silently bypassed. No `set -e`:
+          # this step must always succeed and emit an output, because the build
+          # jobs gate on it and a failed gate would skip required checks.
+          code=true
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+            changed="$(git diff --name-only "$base"..."$head" 2>/dev/null || true)"
+            echo "Changed files:"
+            echo "${changed:-<none>}"
+            # All changed files under site/ (and at least one file) -> site-only.
+            if [[ -n "$changed" ]] && ! echo "$changed" | grep -qvE '^site/'; then
+              code=false
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "Release build will run: $code"
+
   prepare:
     name: Prepare
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: windows-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -107,7 +151,11 @@ jobs:
 
   build-cli:
     name: Build CLI
-    needs: prepare
+    needs: [changes, prepare]
+    # Skipped (not failed) on a site-only PR, so the required "Build CLI" check
+    # reports skipped and the PR can merge. success() keeps the implicit guard on
+    # prepare that adding an explicit `if` would otherwise drop.
+    if: ${{ success() && needs.changes.outputs.code == 'true' }}
     runs-on: windows-latest
     env:
       # Pin the binary's reported --version to the release tag so it is correct
@@ -136,17 +184,48 @@ jobs:
       - name: Build mite.exe
         run: cargo build --release --bin mite
 
+      - name: Stage engine assets
+        shell: pwsh
+        # mite.exe plus ONNX Runtime's provider bridge DLLs. The `ort` build emits
+        # the providers next to the exe; ONNX Runtime loads them from there to
+        # register the CUDA/TensorRT execution providers. Shipping the exe alone
+        # leaves the engine unable to reach the GPU (it silently runs on the CPU),
+        # so these MUST ride along. They are ONNX Runtime (MIT) binaries, not
+        # NVIDIA binaries: the NVIDIA runtime is still user-installed and never
+        # staged here. Fail loudly if `ort` stops emitting one so the gap is
+        # caught on the PR dry run rather than in a shipped release.
+        run: |
+          New-Item -ItemType Directory -Force -Path engine | Out-Null
+          Copy-Item -LiteralPath "target/release/mite.exe" -Destination "engine" -Force
+          $providers = @(
+            "onnxruntime_providers_shared.dll",
+            "onnxruntime_providers_cuda.dll",
+            "onnxruntime_providers_tensorrt.dll"
+          )
+          foreach ($dll in $providers) {
+            $src = Join-Path "target/release" $dll
+            if (-not (Test-Path -LiteralPath $src)) {
+              throw "Expected ONNX Runtime provider DLL missing from the ort build: $dll"
+            }
+            Copy-Item -LiteralPath $src -Destination "engine" -Force
+          }
+          Write-Host "Staged engine assets:"
+          Get-ChildItem -Path "engine" -File | ForEach-Object { Write-Host "  $($_.Name)" }
+
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v7
         with:
           name: cli
-          path: target/release/mite.exe
+          path: engine/*
           if-no-files-found: error
           retention-days: 7
 
   build-app:
     name: Build desktop app installer
-    needs: prepare
+    needs: [changes, prepare]
+    # Same gate as build-cli: skipped on a site-only PR so the required check is
+    # satisfied without running the Windows installer build.
+    if: ${{ success() && needs.changes.outputs.code == 'true' }}
     runs-on: windows-latest
     env:
       # The app reads its version through the same MITE_VERSION override.
@@ -288,7 +367,11 @@ jobs:
 
   release:
     name: Release
-    needs: [prepare, build-cli, build-app]
+    needs: [changes, prepare, build-cli, build-app]
+    # success() requires prepare and both builds to have succeeded; on a site-only
+    # PR they are skipped, so this is skipped too and the required "Release" check
+    # reports skipped (passing) rather than pending.
+    if: ${{ success() && needs.changes.outputs.code == 'true' }}
     runs-on: windows-latest
     permissions:
       contents: write
@@ -377,6 +460,21 @@ jobs:
           $cliPath = Join-Path $assetsDir "mite.exe"
           if (-not (Test-Path $cliPath)) { throw "Missing required asset: mite.exe" }
 
+          # ONNX Runtime provider bridge DLLs that ship next to the engine. The
+          # app installs these into bin\ alongside mite.exe; without them no GPU
+          # execution provider can register. Hash each so the app verifies the
+          # download, and fail if the build stopped producing one.
+          $engineExtras = @(
+            "onnxruntime_providers_shared.dll",
+            "onnxruntime_providers_cuda.dll",
+            "onnxruntime_providers_tensorrt.dll"
+          )
+          $extraFiles = foreach ($dll in $engineExtras) {
+            $p = Join-Path $assetsDir $dll
+            if (-not (Test-Path $p)) { throw "Missing required engine asset: $dll" }
+            [ordered]@{ asset = $dll; sha256 = Get-Hash $p }
+          }
+
           # The installer is a required asset: the desktop app build is a
           # required job, so its .exe/.msi must be here. Pick the first installer.
           # Use a wildcard path: -Include is ignored unless the path globs or
@@ -393,6 +491,7 @@ jobs:
             cli = [ordered]@{
               asset = "mite.exe"
               sha256 = Get-Hash $cliPath
+              extraFiles = @($extraFiles)
             }
             modelManifest = [ordered]@{
               asset = "model-manifest.json"

@@ -107,6 +107,33 @@ fn engine_state(app_version: &str, current: Option<&str>, target: Option<&str>) 
     }
 }
 
+/// Verify a freshly downloaded file's sha256, deleting it on mismatch.
+///
+/// `download::download_to_file` renames its `.part` into the final path before we
+/// can check the hash, so a corrupt-but-complete download would otherwise linger
+/// at the destination. Since the self-heal check (`sidecars_present`) only tests
+/// for existence, that stale bad file would mask the problem. Removing it on
+/// failure means the next reconcile re-fetches.
+fn verify_or_discard(dest: &std::path::Path, sha256: &str) -> anyhow::Result<()> {
+    download::verify_sha256(dest, sha256).inspect_err(|_| {
+        let _ = std::fs::remove_file(dest);
+    })
+}
+
+/// Whether every declared engine sidecar is present in `bin_dir`.
+///
+/// Presence-only by design: hashing the (large) provider DLLs on every status
+/// poll would be wasteful, and the install path verifies each sidecar's sha256
+/// when it writes it. This only needs to catch the missing-file case that the
+/// version check cannot see.
+fn sidecars_present(bin_dir: &std::path::Path, extra_files: &[release::AssetRef]) -> bool {
+    extra_files.iter().all(|extra| {
+        std::path::Path::new(&extra.asset)
+            .file_name()
+            .is_some_and(|name| bin_dir.join(name).is_file())
+    })
+}
+
 #[tauri::command]
 pub fn app_version() -> String {
     env!("APP_VERSION").to_string()
@@ -135,8 +162,21 @@ pub async fn check_for_updates() -> Result<UpdateInfo, String> {
         let target_cli = resolved
             .as_ref()
             .map(|rel| normalize_version(&rel.manifest.version).to_string());
-        let engine_state =
+        let mut engine_state =
             engine_state(&app_version, current_cli.as_deref(), target_cli.as_deref());
+        // Self-heal an incomplete engine. The version check alone treats a
+        // matching CLI as done, but the engine also needs its sidecar provider
+        // DLLs next to mite.exe. They can be absent when an interrupted install
+        // wrote mite.exe but not the DLLs, or when upgrading from a pre-sidecar
+        // engine whose version already equals the target. In both cases force a
+        // reconcile so the install path (re)fetches the sidecars.
+        if engine_state == EngineState::Ok {
+            if let (Some(rel), Ok(home_dir)) = (resolved.as_ref(), home::mite_home()) {
+                if !sidecars_present(&home_dir.join("bin"), &rel.manifest.cli.extra_files) {
+                    engine_state = EngineState::Required;
+                }
+            }
+        }
         Ok(UpdateInfo {
             app_version,
             current_cli,
@@ -164,8 +204,27 @@ pub async fn install_or_update_cli(app: AppHandle) -> Result<(), String> {
         download::download_to_file(&url, &dest, |received, total| {
             emit_progress(&app, "cli", &rel.manifest.cli.asset, received, total, false)
         })?;
-        download::verify_sha256(&dest, &rel.manifest.cli.sha256)?;
+        verify_or_discard(&dest, &rel.manifest.cli.sha256)?;
         emit_progress(&app, "cli", &rel.manifest.cli.asset, 1, 1, true);
+
+        // Install the engine sidecars next to mite.exe. These are ONNX Runtime's
+        // provider bridge DLLs; without them the engine cannot register a GPU
+        // execution provider and silently falls back to the CPU. Older releases
+        // have no extra_files, so this loop is a no-op for them.
+        for extra in &rel.manifest.cli.extra_files {
+            let file_name = std::path::Path::new(&extra.asset)
+                .file_name()
+                .ok_or_else(|| anyhow::anyhow!("invalid engine asset name {}", extra.asset))?;
+            let url = rel
+                .asset_url(&extra.asset)
+                .ok_or_else(|| anyhow::anyhow!("release is missing {}", extra.asset))?;
+            let dest = bin_dir.join(file_name);
+            download::download_to_file(&url, &dest, |received, total| {
+                emit_progress(&app, "cli", &extra.asset, received, total, false)
+            })?;
+            verify_or_discard(&dest, &extra.sha256)?;
+            emit_progress(&app, "cli", &extra.asset, 1, 1, true);
+        }
         Ok(())
     })
     .await
@@ -411,5 +470,34 @@ mod tests {
             engine_state("0.0.0", Some("0.2.0"), Some("0.2.0")),
             EngineState::Ok
         );
+    }
+
+    fn extra(asset: &str) -> release::AssetRef {
+        release::AssetRef {
+            asset: asset.to_string(),
+            sha256: "x".to_string(),
+        }
+    }
+
+    #[test]
+    fn sidecars_present_requires_every_declared_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path();
+        let extras = vec![
+            extra("onnxruntime_providers_shared.dll"),
+            extra("onnxruntime_providers_cuda.dll"),
+        ];
+
+        // Nothing installed yet.
+        assert!(!sidecars_present(bin, &extras));
+        // One present, one missing is still incomplete: this is the interrupted
+        // install / pre-sidecar upgrade case that the version check cannot see.
+        std::fs::write(bin.join("onnxruntime_providers_shared.dll"), b"").unwrap();
+        assert!(!sidecars_present(bin, &extras));
+        // Both present is complete.
+        std::fs::write(bin.join("onnxruntime_providers_cuda.dll"), b"").unwrap();
+        assert!(sidecars_present(bin, &extras));
+        // An older release with no declared sidecars is trivially complete.
+        assert!(sidecars_present(bin, &[]));
     }
 }

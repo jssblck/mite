@@ -69,10 +69,20 @@ Optional PP-OCRv5 server models can be downloaded with
 
 ## ONNX Runtime And NVIDIA Runtime Libraries
 
-Mite uses ONNX Runtime through the Rust `ort` crate. The ONNX Runtime provider
-libraries are not committed to this repository.
+Mite uses ONNX Runtime through the Rust `ort` crate. ONNX Runtime is Microsoft
+software under the MIT license. Its provider bridge DLLs
+(`onnxruntime_providers_shared.dll`, `onnxruntime_providers_cuda.dll`, and
+`onnxruntime_providers_tensorrt.dll`) are emitted next to `mite.exe` by the build
+and are required for the engine to register any GPU execution provider. They are
+not committed to this repository, but they are redistributed as part of the
+engine release (attached to each GitHub Release and installed alongside the CLI),
+which the MIT license permits.
 
-Mite neither redistributes nor installs the NVIDIA runtime libraries its GPU
+- ONNX Runtime: https://github.com/microsoft/onnxruntime
+- License: MIT
+
+The NVIDIA runtime libraries are a separate matter. Mite neither redistributes
+nor installs the NVIDIA runtime libraries its GPU
 pipeline needs (TensorRT, the CUDA runtime, NVRTC, cuBLAS, and cuDNN). It does
 not download, host, bundle, or install any NVIDIA binary. Instead, the user
 obtains these components directly from NVIDIA, as the licensee, and Mite detects
