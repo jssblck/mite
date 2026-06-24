@@ -1,24 +1,38 @@
 ---
 import { GITHUB_URL, RELEASES_URL } from "../data/sentences";
 import Icon from "./Icon.astro";
-import MiteTerm from "./MiteTerm.astro";
+import MiteWord from "./MiteWord.astro";
 import SectionHead from "./SectionHead.astro";
+
+// The desktop app flow, shown as a small window mock on the right.
+const steps = [
+  {
+    title: "Run the installer",
+    body: "The app walks you through getting set up.",
+  },
+  {
+    title: "Pick a window",
+    body: "Choose your game, visual novel, or app from a live preview grid.",
+  },
+  {
+    title: "Read",
+    body: "Hover any word for its reading, dictionary form, and meaning.",
+  },
+];
 ---
 
 <section id="start" class="start">
   <div class="container start-grid">
     <div>
       <SectionHead>
-        <span slot="title">Clone and bootstrap.</span>
-        <MiteTerm /> is open source. The setup path is the repository's bootstrap
-        script: clone the repo and run it once.
+        <span slot="title">Install it and read.</span>
       </SectionHead>
       <div class="start-cta">
-        <a href={GITHUB_URL} class="btn btn-primary" target="_blank" rel="noreferrer">
-          <Icon name="github" size={16} /> View on GitHub
+        <a href={RELEASES_URL} class="btn btn-primary" target="_blank" rel="noreferrer">
+          <Icon name="download" size={16} /> Get <MiteWord />
         </a>
-        <a href={RELEASES_URL} class="btn btn-ghost" target="_blank" rel="noreferrer">
-          Releases <Icon name="arrow-up-right" size={16} />
+        <a href={GITHUB_URL} class="btn btn-ghost" target="_blank" rel="noreferrer">
+          <Icon name="github" size={16} /> View on GitHub
         </a>
       </div>
       <p class="start-reqs">
@@ -27,19 +41,26 @@ import SectionHead from "./SectionHead.astro";
       </p>
     </div>
 
-    <div class="terminal">
-      <div class="terminal-bar">
+    <div class="app-card">
+      <div class="app-bar">
         <span class="capture-dot"></span>
         <span class="capture-dot"></span>
         <span class="capture-dot"></span>
-        <span class="mono terminal-label">PowerShell</span>
+        <span class="mono app-label">Mite</span>
       </div>
-      <pre class="mono terminal-body"><code><span class="tok-comment"># clone and bootstrap</span>
-<span class="tok-cmd">git</span> clone {GITHUB_URL}
-<span class="tok-cmd">cd</span> mite
-<span class="tok-cmd">./bootstrap-dev.ps1</span>
-
-<span class="tok-comment"># then point Mite at a window and read</span></code></pre>
+      <ol class="app-steps">
+        {
+          steps.map((step, i) => (
+            <li class="app-step">
+              <span class="app-step-num mono">{i + 1}</span>
+              <div class="app-step-text">
+                <p class="app-step-title">{step.title}</p>
+                <p class="app-step-body">{step.body}</p>
+              </div>
+            </li>
+          ))
+        }
+      </ol>
     </div>
   </div>
 </section>
@@ -67,37 +88,65 @@ import SectionHead from "./SectionHead.astro";
     color: var(--color-muted);
   }
 
-  .terminal {
+  .app-card {
     overflow: hidden;
     border-radius: 0.75rem;
     border: 1px solid var(--color-line);
     background: var(--color-bg);
   }
-  .terminal-bar {
+  .app-bar {
     display: flex;
     align-items: center;
     gap: 0.5rem;
     border-bottom: 1px solid var(--color-line);
     padding: 0.625rem 1rem;
   }
-  .terminal-label {
+  .app-label {
     margin-left: 0.5rem;
     font-size: 0.75rem;
     color: var(--color-faint);
   }
-  .terminal-body {
-    overflow-x: auto;
-    padding: 1.25rem;
-    font-size: 0.875rem;
-    line-height: 1.625;
-    color: var(--color-ink-2);
+  .app-steps {
+    list-style: none;
     margin: 0;
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
   }
-  .tok-comment {
-    color: var(--color-faint);
+  .app-step {
+    display: flex;
+    gap: 0.875rem;
+    align-items: flex-start;
   }
-  .tok-cmd {
+  .app-step-num {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.625rem;
+    height: 1.625rem;
+    border-radius: 99px;
+    border: 1px solid color-mix(in oklch, var(--color-accent) 45%, transparent);
+    background: color-mix(in oklch, var(--color-accent) 12%, transparent);
     color: var(--color-accent);
+    font-size: 0.8125rem;
+    font-weight: 600;
+  }
+  .app-step-text {
+    margin-top: 0.1rem;
+  }
+  .app-step-title {
+    margin: 0;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+  .app-step-body {
+    margin: 0.25rem 0 0;
+    font-size: 0.875rem;
+    line-height: 1.55;
+    color: var(--color-muted);
   }
 
   @media (min-width: 640px) {

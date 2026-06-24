@@ -171,14 +171,28 @@ const FAQ_TITLE = "Mite FAQ: private, local Japanese OCR for Windows";
             <div class="faq-item">
               <dt class="faq-q"><MiteText text="How do I install Mite?" /></dt>
               <dd class="measure faq-a">
-                <MiteTerm /> is open source, and the canonical setup path is the
-                repository's bootstrap script: clone the repo, run <code
-                  class="mono faq-code">bootstrap-dev.ps1</code> once in PowerShell,
-                and you are reading. See <a
+                Download the desktop app installer from the <a
+                  href={RELEASES_URL}
+                  target="_blank"
+                  rel="noreferrer">releases page</a> and run it. The app installs
+                the engine, downloads the recognition models, and walks you through
+                NVIDIA's optional GPU setup, then you pick a window and read. It
+                keeps itself and the engine up to date after that.
+              </dd>
+            </div>
+            <div class="faq-item">
+              <dt class="faq-q">
+                <MiteText text="Do I need a terminal or to build it myself?" />
+              </dt>
+              <dd class="measure faq-a">
+                No. The desktop app is the normal way to install and run
+                <MiteTerm />: there is no command line and no build step. Because
+                it is open source under AGPL-3.0, you <em>can</em> build from source
+                if you want to: clone the repo and run <code class="mono faq-code"
+                  >bootstrap-dev.ps1</code> in PowerShell. See <a
                   href={GITHUB_URL}
                   target="_blank"
-                  rel="noreferrer">the GitHub repository</a> for the full quick
-                start.
+                  rel="noreferrer">the GitHub repository</a>.
               </dd>
             </div>
           </dl>
