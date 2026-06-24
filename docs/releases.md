@@ -175,9 +175,21 @@ summary, but it does not create a GitHub Release. The only thing that turns a dr
 run into a real release is the trigger being a `vX.Y.Z` tag. On a non-tag ref the
 version is derived from `git describe` and treated as a prerelease.
 
-Site-only pull requests (`site/**`) skip the release dry run; the site has its
-own deploy workflow and never affects release artifacts. (main pushes and tags
-are not path-filtered, so a release is never silently skipped.)
+Site-only pull requests (every changed file under `site/**`) skip the release
+dry run; the site has its own deploy workflow and never affects release
+artifacts. (main pushes and tags always build, so a release is never silently
+skipped.)
+
+The skip happens at the job level, not by a workflow path filter, and that
+distinction matters because `Build CLI`, `Build desktop app installer`, and
+`Release` are required status checks on `main`. A workflow that a path filter
+prevents from starting never reports those checks, so they sit pending forever
+and block the PR. Instead the workflow always starts and a cheap `changes` job
+diffs the PR; on a site-only PR the build and release jobs are skipped via an
+`if` condition, which reports a `skipped` conclusion that GitHub counts as a
+passing required check. The `changes` job defaults to building on anything that
+is not a clearly site-only PR (including any error computing the diff), so the
+gate is never bypassed by accident.
 
 ### Build caching
 
