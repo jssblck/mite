@@ -89,6 +89,24 @@ Toolkit, cuDNN, and TensorRT 10.x) or from the pinned pip wheels, make it
 discoverable on `PATH`, and verify with `cargo run -- doctor`. See
 `docs\local-windows.md`.
 
+Claude Code cloud sessions ([code.claude.com](https://code.claude.com)) are set
+up through three versioned files under `.claude\`:
+
+- `.claude\cloud-setup.sh` installs the tooling the Ubuntu cloud base image
+  lacks (`gh` and `bun`). It runs as root before the session starts; point the
+  cloud environment's Setup script field at
+  `if [ -f .claude/cloud-setup.sh ]; then bash .claude/cloud-setup.sh; fi`.
+- `.claude\bootstrap.mjs` runs on every session start and resume (locally on all
+  three OSes and in the cloud) as a `SessionStart` hook. It fetches the root
+  crate, `site\` (npm), and `app\` (bun) dependencies; it never builds.
+- `.claude\settings.json` wires the hook.
+
+Mite is Windows-first, so a Linux cloud box cannot build the capture/overlay
+path (the `windows` crate and `xcap`) or run `watch`. In a cloud session, work
+the cross-platform surfaces: the lookup core (`cargo build --lib`), the `site\`
+Astro app, and the `app\` frontend. The GPU/model runtime and the private
+`eval` submodule are deliberately not provisioned there.
+
 Product commands:
 
 ```powershell
