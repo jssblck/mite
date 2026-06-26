@@ -1,9 +1,10 @@
 # Bastion reviewers for Mite.
 #
-# Backend: Codex via the Pi multi-provider format, running on a ChatGPT
-# subscription, model gpt-5.5 at high reasoning effort. `defaults` only carries
+# Backend: Codex (the `codex` CLI) running on a ChatGPT subscription, model
+# gpt-5.5 at high reasoning effort. The Codex backend passes the model as `-m`
+# and the effort as `-c model_reasoning_effort=...`. `defaults` only carries
 # `model` and `effort`; an inherited model needs a pinned backend, so every
-# reviewer pins `backend: pi`.
+# reviewer pins `backend: codex`.
 #
 # Modes: `gate` blocks merge on a `block` verdict and fails closed on
 # timeout/crash; `advisor` only comments and never blocks. Reviewers that
@@ -14,7 +15,7 @@
 # documents each reviewer points back to.
 
 defaults:
-  model: openai-codex/gpt-5.5
+  model: gpt-5.5
   effort: high
 
 reviewers:
@@ -29,7 +30,7 @@ reviewers:
       - "THIRD_PARTY_NOTICES.md"
       - ".github/**"
     mode: gate
-    backend: pi
+    backend: codex
     prompt: |
       Mite is built against a PRIVATE eval corpus that may contain third-party
       IP. Public-facing artifacts (docs, the marketing site, README, PRODUCT.md,
@@ -61,7 +62,7 @@ reviewers:
       - "app/src/**"
       - "app/src-tauri/src/**"
     mode: gate
-    backend: pi
+    backend: codex
     prompt: |
       Enforce this repository's prose conventions on changed text: documentation,
       markdown, site copy, code comments, and any generated/user-facing strings.
@@ -87,7 +88,7 @@ reviewers:
       - "src/**/*.rs"
       - "app/src-tauri/src/**/*.rs"
     mode: gate
-    backend: pi
+    backend: codex
     prompt: |
       Mite is a long-running overlay over live capture, OCR, and GPU inference.
       A panic in the runtime path kills the user's session. Review the changeset
@@ -124,7 +125,7 @@ reviewers:
       - "src/geometry.rs"
       - "src/hover/**"
     mode: gate
-    backend: pi
+    backend: codex
     prompt: |
       The Japanese lookup core (dictionary segmentation, morphology, frequency,
       part-of-speech, hover hit-testing and popup content, geometry, scoring)
@@ -153,7 +154,7 @@ reviewers:
       - "src/hover/**"
       - "src/hud/**"
     mode: gate
-    backend: pi
+    backend: codex
     prompt: |
       Mite's overlay is a reading aid and an "invisible precision instrument".
       Its palette and popups must stay accessible. Consult PRODUCT.md and
@@ -184,7 +185,7 @@ reviewers:
       - "examples/audit_label_bounds.rs"
       - "examples/relabel_eval_tokens.rs"
     mode: gate
-    backend: pi
+    backend: codex
     prompt: |
       The eval corpus is the OCR + dictionary regression guard, and its labels
       are a human-authored source of truth. Label changes must be auditable and
@@ -211,7 +212,7 @@ reviewers:
     trigger:
       - "**"
     mode: gate
-    backend: pi
+    backend: codex
     prompt: |
       Mite keeps local and runtime artifacts out of the repository. Review newly
       ADDED files in the changeset for things that should never be committed.
@@ -243,7 +244,7 @@ reviewers:
       - "src/interactive/**"
       - "src/models.rs"
     mode: advisor
-    backend: pi
+    backend: codex
     prompt: |
       This change touches the live latency path (capture, OCR, ONNX Runtime,
       smoothing, or timing). Mite's quality bar is TAIL latency (p95/p99), not
@@ -270,7 +271,7 @@ reviewers:
       - "src/doctor.rs"
       - "model-manifest.json"
     mode: gate
-    backend: pi
+    backend: codex
     prompt: |
       Command behavior, config defaults, model requirements, and runtime
       diagnostics are documented in README.md and docs/. They drift easily, and
