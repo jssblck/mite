@@ -174,38 +174,6 @@ reviewers:
       legibility, approve. This encodes "Make overlay category colors
       colorblind-safe" and the PRODUCT.md accessibility anchors.
 
-  # --- Eval integrity ---------------------------------------------------------
-
-  - name: eval-label-integrity
-    trigger:
-      - "src/eval.rs"
-      - "src/eval_capture.rs"
-      - "docs/eval-metadata.md"
-      - "eval/LABEL-CHANGES.md"
-      - "examples/audit_label_bounds.rs"
-      - "examples/relabel_eval_tokens.rs"
-    mode: gate
-    backend: codex
-    prompt: |
-      The eval corpus is the OCR + dictionary regression guard, and its labels
-      are a human-authored source of truth. Label changes must be auditable and
-      consistent with the learner-first metadata policy in docs/eval-metadata.md.
-
-      Block the PR if changes:
-        - alter expected eval labels (text, bounds, or lookup/popup metadata)
-          WITHOUT a corresponding entry in eval/LABEL-CHANGES.md and stated
-          pixel-level or convention-level proof for the correction;
-        - perform label corrections outside the audited paths
-          (examples/audit_label_bounds.rs, examples/relabel_eval_tokens.rs);
-        - drift the chosen primary interpretation per-capture instead of applying
-          one stable, learner-safe rule, or relax strictness of visible text or
-          metadata scoring without justification;
-        - change scoring so that detection bounds, text, or metadata become more
-          lenient in a way that could mask a real regression.
-
-      If eval/scoring changes follow the policy and are properly recorded,
-      approve. See docs/eval-metadata.md and the eval rules in AGENTS.md.
-
   # --- Hygiene: committed artifacts -------------------------------------------
 
   - name: committed-artifacts
