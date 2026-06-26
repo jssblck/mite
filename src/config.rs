@@ -11,6 +11,7 @@ pub struct AppConfig {
     pub models: ModelConfig,
     pub pipeline: CheckedPipelineConfig,
     pub overlay: OverlayConfig,
+    pub eval_capture: EvalCaptureConfig,
 }
 
 impl AppConfig {
@@ -44,6 +45,7 @@ struct RawAppConfig {
     models: ModelConfig,
     pipeline: PipelineConfig,
     overlay: OverlayConfig,
+    eval_capture: EvalCaptureConfig,
 }
 
 impl RawAppConfig {
@@ -53,7 +55,74 @@ impl RawAppConfig {
             models: self.models,
             pipeline: self.pipeline.parse().context("invalid pipeline config")?,
             overlay: self.overlay,
+            eval_capture: self
+                .eval_capture
+                .validated()
+                .context("invalid eval_capture config")?,
         })
+    }
+}
+
+/// Settings for `watch --auto-eval-capture`: how different a scene must be
+/// from the ones already saved before its frame is auto-saved as an eval
+/// fixture, and how often that may happen. Disabled unless the flag is passed;
+/// these only tune it.
+/// Upper bound on `eval_capture.min_interval_secs`. A minimum gap between
+/// automatic captures longer than a day is a misconfiguration, and bounding it
+/// here keeps the later `Duration::from_secs_f32` conversion away from the
+/// overflow that would otherwise panic on an absurd finite value.
+const MAX_MIN_INTERVAL_SECS: f32 = 86_400.0;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EvalCaptureConfig {
+    /// Recognized-text dissimilarity (0 = identical, 1 = fully disjoint) at or
+    /// above which a scene counts as new on the text channel. Must be greater
+    /// than 0: a 0 threshold would treat even identical scenes as new, which
+    /// disables dedup and stalls no-smoothing settling.
+    pub text_change_threshold: f32,
+    /// Box-layout dissimilarity (0 = identical, 1 = fully disjoint) at or above
+    /// which a scene counts as new on the layout channel. Must be greater than
+    /// 0, for the same reason as `text_change_threshold`.
+    pub layout_change_threshold: f32,
+    /// Minimum seconds between two automatic captures (0 = no minimum), capped
+    /// at `MAX_MIN_INTERVAL_SECS`.
+    pub min_interval_secs: f32,
+    /// Hard cap on automatic captures per `watch` session (0 = unlimited).
+    pub max_per_session: usize,
+}
+
+impl Default for EvalCaptureConfig {
+    fn default() -> Self {
+        Self {
+            text_change_threshold: 0.5,
+            layout_change_threshold: 0.5,
+            min_interval_secs: 2.0,
+            max_per_session: 1000,
+        }
+    }
+}
+
+impl EvalCaptureConfig {
+    fn validated(self) -> Result<Self> {
+        for (name, value) in [
+            ("text_change_threshold", self.text_change_threshold),
+            ("layout_change_threshold", self.layout_change_threshold),
+        ] {
+            // Exclude 0.0: identical scenes score 0.0, so a 0.0 threshold makes
+            // `score < threshold` false for them, treating every scene as new
+            // (dedup off) and preventing two agreeing reads from settling.
+            if !(value > 0.0 && value <= 1.0) {
+                bail!("eval_capture.{name} must be greater than 0.0 and at most 1.0, got {value}");
+            }
+        }
+        if !(0.0..=MAX_MIN_INTERVAL_SECS).contains(&self.min_interval_secs) {
+            bail!(
+                "eval_capture.min_interval_secs must be within 0.0..={MAX_MIN_INTERVAL_SECS}, got {}",
+                self.min_interval_secs
+            );
+        }
+        Ok(self)
     }
 }
 
@@ -461,6 +530,52 @@ mod tests {
             ..PipelineConfig::default()
         };
         assert!(zero_downscale.parse().is_err());
+    }
+
+    #[test]
+    fn eval_capture_rejects_degenerate_and_overflowing_values() {
+        assert!(EvalCaptureConfig::default().validated().is_ok());
+
+        // A 0.0 threshold would disable dedup and stall no-smoothing settling,
+        // so it is rejected rather than silently degenerate.
+        let zero_text = EvalCaptureConfig {
+            text_change_threshold: 0.0,
+            ..EvalCaptureConfig::default()
+        };
+        assert!(zero_text.validated().is_err());
+        let zero_layout = EvalCaptureConfig {
+            layout_change_threshold: 0.0,
+            ..EvalCaptureConfig::default()
+        };
+        assert!(zero_layout.validated().is_err());
+
+        let over_one = EvalCaptureConfig {
+            text_change_threshold: 1.5,
+            ..EvalCaptureConfig::default()
+        };
+        assert!(over_one.validated().is_err());
+
+        // A huge finite interval must surface as a config error, not a
+        // Duration::from_secs_f32 panic downstream.
+        let overflow_interval = EvalCaptureConfig {
+            min_interval_secs: 1e30,
+            ..EvalCaptureConfig::default()
+        };
+        assert!(overflow_interval.validated().is_err());
+
+        let negative_interval = EvalCaptureConfig {
+            min_interval_secs: -1.0,
+            ..EvalCaptureConfig::default()
+        };
+        assert!(negative_interval.validated().is_err());
+
+        // The accepted upper bound stays inside Duration's safe range.
+        let max_interval = EvalCaptureConfig {
+            min_interval_secs: MAX_MIN_INTERVAL_SECS,
+            ..EvalCaptureConfig::default()
+        };
+        let validated = max_interval.validated().expect("max interval is valid");
+        let _ = std::time::Duration::from_secs_f32(validated.min_interval_secs);
     }
 
     #[test]

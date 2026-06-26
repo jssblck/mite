@@ -116,6 +116,7 @@ cargo run -- watch
 cargo run -- watch --title "Window title" --auto
 cargo run -- watch --hud
 cargo run -- watch --metrics-interval-secs 5
+cargo run -- watch --auto-eval-capture   # auto-save a raw frame on each new scene (eval fixtures)
 cargo run -- eval --image eval\collection-name\capture-<ts>\underlying.png --labels eval\collection-name\capture-<ts>\eval.json --out target\eval\capture-<ts>.json
 cargo run -- eval-corpus --root eval --out target\eval\corpus-summary.json --out-dir target\eval\corpus --allow-failures
 ```
@@ -217,9 +218,13 @@ Notes for changes here:
 - `src/ocr.rs`, `src/ort_engine/mod.rs`, `src/ort_engine/text.rs`: OCR trait,
   ONNX Runtime engine, detector and recognizer pre/post-processing,
   TensorRT/CUDA/CPU setup, timing hooks, and OCR text normalization.
-- `src/interactive/mod.rs`, `src/interactive/smoothing.rs`: `watch`
-  orchestration, worker thread, capture/OCR loop, smoothing handoff, raw
-  eval-capture hotkey.
+- `src/interactive/mod.rs`, `src/interactive/smoothing.rs`,
+  `src/interactive/auto_capture.rs`: `watch` orchestration, worker thread,
+  capture/OCR loop, smoothing handoff, the raw eval-capture hotkey, and the
+  automatic eval capture (`--auto-eval-capture`) that saves a raw frame when the
+  detected text or box layout changes enough to be a new scene. The fingerprint
+  and change scoring live in `auto_capture.rs` as pure, unit-tested functions;
+  thresholds come from the `[eval_capture]` config section.
 - `src/win32_overlay/mod.rs`, `src/win32_overlay/style.rs`: layered
   click-through Win32 overlay drawing and overlay palette.
 - `src/hover/mod.rs`, `src/hover/furigana.rs`, `src/hover/sense.rs`: pure hit
@@ -232,8 +237,9 @@ Notes for changes here:
   JPDB frequency ranks, and JMdict.
 - `src/eval.rs`: full-frame real-image OCR/lookup regression scoring against
   manually authored labels.
-- `src/eval_capture.rs`, `src/artifact.rs`: raw eval-fixture capture and shared
-  on-disk artifact helpers.
+- `src/eval_capture.rs`, `src/artifact.rs`: raw eval-fixture capture, the
+  on-disk `DetectionFingerprint` embedded in `capture.json` for cross-session
+  auto-capture dedup, and shared on-disk artifact helpers.
 - `examples/`: profiling and lookup/sense stress harnesses.
 - `app/`: the Tauri desktop app (a separate, non-Rust-core surface) that
   installs, updates, and launches the CLI for non-technical users. Rust backend

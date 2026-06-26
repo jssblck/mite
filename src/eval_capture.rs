@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::artifact::{ARTIFACT_VERSION, unix_ms, write_json_pretty};
 use crate::capture::{Frame, FrameSourceMetadata};
@@ -20,6 +20,22 @@ const CAPTURE_SUBDIR: &str = "eval-captures";
 const CAPTURE_DIR_PREFIX: &str = "capture-";
 const RAW_IMAGE_NAME: &str = "underlying.png";
 const META_FILE_NAME: &str = "capture.json";
+
+/// A compact signature of one OCR detection's recognized text and box layout.
+///
+/// It is embedded in `capture.json` for automatic eval captures so a later
+/// `watch` session can skip re-saving a scene it has already captured: the same
+/// similarity score that decides "this is a new scene" at runtime is replayed
+/// against the fingerprints already on disk. Manual hotkey captures (a raw
+/// frame with no OCR) carry no fingerprint, so this stays `None` for them.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DetectionFingerprint {
+    /// Normalized recognized line strings, sorted and deduped.
+    pub lines: Vec<String>,
+    /// Quantized box rects as `[x, y, width, height]` buckets, sorted and
+    /// deduped.
+    pub boxes: Vec<[i32; 4]>,
+}
 
 #[derive(Serialize)]
 struct RawCaptureMeta<'a> {
@@ -34,6 +50,8 @@ struct RawCaptureMeta<'a> {
     frames_delivered: u32,
     staging_age_ms: f64,
     source: RawCaptureSource<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detection_fingerprint: Option<&'a DetectionFingerprint>,
 }
 
 #[derive(Serialize)]
@@ -64,7 +82,12 @@ pub fn default_capture_root() -> PathBuf {
     base.join(CAPTURE_ROOT_DIR).join(CAPTURE_SUBDIR)
 }
 
-pub fn write_raw_capture(root: &Path, window_id: u32, frame: &Frame) -> Result<PathBuf> {
+pub fn write_raw_capture(
+    root: &Path,
+    window_id: u32,
+    frame: &Frame,
+    detection_fingerprint: Option<&DetectionFingerprint>,
+) -> Result<PathBuf> {
     let image = frame
         .pixels
         .as_ref()
@@ -94,10 +117,89 @@ pub fn write_raw_capture(root: &Path, window_id: u32, frame: &Frame) -> Result<P
         frames_delivered: frame.frames_delivered,
         staging_age_ms: frame.staging_age.as_secs_f64() * 1000.0,
         source: RawCaptureSource::from(&frame.source),
+        detection_fingerprint,
     };
     write_json_pretty(&dir.join(META_FILE_NAME), &meta)?;
 
     Ok(dir)
+}
+
+/// Load the detection fingerprints recorded by previous automatic captures
+/// under `root`. Used to dedup across `watch` sessions so a scene already saved
+/// is not captured again. Best-effort: fingerprint-less captures (including
+/// every manual hotkey capture) and non-capture directories are skipped
+/// quietly, and a missing root yields an empty list. Real failures (a readable
+/// root that cannot be enumerated, an unreadable existing `capture.json`, or
+/// corrupt metadata) are logged, because they silently shrink the dedup set and
+/// would otherwise let already-saved scenes be captured again with no warning.
+pub fn load_existing_fingerprints(root: &Path) -> Vec<DetectionFingerprint> {
+    #[derive(Deserialize)]
+    struct Stored {
+        #[serde(default)]
+        detection_fingerprint: Option<DetectionFingerprint>,
+    }
+
+    let mut fingerprints = Vec::new();
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        // A missing root is the normal first-run case. Any other error (a
+        // permission denial or I/O fault on an existing dir) disables
+        // cross-session dedup, so surface it instead of returning empty.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return fingerprints,
+        Err(error) => {
+            tracing::warn!(
+                "cannot read eval-capture dir {} for dedup; cross-session dedup disabled: {error:#}",
+                root.display()
+            );
+            return fingerprints;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                tracing::warn!("skipping an eval-capture entry during dedup scan: {error:#}");
+                continue;
+            }
+        };
+        match entry.file_type() {
+            Ok(file_type) if file_type.is_dir() => {}
+            Ok(_) => continue,
+            Err(error) => {
+                tracing::warn!(
+                    "skipping {} during dedup scan (cannot stat): {error:#}",
+                    entry.path().display()
+                );
+                continue;
+            }
+        }
+        let meta_path = entry.path().join(META_FILE_NAME);
+        let text = match fs::read_to_string(&meta_path) {
+            Ok(text) => text,
+            // No capture.json means this is not a capture bundle: skip quietly.
+            // Any other read error is an existing capture we cannot dedup on.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                tracing::warn!(
+                    "skipping {} during dedup scan (unreadable): {error:#}",
+                    meta_path.display()
+                );
+                continue;
+            }
+        };
+        match serde_json::from_str::<Stored>(&text) {
+            Ok(stored) => {
+                if let Some(fingerprint) = stored.detection_fingerprint {
+                    fingerprints.push(fingerprint);
+                }
+            }
+            Err(error) => tracing::warn!(
+                "skipping {} during dedup scan (corrupt metadata): {error:#}",
+                meta_path.display()
+            ),
+        }
+    }
+    fingerprints
 }
 
 fn unique_capture_dir(root: &Path, captured_unix_ms: u128) -> Result<PathBuf> {
@@ -150,7 +252,7 @@ mod tests {
             staging_age: Duration::from_millis(12),
         };
 
-        let dir = write_raw_capture(root.path(), 42, &frame).unwrap();
+        let dir = write_raw_capture(root.path(), 42, &frame, None).unwrap();
 
         assert!(dir.join("underlying.png").exists());
         let meta: Value =
@@ -162,5 +264,95 @@ mod tests {
         assert_eq!(meta["source"]["kind"], "windows_graphics_capture");
         assert!(meta.get("lines").is_none());
         assert!(meta.get("words").is_none());
+        // A manual capture (no fingerprint) omits the field entirely.
+        assert!(meta.get("detection_fingerprint").is_none());
+    }
+
+    #[test]
+    fn embeds_and_reloads_detection_fingerprint() {
+        let root = tempfile::tempdir().unwrap();
+        let image = RgbImage::from_pixel(2, 1, Rgb([10, 20, 30]));
+        let frame = Frame {
+            id: 1,
+            captured_at: Instant::now(),
+            size: Size::new(2, 1),
+            screen_rect: ScreenRect::new(0, 0, Size::new(2, 1)),
+            source: FrameSourceMetadata {
+                kind: FrameSourceKind::WindowsGraphicsCapture,
+                label: None,
+                app_name: None,
+                window_id: None,
+                pid: None,
+            },
+            content_epoch: 0,
+            pixels: Some(std::sync::Arc::new(image)),
+            frames_delivered: 1,
+            staging_age: Duration::ZERO,
+        };
+        let fingerprint = DetectionFingerprint {
+            lines: vec!["こんにちは".to_string()],
+            boxes: vec![[1, 2, 3, 4]],
+        };
+
+        let dir = write_raw_capture(root.path(), 7, &frame, Some(&fingerprint)).unwrap();
+        let meta: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("capture.json")).unwrap())
+                .unwrap();
+        assert_eq!(meta["detection_fingerprint"]["lines"][0], "こんにちは");
+
+        let loaded = load_existing_fingerprints(root.path());
+        assert_eq!(loaded, vec![fingerprint]);
+    }
+
+    #[test]
+    fn load_existing_fingerprints_is_empty_for_missing_root() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("does-not-exist");
+        assert!(load_existing_fingerprints(&missing).is_empty());
+    }
+
+    #[test]
+    fn load_existing_fingerprints_skips_corrupt_and_partial_captures_keeping_good_ones() {
+        let root = tempfile::tempdir().unwrap();
+
+        // A valid fingerprinted capture: the one we expect back.
+        let image = RgbImage::from_pixel(2, 1, Rgb([10, 20, 30]));
+        let frame = Frame {
+            id: 1,
+            captured_at: Instant::now(),
+            size: Size::new(2, 1),
+            screen_rect: ScreenRect::new(0, 0, Size::new(2, 1)),
+            source: FrameSourceMetadata {
+                kind: FrameSourceKind::WindowsGraphicsCapture,
+                label: None,
+                app_name: None,
+                window_id: Some(1),
+                pid: None,
+            },
+            content_epoch: 1,
+            pixels: Some(std::sync::Arc::new(image)),
+            frames_delivered: 1,
+            staging_age: Duration::from_millis(0),
+        };
+        let fingerprint = DetectionFingerprint {
+            lines: vec!["ありがとう".to_string()],
+            boxes: vec![[1, 2, 3, 4]],
+        };
+        write_raw_capture(root.path(), 1, &frame, Some(&fingerprint)).unwrap();
+
+        // A manual-style capture with no fingerprint: skipped quietly.
+        write_raw_capture(root.path(), 2, &frame, None).unwrap();
+
+        // A directory whose capture.json is corrupt: skipped (with a warning),
+        // not a panic, and it must not abort the scan of the good capture.
+        let corrupt = root.path().join("capture-3");
+        fs::create_dir(&corrupt).unwrap();
+        fs::write(corrupt.join(META_FILE_NAME), b"{ this is not json").unwrap();
+
+        // A stray non-capture directory with no metadata: skipped quietly.
+        fs::create_dir(root.path().join("notes")).unwrap();
+
+        let loaded = load_existing_fingerprints(root.path());
+        assert_eq!(loaded, vec![fingerprint]);
     }
 }

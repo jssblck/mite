@@ -120,7 +120,14 @@ struct WatchArgs {
     /// captured frame without OCR, e.g. Ctrl+Alt+F12.
     #[arg(long, value_name = "COMBO")]
     enable_eval_hotkey: Option<hotkey::HotkeyCombo>,
-    /// Directory where --enable-eval-hotkey writes raw capture folders.
+    /// Automatically save a raw frame (the same artifact --enable-eval-hotkey
+    /// writes) whenever the detected text or box layout changes enough to be a
+    /// new scene. Tuned by the [eval_capture] config section. Dedups against
+    /// captures already saved, including earlier sessions.
+    #[arg(long)]
+    auto_eval_capture: bool,
+    /// Directory where --enable-eval-hotkey and --auto-eval-capture write raw
+    /// capture folders.
     #[arg(long, value_name = "DIR")]
     eval_capture_dir: Option<PathBuf>,
 }
@@ -640,20 +647,34 @@ fn cmd_watch(
 ) -> Result<()> {
     let config = load_or_default(config_path, int8, backend)?;
     let backend = args.window.capture_backend;
-    let eval_hotkey = match args.enable_eval_hotkey {
-        Some(combo) => Some(interactive::EvalHotkeyRequest {
+    // Both the manual hotkey and the automatic capture write to the same eval
+    // folder, defaulting to the shared capture root when no directory is given.
+    if args.eval_capture_dir.is_some()
+        && args.enable_eval_hotkey.is_none()
+        && !args.auto_eval_capture
+    {
+        bail!("--eval-capture-dir requires --enable-eval-hotkey or --auto-eval-capture");
+    }
+    let eval_output_dir = args
+        .eval_capture_dir
+        .unwrap_or_else(eval_capture::default_capture_root);
+    let eval_hotkey = args
+        .enable_eval_hotkey
+        .map(|combo| interactive::EvalHotkeyRequest {
             combo,
-            output_dir: args
-                .eval_capture_dir
-                .unwrap_or_else(eval_capture::default_capture_root),
-        }),
-        None => {
-            if args.eval_capture_dir.is_some() {
-                bail!("--eval-capture-dir requires --enable-eval-hotkey");
-            }
-            None
-        }
-    };
+            output_dir: eval_output_dir.clone(),
+        });
+    let auto_eval_capture = args
+        .auto_eval_capture
+        .then(|| interactive::AutoEvalCaptureRequest {
+            output_dir: eval_output_dir,
+            thresholds: interactive::AutoCaptureThresholds {
+                text_change: config.eval_capture.text_change_threshold,
+                layout_change: config.eval_capture.layout_change_threshold,
+                min_interval: Duration::from_secs_f32(config.eval_capture.min_interval_secs),
+                max_per_session: config.eval_capture.max_per_session,
+            },
+        });
     // If any window selector is given, pin to a concrete window id so the loop
     // captures it regardless of which window is foreground.
     let pinned_window_id = match args.window.optional_selector()? {
@@ -672,6 +693,7 @@ fn cmd_watch(
         metrics_interval: Duration::from_secs(args.metrics_interval_secs),
         smoothing: !args.no_smoothing,
         eval_hotkey,
+        auto_eval_capture,
     };
     interactive::run_watch(&config, &request)
 }
