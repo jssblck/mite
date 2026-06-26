@@ -1,0 +1,10 @@
+# Code owners for Mite.
+#
+# The Bastion reviewer policy and its CI workflow are protected paths: a PR must
+# not be able to weaken the gates that judge it or re-point who pays for a
+# review. The workflow also carries the per-author subscription billing mapping,
+# so changing who may spend a subscription stays a human-reviewed change. Enable
+# "Require review from Code Owners" in branch protection for this to bind.
+/.bastion.yaml              @jssblck
+/.github/workflows/bastion.yml  @jssblck
+/.github/CODEOWNERS         @jssblck
