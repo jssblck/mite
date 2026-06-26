@@ -227,12 +227,15 @@ carry no fingerprint, so they are never used for dedup.
 
 Tune the behavior in the `[eval_capture]` section of `mite.toml`:
 
-- `text_change_threshold` / `layout_change_threshold` (0.0..=1.0, default 0.5):
-  how dissimilar the recognized text set, or the box layout, must be from every
-  already-saved scene before a frame counts as new. A change on either channel
-  triggers a capture, so new dialogue on a fixed text box (text change) and a
-  menu transition (layout change) both qualify.
-- `min_interval_secs` (default 2.0): minimum delay between two automatic saves.
+- `text_change_threshold` / `layout_change_threshold` (greater than 0.0, up to
+  1.0, default 0.5): how dissimilar the recognized text set, or the box layout,
+  must be from every already-saved scene before a frame counts as new. A change
+  on either channel triggers a capture, so new dialogue on a fixed text box
+  (text change) and a menu transition (layout change) both qualify. A 0.0
+  threshold is rejected: it would treat identical scenes as new and disable
+  dedup.
+- `min_interval_secs` (default 2.0, up to 86400): minimum delay between two
+  automatic saves.
 - `max_per_session` (default 1000, 0 = unlimited): hard cap per `watch` run.
 
 The save waits for the scene to settle (the capture is armed on the change and
