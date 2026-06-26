@@ -11,7 +11,7 @@
 //! those, `--auto` runs the capture/OCR loop continuously with no key held
 //! (best paired with `--window-id`/`--title` to pin the game window).
 //!
-//! The overlay window stays click-through, so the game keeps all input — we
+//! The overlay window stays click-through, so the game keeps all input. We
 //! read the cursor position by polling rather than capturing mouse events.
 //!
 //! Capture + OCR run on a background worker thread. The UI thread (overlay
@@ -48,8 +48,11 @@ use crate::ocr::{OcrEngine, RecognizedText, build_ocr_engine, filter_recognized_
 use crate::text_blocks::{analyze_recognized_lines, sort_recognized_reading_order};
 use crate::win32_overlay::{OverlayEvent, Popup, Win32Overlay};
 
+mod auto_capture;
 mod smoothing;
 
+pub use auto_capture::AutoCaptureThresholds;
+use auto_capture::{AutoCaptureState, fingerprint_from_items};
 use smoothing::{Anchor, CachedDetection, SmoothingState};
 
 /// Tunables for the interactive watch loop.
@@ -79,12 +82,21 @@ pub struct WatchRequest {
     /// Optional developer-only hotkey that saves raw frames for eval fixtures
     /// without running OCR.
     pub eval_hotkey: Option<EvalHotkeyRequest>,
+    /// Optional automatic eval-fixture capture: save a raw frame whenever the
+    /// detected text or box layout changes enough to be a new scene.
+    pub auto_eval_capture: Option<AutoEvalCaptureRequest>,
 }
 
 #[derive(Debug, Clone)]
 pub struct EvalHotkeyRequest {
     pub combo: HotkeyCombo,
     pub output_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct AutoEvalCaptureRequest {
+    pub output_dir: PathBuf,
+    pub thresholds: AutoCaptureThresholds,
 }
 
 /// One captured-and-analyzed snapshot of the target window: the segmented words
@@ -164,6 +176,12 @@ pub fn run_watch(config: &AppConfig, request: &WatchRequest) -> Result<()> {
         }
         None => None,
     };
+    if let Some(auto) = &request.auto_eval_capture {
+        println!(
+            "auto eval capture: on -> {} (saves a raw frame when the scene changes)",
+            auto.output_dir.display()
+        );
+    }
 
     let limits = Limits {
         max_senses: request.max_senses,
@@ -171,7 +189,13 @@ pub fn run_watch(config: &AppConfig, request: &WatchRequest) -> Result<()> {
         backend: request.backend,
         smoothing: request.smoothing,
     };
-    let (job_tx, worker_rx) = spawn_watch_worker(engine, dict, config.clone(), limits);
+    let (job_tx, worker_rx) = spawn_watch_worker(
+        engine,
+        dict,
+        config.clone(),
+        limits,
+        request.auto_eval_capture.clone(),
+    );
 
     let mut snapshot: Option<Snapshot> = None;
     let mut in_flight = false;
@@ -196,7 +220,7 @@ pub fn run_watch(config: &AppConfig, request: &WatchRequest) -> Result<()> {
             last_metrics = Instant::now();
         }
         // `--auto` makes OCR run continuously (no Shift). Otherwise Shift is the
-        // hold-to-activate trigger — but games often intercept it while focused.
+        // hold-to-activate trigger, but games often intercept it while focused.
         let active = request.auto || key_down(VK_SHIFT.0);
 
         if eval_hotkey_registration
@@ -273,7 +297,7 @@ pub fn run_watch(config: &AppConfig, request: &WatchRequest) -> Result<()> {
 
         if active {
             // Request a fresh OCR pass when the target window changes or the
-            // refresh interval elapses — but freeze while hovering content so
+            // refresh interval elapses, but freeze while hovering content so
             // the popup you are reading isn't reset under you.
             if let Some(window_id) = request.pinned_window_id.or_else(foreground_window_id) {
                 let target_changed = Some(window_id) != last_window;
@@ -326,12 +350,13 @@ fn spawn_watch_worker(
     dict: Dictionary,
     config: AppConfig,
     limits: Limits,
+    auto_eval_capture: Option<AutoEvalCaptureRequest>,
 ) -> (Sender<WorkerJob>, Receiver<WorkerEvent>) {
     let (job_tx, job_rx) = mpsc::channel::<WorkerJob>();
     let (event_tx, event_rx) = mpsc::channel::<WorkerEvent>();
 
     thread::spawn(move || {
-        let mut worker = Worker::new(engine, dict, config, limits);
+        let mut worker = Worker::new(engine, dict, config, limits, auto_eval_capture);
         while let Ok(job) = job_rx.recv() {
             let event = match job {
                 WorkerJob::OcrPass(window_id) => {
@@ -342,6 +367,13 @@ fn spawn_watch_worker(
                             None
                         }
                     };
+                    // An auto-capture may have fired during the pass; surface it
+                    // with the same event the manual hotkey uses.
+                    if let Some(saved) = worker.take_auto_capture_result()
+                        && event_tx.send(WorkerEvent::EvalCapture(saved)).is_err()
+                    {
+                        break;
+                    }
                     WorkerEvent::OcrPass(result)
                 }
                 WorkerJob::EvalCapture {
@@ -375,6 +407,11 @@ struct Worker {
     capture: Option<(u32, Box<dyn FrameSource + Send>)>,
     last_id: Option<u32>,
     smoothing: SmoothingState,
+    /// Automatic eval-fixture capture state, when `--auto-eval-capture` is on.
+    auto_capture: Option<AutoCaptureState>,
+    /// Result of any auto-capture that fired during the current pass, drained by
+    /// the worker loop after `pass` returns.
+    auto_capture_result: Option<std::result::Result<PathBuf, String>>,
 }
 
 impl Worker {
@@ -383,7 +420,10 @@ impl Worker {
         dict: Dictionary,
         config: AppConfig,
         limits: Limits,
+        auto_eval_capture: Option<AutoEvalCaptureRequest>,
     ) -> Self {
+        let auto_capture = auto_eval_capture
+            .map(|request| AutoCaptureState::new(request.output_dir, request.thresholds));
         Self {
             engine,
             dict,
@@ -392,12 +432,20 @@ impl Worker {
             capture: None,
             last_id: None,
             smoothing: SmoothingState::new(),
+            auto_capture,
+            auto_capture_result: None,
         }
+    }
+
+    fn take_auto_capture_result(&mut self) -> Option<std::result::Result<PathBuf, String>> {
+        self.auto_capture_result.take()
     }
 
     /// Capture the target window, run detection + recognition, then segment each
     /// recognized line into word spans (highlight geometry + popup content).
     fn pass(&mut self, window_id: u32) -> Result<Snapshot> {
+        // Cleared each pass so a stale auto-capture result is never re-sent.
+        self.auto_capture_result = None;
         let target_changed = self.prepare_capture(window_id)?;
 
         // Temporal smoothing: if the previously detected text regions are
@@ -440,6 +488,7 @@ impl Worker {
                 drop(tracing::info_span!("detect").entered());
                 drop(tracing::info_span!("recognize").entered());
                 drop(tracing::info_span!("analyze").entered());
+                self.observe_stable_for_auto_capture();
                 return Ok(Snapshot {
                     screen_rect: unchanged.screen_rect,
                     items: cached.items,
@@ -469,6 +518,7 @@ impl Worker {
             drop(tracing::info_span!("detect").entered());
             drop(tracing::info_span!("recognize").entered());
             drop(tracing::info_span!("analyze").entered());
+            self.observe_stable_for_auto_capture();
             return Ok(Snapshot {
                 screen_rect,
                 items: cached.items,
@@ -528,6 +578,11 @@ impl Worker {
         self.smoothing.cached = Some(CachedDetection::new(items.clone(), words.clone()));
         self.smoothing.last_full = Instant::now();
 
+        // Offer this fresh detection to the auto-capture decision. It arms on a
+        // significant change and flushes once the scene settles; the exact frame
+        // that produced the detection is what gets saved.
+        self.observe_fresh_for_auto_capture(&items, &frame, window_id);
+
         Ok(Snapshot {
             screen_rect,
             items,
@@ -536,13 +591,40 @@ impl Worker {
         })
     }
 
+    /// Feed a settled (reused) pass to the auto-capture state, recording any
+    /// flushed capture for the worker loop to surface.
+    fn observe_stable_for_auto_capture(&mut self) {
+        if let Some(state) = self.auto_capture.as_mut() {
+            self.auto_capture_result = state.observe_stable();
+        }
+    }
+
+    /// Feed a fresh full detection (and the frame that produced it) to the
+    /// auto-capture state. Skipped when the frame did not retain pixels, since
+    /// there would be nothing to save.
+    fn observe_fresh_for_auto_capture(
+        &mut self,
+        items: &[RecognizedText],
+        frame: &Frame,
+        window_id: u32,
+    ) {
+        let result = self.auto_capture.as_mut().and_then(|state| {
+            frame.pixels.as_ref()?;
+            let fingerprint = fingerprint_from_items(items);
+            state.observe_fresh(fingerprint, frame, window_id)
+        });
+        if result.is_some() {
+            self.auto_capture_result = result;
+        }
+    }
+
     fn raw_eval_capture(
         &mut self,
         window_id: u32,
         output_dir: &std::path::Path,
     ) -> Result<PathBuf> {
         let (frame, _) = self.capture_frame(window_id)?;
-        eval_capture::write_raw_capture(output_dir, window_id, &frame)
+        eval_capture::write_raw_capture(output_dir, window_id, &frame, None)
     }
 
     /// Ensure a capture source exists for `window_id`; returns whether the

@@ -206,6 +206,40 @@ The hotkey parser accepts combos such as `Ctrl+Alt+F12`, `Ctrl+Shift+E`, and
 `Win+Shift+Space`. Each combo must include at least one modifier so normal game
 input is not stolen by accident.
 
+#### Automatic collection
+
+Pressing the hotkey by hand misses scenes while you play. `--auto-eval-capture`
+saves the same `underlying.png` + `capture.json` bundle on its own whenever the
+detected text or box layout changes enough to be a new scene, so a play session
+leaves behind one capture per distinct screen:
+
+```powershell
+cargo run -- watch --title "Target Game" --capture-backend wgc --auto-eval-capture
+```
+
+It writes to the same place as the hotkey (`%LOCALAPPDATA%\mite\eval-captures\`
+by default, or `--eval-capture-dir DIR`), and the two can run together. Each
+saved `capture.json` records a `detection_fingerprint` of its recognized text
+and box layout; on startup the capture loads the fingerprints already in the
+target directory and skips scenes it has captured before, so revisiting a menu
+(even in a later session) does not pile up duplicates. Manual hotkey captures
+carry no fingerprint, so they are never used for dedup.
+
+Tune the behavior in the `[eval_capture]` section of `mite.toml`:
+
+- `text_change_threshold` / `layout_change_threshold` (0.0..=1.0, default 0.5):
+  how dissimilar the recognized text set, or the box layout, must be from every
+  already-saved scene before a frame counts as new. A change on either channel
+  triggers a capture, so new dialogue on a fixed text box (text change) and a
+  menu transition (layout change) both qualify.
+- `min_interval_secs` (default 2.0): minimum delay between two automatic saves.
+- `max_per_session` (default 1000, 0 = unlimited): hard cap per `watch` run.
+
+The save waits for the scene to settle (the capture is armed on the change and
+written once the next pass confirms it is stable), so it records the finished
+frame rather than a mid-fade one. The exact frame that produced the detection is
+what gets saved, so there is no re-capture skew.
+
 Once you have a capture worth keeping, label it by hand with an `eval.json` file
 next to `underlying.png`. Mite only scores against that file; it does not create
 or infer labels.

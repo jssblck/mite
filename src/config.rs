@@ -11,6 +11,7 @@ pub struct AppConfig {
     pub models: ModelConfig,
     pub pipeline: CheckedPipelineConfig,
     pub overlay: OverlayConfig,
+    pub eval_capture: EvalCaptureConfig,
 }
 
 impl AppConfig {
@@ -44,6 +45,7 @@ struct RawAppConfig {
     models: ModelConfig,
     pipeline: PipelineConfig,
     overlay: OverlayConfig,
+    eval_capture: EvalCaptureConfig,
 }
 
 impl RawAppConfig {
@@ -53,7 +55,61 @@ impl RawAppConfig {
             models: self.models,
             pipeline: self.pipeline.parse().context("invalid pipeline config")?,
             overlay: self.overlay,
+            eval_capture: self
+                .eval_capture
+                .validated()
+                .context("invalid eval_capture config")?,
         })
+    }
+}
+
+/// Settings for `watch --auto-eval-capture`: how different a scene must be
+/// from the ones already saved before its frame is auto-saved as an eval
+/// fixture, and how often that may happen. Disabled unless the flag is passed;
+/// these only tune it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EvalCaptureConfig {
+    /// Recognized-text dissimilarity (0 = identical, 1 = fully disjoint) at or
+    /// above which a scene counts as new on the text channel.
+    pub text_change_threshold: f32,
+    /// Box-layout dissimilarity (0 = identical, 1 = fully disjoint) at or above
+    /// which a scene counts as new on the layout channel.
+    pub layout_change_threshold: f32,
+    /// Minimum seconds between two automatic captures.
+    pub min_interval_secs: f32,
+    /// Hard cap on automatic captures per `watch` session (0 = unlimited).
+    pub max_per_session: usize,
+}
+
+impl Default for EvalCaptureConfig {
+    fn default() -> Self {
+        Self {
+            text_change_threshold: 0.5,
+            layout_change_threshold: 0.5,
+            min_interval_secs: 2.0,
+            max_per_session: 1000,
+        }
+    }
+}
+
+impl EvalCaptureConfig {
+    fn validated(self) -> Result<Self> {
+        for (name, value) in [
+            ("text_change_threshold", self.text_change_threshold),
+            ("layout_change_threshold", self.layout_change_threshold),
+        ] {
+            if !(0.0..=1.0).contains(&value) {
+                bail!("eval_capture.{name} must be within 0.0..=1.0, got {value}");
+            }
+        }
+        if !self.min_interval_secs.is_finite() || self.min_interval_secs < 0.0 {
+            bail!(
+                "eval_capture.min_interval_secs must be a finite value >= 0, got {}",
+                self.min_interval_secs
+            );
+        }
+        Ok(self)
     }
 }
 
