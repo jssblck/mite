@@ -13,8 +13,8 @@ name: bastion
 # changes take effect in the same PR; keep .bastion.yaml and this workflow
 # CODEOWNERS-protected.
 #
-# Reviews run on the Pi CLI billed to the PR author's own ChatGPT subscription
-# (Pi's openai-codex provider, model gpt-5.5, high effort). See
+# Reviews run on the Codex CLI billed to the PR author's own ChatGPT
+# subscription (model gpt-5.5, high effort). See
 # https://bastion.jessica.black/guide/continuous-integration.md and the engine's
 # docs/developer-guide/github-adapter.md.
 
@@ -46,7 +46,7 @@ jobs:
     # `env` but not `secrets`.
     env:
       HAS_BASTION_APP: ${{ secrets.BASTION_APP_ID != '' && secrets.BASTION_APP_PRIVATE_KEY != '' }}
-    # The Pi (ChatGPT) credentials live in an Actions secret, and GitHub does not
+    # The Codex (ChatGPT) credentials live in an Actions secret, and GitHub does not
     # share secrets with fork-PR runs. We also will not run an agentic backend
     # over untrusted code, so this runs for same-repo PRs only. A maintainer
     # reviews a fork PR by pushing its branch to a trusted branch in this repo.
@@ -88,68 +88,63 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install the Pi CLI
+      - name: Install the Codex CLI
         run: |
           set -euo pipefail
-          npm install -g @earendil-works/pi-coding-agent
+          npm install -g @openai/codex
+          codex --version
 
-      - name: Authenticate Pi as the PR author
+      - name: Authenticate Codex as the PR author
         env:
           # Bastion bills each PR's reviews to its author's own ChatGPT
-          # subscription through Pi. The author's GitHub login maps to a
-          # PI_AUTH_<LOGIN> secret holding the contents of that person's
-          # ~/.pi/agent/auth.json; Pi refreshes the access token from the stored
-          # refresh token at run time. To onboard a contributor, capture their
-          # auth.json locally (`pi` login against the openai-codex provider), add
-          # it as PI_AUTH_<THEIR_LOGIN_UPPERCASED>, and add a `case` arm below.
-          # The mapping lives in this CODEOWNERS-protected workflow, so changing
-          # who may spend a subscription is itself a reviewed change. An unmapped
-          # author fails closed (the gate blocks) rather than silently billing
-          # someone else.
+          # subscription through the Codex CLI. The author's GitHub login maps to
+          # a CODEX_AUTH_<LOGIN> secret holding the contents of that person's
+          # ~/.codex/auth.json (the ChatGPT-subscription OAuth credential, with
+          # auth_mode "chatgpt" plus access and refresh tokens). Codex refreshes
+          # the access token from the stored refresh token at run time. To onboard
+          # a contributor, capture their auth.json locally (`codex login`, then
+          # ~/.codex/auth.json), add it as CODEX_AUTH_<THEIR_LOGIN_UPPERCASED>,
+          # and add a `case` arm below. The mapping lives in this
+          # CODEOWNERS-protected workflow, so changing who may spend a
+          # subscription is itself a reviewed change. An unmapped author fails
+          # closed (the gate blocks) rather than silently billing someone else.
           #
           # Dependabot opens same-repo PRs but has no subscription of its own, so
           # its arm points at a maintainer who has opted in to sponsor it. Two
           # GitHub specifics: the login is literally `dependabot[bot]` (the
           # brackets are a glob class in a shell `case`, so the arm quotes them),
           # and GitHub serves secrets to Dependabot runs from a separate
-          # Dependabot secret store, so PI_AUTH_JSSBLCK must also be set there
-          # (`gh secret set PI_AUTH_JSSBLCK --app dependabot`) or it arrives empty
-          # and the gate blocks with a "mapped but empty" error.
+          # Dependabot secret store, so CODEX_AUTH_JSSBLCK must also be set there
+          # (`gh secret set CODEX_AUTH_JSSBLCK --app dependabot`) or it arrives
+          # empty and the gate blocks with a "mapped but empty" error.
           AUTHOR: ${{ github.event.pull_request.user.login }}
-          PI_AUTH_JSSBLCK: ${{ secrets.PI_AUTH_JSSBLCK }}
+          CODEX_AUTH_JSSBLCK: ${{ secrets.CODEX_AUTH_JSSBLCK }}
         run: |
           set -euo pipefail
           author="$(printf '%s' "$AUTHOR" | tr '[:upper:]' '[:lower:]')"
           case "$author" in
-            jssblck) cred="$PI_AUTH_JSSBLCK" ;;
-            'dependabot[bot]') cred="$PI_AUTH_JSSBLCK" ;;
+            jssblck) cred="$CODEX_AUTH_JSSBLCK" ;;
+            'dependabot[bot]') cred="$CODEX_AUTH_JSSBLCK" ;;
             *)
-              echo "::error::No Pi subscription is mapped for PR author '$AUTHOR'. Add a PI_AUTH_<LOGIN> secret and a case arm in .github/workflows/bastion.yml." >&2
+              echo "::error::No Codex subscription is mapped for PR author '$AUTHOR'. Add a CODEX_AUTH_<LOGIN> secret and a case arm in .github/workflows/bastion.yml." >&2
               exit 1
               ;;
           esac
           if [ -z "$cred" ]; then
-            echo "::error::Pi credential for '$AUTHOR' is mapped but its secret is empty; set the matching PI_AUTH_<LOGIN> repository secret." >&2
+            echo "::error::Codex credential for '$AUTHOR' is mapped but its secret is empty; set the matching CODEX_AUTH_<LOGIN> repository secret." >&2
             exit 1
           fi
-          mkdir -p "$HOME/.pi/agent"
-          printf '%s' "$cred" > "$HOME/.pi/agent/auth.json"
-          chmod 600 "$HOME/.pi/agent/auth.json"
-          # The registry pins model: openai-codex/gpt-5.5 and effort: high, which
-          # the Pi backend forwards as --model and --thinking. This settings.json
-          # is the fallback Pi reads for any reviewer that pins no model: it names
-          # the same ChatGPT-subscription provider so a review never drops to Pi's
-          # built-in default provider (google).
-          printf '%s' '{"defaultProvider":"openai-codex","defaultModel":"gpt-5.5","defaultThinkingLevel":"high"}' > "$HOME/.pi/agent/settings.json"
-          chmod 600 "$HOME/.pi/agent/settings.json"
+          mkdir -p "$HOME/.codex"
+          printf '%s' "$cred" > "$HOME/.codex/auth.json"
+          chmod 600 "$HOME/.codex/auth.json"
 
       - name: Run bastion review
         env:
           # Keep run history inside the workspace so it can be uploaded as an
           # artifact instead of landing in the runner's per-user data directory.
           BASTION_DATA_DIR: ${{ github.workspace }}/.bastion
-          # Resolve the `pi` binary npm just put on PATH.
-          BASTION_PI_BIN: pi
+          # Resolve the `codex` binary npm just put on PATH.
+          BASTION_CODEX_BIN: codex
         # GitHub bash runs with `-eo pipefail`, so a blocked review's non-zero
         # exit fails the job (and the required check). The canonical JSONL is
         # persisted under BASTION_DATA_DIR and uploaded below.
