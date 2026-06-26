@@ -126,9 +126,12 @@ pub fn write_raw_capture(
 
 /// Load the detection fingerprints recorded by previous automatic captures
 /// under `root`. Used to dedup across `watch` sessions so a scene already saved
-/// is not captured again. Best-effort: unreadable or fingerprint-less captures
-/// (including every manual hotkey capture) are simply skipped, and a missing
-/// root yields an empty list.
+/// is not captured again. Best-effort: fingerprint-less captures (including
+/// every manual hotkey capture) and non-capture directories are skipped
+/// quietly, and a missing root yields an empty list. Real failures (a readable
+/// root that cannot be enumerated, an unreadable existing `capture.json`, or
+/// corrupt metadata) are logged, because they silently shrink the dedup set and
+/// would otherwise let already-saved scenes be captured again with no warning.
 pub fn load_existing_fingerprints(root: &Path) -> Vec<DetectionFingerprint> {
     #[derive(Deserialize)]
     struct Stored {
@@ -137,20 +140,63 @@ pub fn load_existing_fingerprints(root: &Path) -> Vec<DetectionFingerprint> {
     }
 
     let mut fingerprints = Vec::new();
-    let Ok(entries) = fs::read_dir(root) else {
-        return fingerprints;
-    };
-    for entry in entries.flatten() {
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            continue;
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        // A missing root is the normal first-run case. Any other error (a
+        // permission denial or I/O fault on an existing dir) disables
+        // cross-session dedup, so surface it instead of returning empty.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return fingerprints,
+        Err(error) => {
+            tracing::warn!(
+                "cannot read eval-capture dir {} for dedup; cross-session dedup disabled: {error:#}",
+                root.display()
+            );
+            return fingerprints;
         }
-        let Ok(text) = fs::read_to_string(entry.path().join(META_FILE_NAME)) else {
-            continue;
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                tracing::warn!("skipping an eval-capture entry during dedup scan: {error:#}");
+                continue;
+            }
         };
-        if let Ok(stored) = serde_json::from_str::<Stored>(&text)
-            && let Some(fingerprint) = stored.detection_fingerprint
-        {
-            fingerprints.push(fingerprint);
+        match entry.file_type() {
+            Ok(file_type) if file_type.is_dir() => {}
+            Ok(_) => continue,
+            Err(error) => {
+                tracing::warn!(
+                    "skipping {} during dedup scan (cannot stat): {error:#}",
+                    entry.path().display()
+                );
+                continue;
+            }
+        }
+        let meta_path = entry.path().join(META_FILE_NAME);
+        let text = match fs::read_to_string(&meta_path) {
+            Ok(text) => text,
+            // No capture.json means this is not a capture bundle: skip quietly.
+            // Any other read error is an existing capture we cannot dedup on.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                tracing::warn!(
+                    "skipping {} during dedup scan (unreadable): {error:#}",
+                    meta_path.display()
+                );
+                continue;
+            }
+        };
+        match serde_json::from_str::<Stored>(&text) {
+            Ok(stored) => {
+                if let Some(fingerprint) = stored.detection_fingerprint {
+                    fingerprints.push(fingerprint);
+                }
+            }
+            Err(error) => tracing::warn!(
+                "skipping {} during dedup scan (corrupt metadata): {error:#}",
+                meta_path.display()
+            ),
         }
     }
     fingerprints
@@ -263,5 +309,50 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let missing = root.path().join("does-not-exist");
         assert!(load_existing_fingerprints(&missing).is_empty());
+    }
+
+    #[test]
+    fn load_existing_fingerprints_skips_corrupt_and_partial_captures_keeping_good_ones() {
+        let root = tempfile::tempdir().unwrap();
+
+        // A valid fingerprinted capture: the one we expect back.
+        let image = RgbImage::from_pixel(2, 1, Rgb([10, 20, 30]));
+        let frame = Frame {
+            id: 1,
+            captured_at: Instant::now(),
+            size: Size::new(2, 1),
+            screen_rect: ScreenRect::new(0, 0, Size::new(2, 1)),
+            source: FrameSourceMetadata {
+                kind: FrameSourceKind::WindowsGraphicsCapture,
+                label: None,
+                app_name: None,
+                window_id: Some(1),
+                pid: None,
+            },
+            content_epoch: 1,
+            pixels: Some(std::sync::Arc::new(image)),
+            frames_delivered: 1,
+            staging_age: Duration::from_millis(0),
+        };
+        let fingerprint = DetectionFingerprint {
+            lines: vec!["ありがとう".to_string()],
+            boxes: vec![[1, 2, 3, 4]],
+        };
+        write_raw_capture(root.path(), 1, &frame, Some(&fingerprint)).unwrap();
+
+        // A manual-style capture with no fingerprint: skipped quietly.
+        write_raw_capture(root.path(), 2, &frame, None).unwrap();
+
+        // A directory whose capture.json is corrupt: skipped (with a warning),
+        // not a panic, and it must not abort the scan of the good capture.
+        let corrupt = root.path().join("capture-3");
+        fs::create_dir(&corrupt).unwrap();
+        fs::write(corrupt.join(META_FILE_NAME), b"{ this is not json").unwrap();
+
+        // A stray non-capture directory with no metadata: skipped quietly.
+        fs::create_dir(root.path().join("notes")).unwrap();
+
+        let loaded = load_existing_fingerprints(root.path());
+        assert_eq!(loaded, vec![fingerprint]);
     }
 }

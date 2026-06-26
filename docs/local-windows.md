@@ -217,6 +217,11 @@ leaves behind one capture per distinct screen:
 cargo run -- watch --title "Target Game" --capture-backend wgc --auto-eval-capture
 ```
 
+`--auto-eval-capture` drives the capture/OCR loop continuously on its own, so it
+collects hands-free with no Shift held and no `--auto` needed. The definition
+overlay still only appears while you hold Shift (or pass `--auto`); the
+background collection does not draw anything.
+
 It writes to the same place as the hotkey (`%LOCALAPPDATA%\mite\eval-captures\`
 by default, or `--eval-capture-dir DIR`), and the two can run together. Each
 saved `capture.json` records a `detection_fingerprint` of its recognized text

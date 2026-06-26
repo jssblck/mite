@@ -11,6 +11,11 @@
 //! those, `--auto` runs the capture/OCR loop continuously with no key held
 //! (best paired with `--window-id`/`--title` to pin the game window).
 //!
+//! `--auto-eval-capture` also drives the loop continuously (it observes OCR
+//! passes to detect scene changes), so it collects fixtures hands-free without
+//! Shift or `--auto`. Presentation stays gated on Shift/`--auto`, so background
+//! collection draws no overlay.
+//!
 //! The overlay window stays click-through, so the game keeps all input. We
 //! read the cursor position by polling rather than capturing mouse events.
 //!
@@ -295,10 +300,18 @@ pub fn run_watch(config: &AppConfig, request: &WatchRequest) -> Result<()> {
             if panel.contains(x, y));
         let over_interactive = over_highlight || over_popup;
 
-        if active {
+        // Auto eval capture observes OCR passes, so the loop must keep running
+        // them even when the overlay is not active (no Shift, no --auto):
+        // otherwise the documented hands-free collection would capture nothing.
+        // Presentation and hover stay gated on `active` below, so background
+        // collection does not force the overlay on.
+        let ocr_running = active || request.auto_eval_capture.is_some();
+
+        if ocr_running {
             // Request a fresh OCR pass when the target window changes or the
             // refresh interval elapses, but freeze while hovering content so
-            // the popup you are reading isn't reset under you.
+            // the popup you are reading isn't reset under you. (`over_interactive`
+            // is only ever true while the overlay is active and showing.)
             if let Some(window_id) = request.pinned_window_id.or_else(foreground_window_id) {
                 let target_changed = Some(window_id) != last_window;
                 let due = last_request.is_none_or(|at| at.elapsed() >= request.refresh);
@@ -309,6 +322,9 @@ pub fn run_watch(config: &AppConfig, request: &WatchRequest) -> Result<()> {
                     last_window = Some(window_id);
                 }
             }
+        }
+
+        if active {
             if !over_popup {
                 update_hover(&mut overlay, snapshot.as_ref(), local);
             }
