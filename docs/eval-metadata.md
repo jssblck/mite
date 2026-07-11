@@ -131,6 +131,8 @@ Use the eval UI or `draft_expected_detection` path to rebuild metadata whenever
 possible. Manual metadata edits are allowed, but they should follow the same
 matrix as the runtime. If a current runtime result violates this policy, fix the
 runtime or note the mismatch instead of copying it into labels as precedent.
+Character and line placement follows [eval geometry](eval-geometry.md); metadata
+drafting does not manufacture character positions.
 
 Residual disagreement should be explicit:
 

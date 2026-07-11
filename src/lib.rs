@@ -6,6 +6,7 @@ pub mod dictionary;
 pub mod doctor;
 pub mod eval;
 pub mod eval_capture;
+pub mod eval_geometry;
 pub mod eval_ui;
 pub mod frequency;
 pub mod geometry;

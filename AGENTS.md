@@ -32,6 +32,8 @@ dictionary segmentation, or overlay presentation.
 - `docs/eval-metadata.md` documents the learner-first metadata policy for eval
   labels, including why the concrete interpretation matrix lives in code and how
   to handle ambiguous Japanese lookup cases consistently.
+- `docs/eval-geometry.md` defines pixel-aligned line and character boxes for
+  OCR placement, underlines, hover targets, and furigana anchors.
 - `docs/future/pure-gpu.md` is exploratory design context, not committed roadmap.
 - `PRODUCT.md` is the strategic design context for the overlay surface: register
   (product), users, purpose, the "invisible precision instrument" personality,
