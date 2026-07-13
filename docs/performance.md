@@ -115,9 +115,16 @@ glue (eval corpus bit-identical, aggregate 96.18% before and after):
 The post-recognition geometry refinement stage added 2026-07-13
 (`rec.refine_geometry`, docs/accuracy.md stage 4) measures 0.3-0.5 ms per
 frame under `MITE_PROFILE` on dense 4K eval captures: the per-line gradient
-measurement runs rayon-parallel and touches only a padded crop of each line,
-so it is invisible next to the ~37 ms recognizer batch stage and needs no
-toggle.
+measurement runs rayon-parallel and touches only a padded crop of each line.
+Interleaved A/B on the dense 96-line frame (`profile_ocr`, 2 rounds of 30
+iterations, idle GPU, TensorRT FP16) shows the stage inside run-to-run
+noise, so no toggle is needed:
+
+```text
+dense 96-line menu frame, rounds pooled:
+  before: detect p50 74-76 / p95 79-84   recognize p50 47-50 / p95 56-59
+  after:  detect p50 74-76 / p95 77-80   recognize p50 47-49 / p95 54-58
+```
 
 Tail behavior at this build, characterized over 200 iterations on the dense
 frame (idle GPU): detect p50 100 / p95 118 / p99 143, recognize p50 71 /
