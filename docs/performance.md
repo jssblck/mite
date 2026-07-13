@@ -112,6 +112,13 @@ glue (eval corpus bit-identical, aggregate 96.18% before and after):
   with identical batch composition, so tensor packing and CTC decode no
   longer serialize with GPU inference.
 
+The post-recognition geometry refinement stage added 2026-07-13
+(`rec.refine_geometry`, docs/accuracy.md stage 4) measures 0.3-0.5 ms per
+frame under `MITE_PROFILE` on dense 4K eval captures: the per-line gradient
+measurement runs rayon-parallel and touches only a padded crop of each line,
+so it is invisible next to the ~37 ms recognizer batch stage and needs no
+toggle.
+
 Tail behavior at this build, characterized over 200 iterations on the dense
 frame (idle GPU): detect p50 100 / p95 118 / p99 143, recognize p50 71 /
 p95 87 / p99 120 - p99 stays within ~1.4x of p50 with no multi-hundred-ms

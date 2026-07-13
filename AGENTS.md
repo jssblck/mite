@@ -239,6 +239,11 @@ Notes for changes here:
   JPDB frequency ranks, and JMdict.
 - `src/eval.rs`: full-frame real-image OCR/lookup regression scoring against
   manually authored labels.
+- `src/text_geometry.rs`: pixel-measured line and character geometry
+  (docs/eval-geometry.md), shared by the eval label tooling
+  (`examples/reannotate_character_bounds.rs`, the eval UI) and the engine's
+  post-recognition box refinement, so runtime geometry and eval labels are
+  measured with the same ruler.
 - `src/eval_capture.rs`, `src/artifact.rs`: raw eval-fixture capture, the
   on-disk `DetectionFingerprint` embedded in `capture.json` for cross-session
   auto-capture dedup, and shared on-disk artifact helpers.

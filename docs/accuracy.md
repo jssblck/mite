@@ -57,32 +57,47 @@ Each stage exists to protect a specific kind of accuracy:
    visible to the detector. Candidates from both passes are deduplicated and
    filtered for plausibility. Dense menu screens contain more real text
    lines than any fixed cap, so when the box cap binds it drops the
-   lowest-confidence boxes — a full panel of real text can never silently
+   lowest-confidence boxes; a full panel of real text can never silently
    vanish because of where it sits on screen.
 3. **Recognition** crops each detected line from the full-resolution frame
    with half-a-line-height of margin. The detector's probability map tends
    to under-box weak edge glyphs (a trailing 。, an opening bracket); the
-   margin lets the recognizer read them anyway, while the reported box stays
-   the detector's so geometry remains stable.
-4. **Shape rescue** handles the diamond bullets ◇ and ◆, which the games use
+   margin lets the recognizer read them anyway.
+4. **Geometry refinement** snaps each recognized line's box and character
+   centres to the measured pixel extent of its glyphs, using the same
+   luminance-gradient measurement that produced the eval labels' character
+   geometry (`docs/eval-geometry.md`). The detector box acts as the search
+   hint; guarded fallbacks keep it wherever the measurement is unreliable: a
+   measured edge that runs to the search-region boundary (textured backdrop),
+   a horizontal edge that moves more than ~a quarter line-height (adjacent
+   icons read as ink), symmetric outward growth on both horizontal edges
+   (glow around a stylized label rather than a clipped glyph), an extent
+   whose implied per-character advance is implausible for the recognized
+   text, or a single-character line (too little structure to validate).
+   Accepted refinements are then clamped so no edge leaves the detector box
+   by more than 2 px: rescoring 12.7k matched corpus detections offline
+   showed the detector's outer edge beats the measurement's outward
+   extension beyond the antialiasing fringe, and the gains come from inward
+   correction.
+5. **Shape rescue** handles the diamond bullets ◇ and ◆, which the games use
    as real text but which are absent from the recognizer's character set. A
    geometric classifier (diamond mass profile, linear taper toward the tips,
    all four vertices present, crisp edges, text on the same row) synthesizes
    them from boxes the recognizer returned empty. The gates exist to reject
    look-alikes: blurred buttons, reticle icons, oversized map decorations.
-5. **Normalization** repairs the recognizer's systematic confusions; the
+6. **Normalization** repairs the recognizer's systematic confusions; the
    standing rules are described below.
-6. **Filtering** removes what should never have been boxed: background
+7. **Filtering** removes what should never have been boxed: background
    decals, microscopic pseudo-text, logo marks. Merge rules rejoin lines the
    detector splits at mid-line pauses (……, ——) and at short wrapped tails.
-7. **Word analysis** (line grouping, dictionary segmentation) sits
+8. **Word analysis** (line grouping, dictionary segmentation) sits
    downstream but is coupled to character accuracy: wrapped-line joining
    requires dictionary evidence that a word crosses the line break, so one
    wrong character can prevent a join and cost several word lookups. This
    coupling is why character accuracy is the highest-leverage number in the
    whole system: a character error costs roughly three times its face value
    once word-level effects are counted.
-8. **Optional second opinion**: `models.fallback_recognizer_path` can load
+9. **Optional second opinion**: `models.fallback_recognizer_path` can load
    the heavier PP-OCRv5 server recognizer for lines the primary reads with
    low confidence. It is off by default; see "Approaches tried and
    rejected" for why it does not earn its cost on the eval corpus.
@@ -143,7 +158,7 @@ accuracy-affecting change runs:
 
 `scripts/analyze-eval-failures.ts` and `scripts/attribute-eval-loss.ts`
 aggregate failures and attribute the loss in aggregate points by cause.
-Subset results alone are never trusted — subset gains have inverted at
+Subset results alone are never trusted: subset gains have inverted at
 corpus scale. Label corrections go exclusively through the evidence-gated
 tools (`examples/audit_label_bounds.rs`, `examples/relabel_eval_tokens.rs`)
 and every change is recorded with its evidence in `eval/LABEL-CHANGES.md`.
@@ -161,7 +176,7 @@ implementations are recoverable from git history.
 | Per-line server-recognizer fallback on low-confidence lines | Pay the big model only where the small one struggles | Score-neutral; kept as a default-off option for use outside the corpus |
 | Contrast-stretch retry of low-confidence lines | Faint panels compress the luminance range the model trained on | Model confidence is not a reliable quality signal across preprocessing changes; ungated it also revives junk past the noise filters |
 | Lexicon-guided CTC decoding (runner-up glyph swaps adjudicated by the dictionary) | Recovers near-tie misreads the greedy decoder discards | Net zero to slightly negative; the labels already encode this reader's choices on ambiguous glyphs |
-| Detector box growth / crop-extension geometry (several variants) | Boxes measurably under-cover edge glyphs | Label bounds were drawn around this detector's behavior; every geometric change loses more bounds credit than it gains in text |
+| Detector box growth / crop-extension geometry (several variants) | Boxes measurably under-cover edge glyphs | Rejected while label bounds were still drawn around this detector's behavior: back then every geometric change lost more bounds credit than it gained in text. After labels moved to pixel-measured character geometry, measurement-based refinement (pipeline stage 4) became the win these variants were reaching for; blind geometric growth remains wrong |
 | Super-native (1.5x) detection input | Small isolated glyphs get more pixels | Box geometry shifts against labels; the widened TensorRT profile alone perturbs scores |
 | Detector threshold / morphology-radius tuning | Cheap knobs | Within noise at best; closing radii merge neighboring UI elements |
 | Bicubic upscaling of small recognition crops | Sharper input for tiny text | The model expects its training-time resampling; sharper input reads slightly worse |
@@ -169,8 +184,8 @@ implementations are recoverable from git history.
 The unifying finding: **the eval labels co-evolved with this reader.**
 Annotators accepted the pipeline's output wherever it matched the pixels,
 so on genuinely ambiguous glyphs the labels record what this pipeline
-reads. Changing how ambiguous pixels are read — a different model, decoder,
-or preprocessing — moves those reads in both directions and nets roughly
+reads. Changing how ambiguous pixels are read (a different model, decoder,
+or preprocessing) moves those reads in both directions and nets roughly
 zero against these labels, even when the change is a genuine improvement in
 the abstract. Real gains against this corpus come from the other side:
 recovering text the pipeline missed entirely, and fixing labels that are
@@ -179,7 +194,7 @@ provably wrong.
 ## The overfitting boundary
 
 The eval score could be pushed higher in ways that would make the tool no
-better — or worse — for users. Two are explicitly off-limits:
+better, or worse, for users. Two are explicitly off-limits:
 
 - **Capture-specific correction literals.** Hundreds of entries
   reconstructing individual screens' text would raise the eval score while
@@ -194,7 +209,7 @@ Past this boundary, raising the eval number and raising real accuracy stop
 being the same project. The residual gap (see the snapshot below)
 decomposes into recognizer capability on faint and tiny glyphs, small
 box-geometry disagreements inside the eval's own tolerance design, and a
-thin tail of one-off misreads — none of which post-processing can fix
+thin tail of one-off misreads, none of which post-processing can fix
 honestly.
 
 ## The path to higher accuracy
@@ -212,20 +227,28 @@ The honest route runs through the model, not more post-processing:
    `examples/relabel_eval_tokens.rs` rather than hand-editing.
 2. **A detector fine-tune** for isolated single glyphs (a lone ン or く on
    its own wrapped line), if those misses still matter afterward.
-3. **Tolerance-model re-annotation** — deriving per-label bounds tolerance
-   from measured detector jitter instead of hand-drawn margins — only as a
+3. **Tolerance-model re-annotation** (deriving per-label bounds tolerance
+   from measured detector jitter instead of hand-drawn margins), only as a
    deliberate, documented change to the eval contract.
 
 Budget honestly: the recognizer fine-tune is a synthetic-data pipeline plus
-GPU-days of training for an expected 1.5–2 aggregate points. Smaller
+GPU-days of training for an expected 1.5-2 aggregate points. Smaller
 efforts have all been measured and do not close the gap.
 
 ## Measurement snapshot
 
-2026-06-09, 414-capture corpus, 8,282 labeled lines:
+2026-07-13, 649-capture corpus across three titles, 12,817 labeled lines:
 
 ```text
-aggregate 96.18% | detection 96.08% | characters 98.73% | metadata 92.26%
-lines read perfectly: 94.0%
-line error rate, small text (<22 px): 8.7% | normal text: 5.8%
+aggregate 92.41% | detection 86.36% | characters 98.18% | metadata 91.64%
+lines read perfectly: 91.7%
+line error rate, small text (<22 px): 12.0% | normal text: 7.2%
 ```
+
+Not comparable to the 2026-06-09 snapshot (96.18% aggregate, 414 captures):
+the corpus has since grown by two harder titles, and every label's bounds
+were re-measured to pixel-true character geometry, which tightened the
+detection axis for the whole corpus. Against the same labels, geometry
+refinement (pipeline stage 4) is worth +0.12 detection points and +0.05
+aggregate points over the raw detector boxes, with per-capture regressions
+bounded near 1 point.

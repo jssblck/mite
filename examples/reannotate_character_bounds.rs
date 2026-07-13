@@ -7,7 +7,7 @@ use clap::Parser;
 use mite::{
     artifact,
     eval::{self, CharacterGeometrySource},
-    eval_geometry::measure_character_geometry,
+    text_geometry::measure_character_geometry,
 };
 use serde::Serialize;
 
