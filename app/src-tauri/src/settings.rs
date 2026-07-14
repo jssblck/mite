@@ -31,6 +31,11 @@ pub struct AppSettings {
     /// Run the overlay continuously (`watch --auto`) instead of holding Shift.
     /// On by default: some games swallow the Shift hotkey.
     pub watch_auto: bool,
+    /// Draw the overlay only while the watched window is focused
+    /// (`watch --focus-only`; the picker always pins a window id, which that
+    /// flag requires). On by default: without it, an app-launched overlay in
+    /// continuous mode keeps drawing over whatever the user alt-tabs to.
+    pub watch_focus_only: bool,
     /// Show the per-stage latency HUD (`watch --hud`).
     pub watch_hud: bool,
     /// Log aggregate metrics every N seconds (`watch --metrics-interval-secs`);
@@ -45,8 +50,10 @@ impl Default for AppSettings {
             dll_dirs: Vec::new(),
             runtime_setup_seen: false,
             // Matches the previous in-picker defaults: continuous on, the
-            // diagnostic surfaces off.
+            // diagnostic surfaces off. Focus gating is on so the continuous
+            // overlay disappears while the watched window is unfocused.
             watch_auto: true,
+            watch_focus_only: true,
             watch_hud: false,
             watch_metrics_interval_secs: 0,
         }
@@ -118,6 +125,7 @@ mod tests {
             dll_dirs: vec!["C:\\nvidia\\bin".to_string()],
             runtime_setup_seen: true,
             watch_auto: false,
+            watch_focus_only: false,
             watch_hud: true,
             watch_metrics_interval_secs: 5,
         };
@@ -127,6 +135,7 @@ mod tests {
         assert_eq!(decoded.dll_dirs, vec!["C:\\nvidia\\bin".to_string()]);
         assert!(decoded.runtime_setup_seen);
         assert!(!decoded.watch_auto);
+        assert!(!decoded.watch_focus_only);
         assert!(decoded.watch_hud);
         assert_eq!(decoded.watch_metrics_interval_secs, 5);
     }
@@ -134,10 +143,12 @@ mod tests {
     #[test]
     fn watch_defaults_fill_in_for_settings_files_predating_the_fields() {
         // A settings file written before watch options existed must deserialize
-        // with continuous-watch on, matching the prior in-picker default.
+        // with continuous-watch on, matching the prior in-picker default, and
+        // with focus gating on (the default for files predating that field).
         let legacy = r#"{"runtimeTier":"cpu","dllDirs":[],"runtimeSetupSeen":true}"#;
         let decoded: AppSettings = serde_json::from_str(legacy).unwrap();
         assert!(decoded.watch_auto);
+        assert!(decoded.watch_focus_only);
         assert!(!decoded.watch_hud);
         assert_eq!(decoded.watch_metrics_interval_secs, 0);
     }

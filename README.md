@@ -92,12 +92,15 @@ Then find a target window and start the overlay:
 cargo run -- list-windows
 cargo run -- watch
 cargo run -- watch --title "Target Game" --auto
+cargo run -- watch --title "Target Game" --auto --focus-only
 cargo run -- watch --hud
 cargo run -- watch --metrics-interval-secs 5
 ```
 
 Use `--auto` for games that consume the `Shift` key, and pin the target with
-`--title`, `--window-id`, or `--pid`.
+`--title`, `--window-id`, or `--pid`. Add `--focus-only` (it requires a pinned
+target) to hide the overlay and pause OCR whenever the pinned window is not
+focused, so alt-tabbing away never leaves underlines over another app.
 
 ## Features
 
@@ -120,7 +123,7 @@ Use `--auto` for games that consume the `Shift` key, and pin the target with
 cargo run -- init-config [--force]
 cargo run -- doctor
 cargo run -- list-windows [--json] [--thumbnails] [--thumbnail-max-width PX]
-cargo run -- watch [--title T | --window-id N | --pid P] [--auto] [--hud]
+cargo run -- watch [--title T | --window-id N | --pid P] [--auto] [--focus-only] [--hud]
 cargo run -- eval --image path\to\underlying.png --labels path\to\eval.json
 cargo run -- eval-corpus --root eval --out target\eval\corpus-summary.json --allow-failures
 cargo run --bin eval-ui
