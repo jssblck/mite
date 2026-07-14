@@ -42,9 +42,9 @@ pub fn is_watching(state: &State<WatchState>) -> bool {
 
 /// Start `mite watch` for the given window. Errors if one is already running.
 ///
-/// The watch flags (continuous mode, HUD, metrics interval) come from the saved
-/// app settings, which the user configures in the Settings panel; the picker
-/// only supplies the window to read.
+/// The watch flags (continuous mode, focus gating, HUD, metrics interval) come
+/// from the saved app settings, which the user configures in the Settings
+/// panel; the picker only supplies the window to read.
 pub fn start(app: &AppHandle, state: &State<WatchState>, window_id: u32) -> Result<()> {
     if is_watching(state) {
         anyhow::bail!("watch is already running");
@@ -64,6 +64,11 @@ pub fn start(app: &AppHandle, state: &State<WatchState>, window_id: u32) -> Resu
         .arg(window_id.to_string());
     if opts.watch_auto {
         cmd.arg("--auto");
+    }
+    // Valid here unconditionally: --focus-only requires a pinned target, and
+    // the app always pins with --window-id above.
+    if opts.watch_focus_only {
+        cmd.arg("--focus-only");
     }
     if opts.watch_hud {
         cmd.arg("--hud");
