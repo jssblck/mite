@@ -62,7 +62,11 @@ hands off to `cli.rs`, where Clap parsing and command handlers live.
   fallback recognizer on low-confidence lines (`docs/models.md`).
   `FixtureOcrEngine` backs deterministic UI smoke tests. `StableIdAllocator` assigns
   cross-frame-stable box ids so a box that stays put is not treated as new
-  each frame.
+  each frame. After recognition, each line's box and character centres are
+  snapped to the pixel-measured glyph extent (`text_geometry.rs`, the same
+  measurement eval labels use; see `docs/eval-geometry.md`), with guards that
+  keep the detector's geometry wherever the pixels cannot confirm a tighter
+  box.
 - `interactive::Worker` (`interactive/mod.rs`, `interactive/smoothing.rs`):
   owns the engine, dictionary, capture source, and `SmoothingState`, and runs
   one capture -> detect -> recognize -> block-analyze pass per requested

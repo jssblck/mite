@@ -4,6 +4,13 @@ Eval geometry is the target for OCR placement, hover hit testing, token
 underlines, and furigana anchors. Labels describe where text is rendered in the
 original frame. Detector output is diagnostic evidence, not ground truth.
 
+The measurement lives in `src/text_geometry.rs` and is shared by both sides of
+the eval: label tooling measures character cells inside annotator-drawn
+regions, and the live pipeline snaps each recognized line's box and character
+centres to the same measurement after recognition (guarded, so unreliable
+measurements leave the detector box untouched). Runtime output and labels
+therefore agree by construction wherever the pixels are unambiguous.
+
 ## Character Cells
 
 Each character rectangle follows its rendered typographic cell. Its horizontal

@@ -21,9 +21,9 @@ use crate::dictionary::Dictionary;
 use crate::eval::{
     self, BoundsTolerance, EvalReport, EvalSpec, ExpectedDetection, OcrLookupResult,
 };
-use crate::eval_geometry::measure_text_geometry;
 use crate::geometry::Rect;
 use crate::ocr::{OcrEngine, build_ocr_engine};
+use crate::text_geometry::measure_text_geometry;
 
 const INDEX_HTML: &str = include_str!("static/index.html");
 const APP_CSS: &str = include_str!("static/app.css");
