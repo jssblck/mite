@@ -9,15 +9,18 @@
 mod cli;
 mod commands;
 mod download;
+mod engine_use;
 mod home;
 mod models;
 mod release;
 mod settings;
 mod status;
+mod warmup;
 mod watch;
 mod window;
 mod windows;
 
+use engine_use::EngineUse;
 use watch::WatchState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -63,6 +66,7 @@ pub fn run() {
             Ok(())
         })
         .manage(WatchState::default())
+        .manage(EngineUse::default())
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
             commands::mite_home_path,
@@ -80,6 +84,8 @@ pub fn run() {
             commands::start_watch,
             commands::stop_watch,
             commands::is_watching,
+            commands::start_warmup,
+            commands::is_warming,
             commands::open_mite_home,
             commands::open_url,
             commands::uninstall_data,

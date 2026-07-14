@@ -17,8 +17,12 @@ use crate::ocr::{OcrEngine, RecognizedText, StableIdAllocator, TextBox};
 
 mod providers;
 mod text;
+mod warmup;
 
-use providers::{ModelKind, commit_session, require_file};
+pub use providers::ActiveProvider;
+pub use warmup::{WarmupEvent, run_warmup};
+
+use providers::{ModelKind, commit_session, expects_trt_engine_build, require_file};
 use text::normalize_recognized_text;
 
 /// Detector input channels (RGB).
@@ -168,8 +172,94 @@ pub struct OrtOcrEngine {
     min_recognition_confidence: f32,
 }
 
+/// Which model session an [`EngineBuildEvent`] refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineTarget {
+    Detector,
+    Recognizer,
+    FallbackRecognizer,
+}
+
+impl EngineTarget {
+    /// Stable machine-facing name used in warmup JSON events.
+    pub fn name(self) -> &'static str {
+        match self {
+            EngineTarget::Detector => "detector",
+            EngineTarget::Recognizer => "recognizer",
+            EngineTarget::FallbackRecognizer => "fallback_recognizer",
+        }
+    }
+
+    /// Learner-facing name for log lines the desktop app surfaces verbatim.
+    fn friendly(self) -> &'static str {
+        match self {
+            EngineTarget::Detector => "text detector",
+            EngineTarget::Recognizer => "text recognizer",
+            EngineTarget::FallbackRecognizer => "backup text recognizer",
+        }
+    }
+}
+
+/// Session build lifecycle, observable so `warmup` can stream progress and
+/// `watch` can log a heads-up before a multi-minute TensorRT compile.
+#[derive(Debug, Clone, Copy)]
+pub enum EngineBuildEvent {
+    BuildStarted {
+        target: EngineTarget,
+        /// Whether this build is expected to compile a TensorRT engine from
+        /// scratch (no cached engine for this model/precision), the case that
+        /// takes minutes rather than seconds.
+        likely_compile: bool,
+    },
+    BuildFinished {
+        target: EngineTarget,
+        provider: ActiveProvider,
+        elapsed: std::time::Duration,
+    },
+}
+
+/// Default observer for [`OrtOcrEngine::new`]: announce the slow case before it
+/// happens. Without this, a first `watch` after an install or update sits
+/// silent for minutes while TensorRT compiles, which reads as a hang.
+fn log_build_event(event: EngineBuildEvent) {
+    match event {
+        EngineBuildEvent::BuildStarted {
+            target,
+            likely_compile: true,
+        } => tracing::info!(
+            "optimizing the {} for this GPU; this one-time step runs after installs and \
+             updates and can take several minutes",
+            target.friendly()
+        ),
+        EngineBuildEvent::BuildStarted { target, .. } => {
+            tracing::debug!("loading the {}", target.friendly());
+        }
+        EngineBuildEvent::BuildFinished {
+            target,
+            provider,
+            elapsed,
+        } => tracing::info!(
+            "{} ready on {} in {:.1}s",
+            target.friendly(),
+            provider.name(),
+            elapsed.as_secs_f32()
+        ),
+    }
+}
+
 impl OrtOcrEngine {
     pub fn new(models: &ModelConfig, runtime: &RuntimeConfig) -> Result<Self> {
+        Self::new_with_observer(models, runtime, &mut log_build_event)
+    }
+
+    /// Build the engine, reporting each session's build through `observer`.
+    /// `warmup` uses this to stream progress to the desktop app; `new` passes a
+    /// logging observer.
+    pub fn new_with_observer(
+        models: &ModelConfig,
+        runtime: &RuntimeConfig,
+        observer: &mut dyn FnMut(EngineBuildEvent),
+    ) -> Result<Self> {
         let resolve_int8 = |enabled: bool, path: &std::path::Path| -> Result<std::path::PathBuf> {
             if !enabled {
                 return Ok(path.to_path_buf());
@@ -194,8 +284,37 @@ impl OrtOcrEngine {
             .context("models.charset_path is required for real OCR")?;
         require_file(charset_path)?;
 
-        let detector = commit_session(&detector_path, runtime, ModelKind::Detector)?;
-        let recognizer = commit_session(&recognizer_path, runtime, ModelKind::Recognizer)?;
+        let mut observed_commit = |path: &std::path::Path,
+                                   runtime: &RuntimeConfig,
+                                   kind: ModelKind,
+                                   target: EngineTarget|
+         -> Result<Session> {
+            observer(EngineBuildEvent::BuildStarted {
+                target,
+                likely_compile: expects_trt_engine_build(runtime, target),
+            });
+            let started = Instant::now();
+            let (session, provider) = commit_session(path, runtime, kind, target)?;
+            observer(EngineBuildEvent::BuildFinished {
+                target,
+                provider,
+                elapsed: started.elapsed(),
+            });
+            Ok(session)
+        };
+
+        let detector = observed_commit(
+            &detector_path,
+            runtime,
+            ModelKind::Detector,
+            EngineTarget::Detector,
+        )?;
+        let recognizer = observed_commit(
+            &recognizer_path,
+            runtime,
+            ModelKind::Recognizer,
+            EngineTarget::Recognizer,
+        )?;
         let fallback_recognizer = match &models.fallback_recognizer_path {
             Some(path) => {
                 require_file(path)?;
@@ -206,7 +325,12 @@ impl OrtOcrEngine {
                     int8_recognizer: false,
                     ..runtime.clone()
                 };
-                Some(commit_session(path, &fp32_runtime, ModelKind::Recognizer)?)
+                Some(observed_commit(
+                    path,
+                    &fp32_runtime,
+                    ModelKind::Recognizer,
+                    EngineTarget::FallbackRecognizer,
+                )?)
             }
             None => None,
         };

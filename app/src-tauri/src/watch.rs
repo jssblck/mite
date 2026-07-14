@@ -16,6 +16,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
+use crate::engine_use::{EngineUse, EngineUser};
 use crate::{cli, home, settings};
 
 /// The single supervised `watch` child, shared with the reaper thread.
@@ -45,11 +46,39 @@ pub fn is_watching(state: &State<WatchState>) -> bool {
 /// The watch flags (continuous mode, focus gating, HUD, metrics interval) come
 /// from the saved app settings, which the user configures in the Settings
 /// panel; the picker only supplies the window to read.
-pub fn start(app: &AppHandle, state: &State<WatchState>, window_id: u32) -> Result<()> {
-    if is_watching(state) {
-        anyhow::bail!("watch is already running");
+pub fn start(
+    app: &AppHandle,
+    state: &State<WatchState>,
+    engine: &State<EngineUse>,
+    window_id: u32,
+) -> Result<()> {
+    // Claim the engine atomically: watch and warmup both compile into the same
+    // TensorRT engine cache, so exactly one may run. The frontend gates the
+    // Watch tab during warmup; this backstops commands racing past that gate.
+    match engine.try_claim(EngineUser::Watching) {
+        Ok(()) => {}
+        Err(EngineUser::Warming) => {
+            anyhow::bail!("the reading engine is still being prepared; try again in a moment")
+        }
+        Err(_) => anyhow::bail!("watch is already running"),
     }
 
+    if let Err(error) = spawn_supervised(app, state, engine, window_id) {
+        engine.release(EngineUser::Watching);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Spawn the watch child and its pump/reaper threads. The caller has already
+/// claimed the engine; on success the reaper thread owns releasing the claim,
+/// on error the caller releases it.
+fn spawn_supervised(
+    app: &AppHandle,
+    state: &State<WatchState>,
+    engine: &State<EngineUse>,
+    window_id: u32,
+) -> Result<()> {
     if !home::cli_exe()?.exists() {
         anyhow::bail!("the mite CLI is not installed yet");
     }
@@ -80,8 +109,14 @@ pub fn start(app: &AppHandle, state: &State<WatchState>, window_id: u32) -> Resu
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = cmd.spawn().context("failed to launch mite watch")?;
-    let stdout = child.stdout.take().context("missing stdout pipe")?;
-    let stderr = child.stderr.take().context("missing stderr pipe")?;
+    let (stdout, stderr) = match (child.stdout.take(), child.stderr.take()) {
+        (Some(stdout), Some(stderr)) => (stdout, stderr),
+        _ => {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("missing watch pipes");
+        }
+    };
 
     let log = open_log_file(child.id()).map(|file| Arc::new(Mutex::new(file)));
     let out_handle = pump(app.clone(), stdout, "stdout", log.clone());
@@ -96,9 +131,11 @@ pub fn start(app: &AppHandle, state: &State<WatchState>, window_id: u32) -> Resu
         },
     );
 
-    // Reaper: once both pipes close (the process has exited), reap it, report
-    // the exit code, and clear the slot so a fresh start is allowed.
+    // Reaper: once both pipes close (the process has exited), reap it, clear
+    // the slot and the engine claim so a fresh start is allowed, and report
+    // the exit code.
     let slot = state.0.clone();
+    let claim = engine.inner().clone();
     let reaper_app = app.clone();
     std::thread::spawn(move || {
         let _ = out_handle.join();
@@ -109,6 +146,7 @@ pub fn start(app: &AppHandle, state: &State<WatchState>, window_id: u32) -> Resu
             .and_then(|mut guard| guard.take())
             .and_then(|mut child| child.wait().ok())
             .and_then(|status| status.code());
+        claim.release(EngineUser::Watching);
         let _ = reaper_app.emit(
             "watch-state",
             WatchStateEvent {

@@ -9,11 +9,12 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_opener::OpenerExt;
 
+use crate::engine_use::EngineUse;
 use crate::release::{self, normalize_version};
 use crate::settings::{self, AppSettings};
 use crate::status::{self, AppStatus};
 use crate::watch::{self, WatchState};
-use crate::{cli, download, home, models, windows};
+use crate::{cli, download, home, models, warmup, windows};
 
 /// Run blocking work off the async executor and flatten errors to strings.
 async fn blocking<T, F>(f: F) -> Result<T, String>
@@ -356,8 +357,26 @@ pub async fn list_windows() -> Result<Vec<windows::WindowSummary>, String> {
 }
 
 #[tauri::command]
-pub fn start_watch(app: AppHandle, state: State<WatchState>, window_id: u32) -> Result<(), String> {
-    watch::start(&app, &state, window_id).map_err(|err| format!("{err:#}"))
+pub fn start_watch(
+    app: AppHandle,
+    state: State<WatchState>,
+    engine: State<EngineUse>,
+    window_id: u32,
+) -> Result<(), String> {
+    watch::start(&app, &state, &engine, window_id).map_err(|err| format!("{err:#}"))
+}
+
+/// Kick off the one-shot engine warmup (`mite warmup --json`). Progress arrives
+/// as `warmup-event` / `warmup-state` events; a call while one is already
+/// running joins it instead of spawning a second child.
+#[tauri::command]
+pub fn start_warmup(app: AppHandle, engine: State<EngineUse>) -> Result<(), String> {
+    warmup::start(&app, &engine).map_err(|err| format!("{err:#}"))
+}
+
+#[tauri::command]
+pub fn is_warming(engine: State<EngineUse>) -> bool {
+    warmup::is_warming(&engine)
 }
 
 #[tauri::command]

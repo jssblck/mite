@@ -327,12 +327,20 @@ Then build as usual:
 cargo build --release
 ```
 
-The first `watch` run builds and caches the FP16 engines under `cache\engines`
-(one-time, multi-minute, GPU-heavy); later runs load them instantly. Confirm with
-the `TensorRT execution provider active` log line. If TensorRT can't register,
-mite falls back to the CUDA execution provider, then CPU, so it always runs.
+The first engine build compiles and caches the FP16 engines under
+`cache\engines` (one-time, multi-minute, GPU-heavy); later runs load them
+instantly. Pay that cost up front with `cargo run -- warmup`, which builds and
+warms exactly the sessions `watch` would (whatever backend is configured:
+TensorRT, CUDA, or CPU) and prints per-step progress; `--json` emits the same
+progress as JSON lines, which is what the desktop app consumes. A `watch`
+started with a cold cache does the same build itself, announcing it with an
+`optimizing the text detector...` log line. Confirm the fast path with the
+`TensorRT execution provider active` log line. If TensorRT can't register, mite
+falls back to the CUDA execution provider, then CPU, so it always runs.
 `cargo run -- doctor` reports the detected runtime tier (TensorRT, CUDA, or CPU),
-which required DLLs are present, and the directories they were found in.
+which required DLLs are present, and the directories they were found in. The
+engine cache is keyed to the model, precision, and TensorRT version, so a model
+or runtime update triggers one new compile.
 
 `doctor` searches system-wide for the runtime: it checks `PATH`, the CUDA Toolkit
 install (`CUDA_PATH` and

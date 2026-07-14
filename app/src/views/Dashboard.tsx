@@ -4,6 +4,8 @@ import { type AppStatus } from "../lib/api";
 interface DashboardProps {
   status: AppStatus;
   watching: boolean;
+  /** The one-shot engine warmup is running; watching is gated until it ends. */
+  warming: boolean;
   onRefresh: () => void;
   onWatch: () => void;
   onSetupGpu: () => void;
@@ -39,6 +41,7 @@ function Stat({
 export function Dashboard({
   status,
   watching,
+  warming,
   onRefresh,
   onWatch,
   onSetupGpu,
@@ -139,8 +142,16 @@ export function Dashboard({
           />
         )}
         <div className="btn-row">
-          <button className="btn btn-primary" onClick={onWatch}>
-            {watching ? "Go to watch" : "Start watching"}
+          <button
+            className="btn btn-primary"
+            onClick={onWatch}
+            disabled={warming && !watching}
+          >
+            {watching
+              ? "Go to watch"
+              : warming
+                ? "Preparing the engine..."
+                : "Start watching"}
           </button>
           {needsGpuSetup && (
             <button className="btn btn-ghost" onClick={onSetupGpu}>

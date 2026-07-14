@@ -120,6 +120,15 @@ body,
   color: var(--color-ink);
   background: var(--color-surface-2);
 }
+/* Gated while the engine warmup runs: visibly dimmed, no hover affordance. */
+.nav-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.nav-btn:disabled:hover {
+  color: var(--color-muted);
+  background: transparent;
+}
 
 .header-spacer {
   flex: 1;

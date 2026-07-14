@@ -10,6 +10,13 @@ export type EngineReconcilePhase =
 
 export interface EngineReconcileState {
   phase: EngineReconcilePhase;
+  /**
+   * True once this launch's reconcile has actually run to a conclusion (engine
+   * already current, updated, or failed). Distinct from `phase === "idle"`,
+   * which is also the initial not-yet-run state; consumers that must wait for
+   * the reconcile (the engine warmup does) should gate on this.
+   */
+  settled: boolean;
   /** The engine version being installed, when known. */
   version: string | null;
   error: string | null;
@@ -34,6 +41,7 @@ export function useEngineReconcile(
   onRefresh: () => void,
 ): EngineReconcileState {
   const [phase, setPhase] = useState<EngineReconcilePhase>("idle");
+  const [settled, setSettled] = useState(false);
   const [version, setVersion] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [received, setReceived] = useState(0);
@@ -53,6 +61,7 @@ export function useEngineReconcile(
         if (cancelled) return;
         if (info.engineState !== "update" && info.engineState !== "required") {
           setPhase("idle");
+          setSettled(true);
           return;
         }
         setVersion(info.targetCli);
@@ -67,11 +76,13 @@ export function useEngineReconcile(
         await api.installOrUpdateCli();
         if (cancelled) return;
         setPhase("done");
+        setSettled(true);
         onRefresh();
       } catch (err) {
         if (!cancelled) {
           setError(String(err));
           setPhase("error");
+          setSettled(true);
         }
       } finally {
         unlisten?.then((fn) => fn());
@@ -84,5 +95,5 @@ export function useEngineReconcile(
     };
   }, [enabled, onRefresh]);
 
-  return { phase, version, error, received, total };
+  return { phase, settled, version, error, received, total };
 }
