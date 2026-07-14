@@ -84,6 +84,10 @@ jobs:
         working-directory: app
         run: bun run build
 
+      - name: Run frontend tests
+        working-directory: app
+        run: bun run test
+
       - name: Check formatting
         working-directory: app/src-tauri
         run: cargo fmt --all -- --check

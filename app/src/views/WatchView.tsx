@@ -7,13 +7,23 @@ import {
   type WindowSummary,
 } from "../lib/api";
 import { WindowCard } from "../components/WindowCard";
+import { AnsiLine } from "../components/AnsiLine";
 
 interface WatchViewProps {
   watching: boolean;
   onWatchingChange: (running: boolean) => void;
 }
 
-function LogView({ logs }: { logs: WatchLog[] }) {
+/**
+ * A log line with a session-stable identity. Keying by array index would break
+ * once the buffer hits its cap: every append then shifts all indices, which
+ * defeats AnsiLine's memo and re-parses the whole visible buffer per event.
+ */
+interface KeyedLog extends WatchLog {
+  id: number;
+}
+
+function LogView({ logs }: { logs: KeyedLog[] }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
@@ -23,9 +33,9 @@ function LogView({ logs }: { logs: WatchLog[] }) {
       {logs.length === 0 ? (
         <div className="log-empty">Waiting for output...</div>
       ) : (
-        logs.map((log, index) => (
-          <div key={index} className={`log-line ${log.stream}`}>
-            {log.line}
+        logs.map((log) => (
+          <div key={log.id} className={`log-line ${log.stream}`}>
+            <AnsiLine text={log.line} />
           </div>
         ))
       )}
@@ -37,7 +47,8 @@ export function WatchView({ watching, onWatchingChange }: WatchViewProps) {
   const [windows, setWindows] = useState<WindowSummary[]>([]);
   const [launchingId, setLaunchingId] = useState<number | null>(null);
   const [launched, setLaunched] = useState<WindowSummary | null>(null);
-  const [logs, setLogs] = useState<WatchLog[]>([]);
+  const [logs, setLogs] = useState<KeyedLog[]>([]);
+  const nextLogId = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
@@ -80,9 +91,11 @@ export function WatchView({ watching, onWatchingChange }: WatchViewProps) {
   }, [watching, refreshWindows]);
 
   useEffect(() => {
-    const logUnlisten = onWatchLog((log) =>
-      setLogs((prev) => [...prev.slice(-400), log]),
-    );
+    const logUnlisten = onWatchLog((log) => {
+      // The id is minted outside the updater so the updater stays pure.
+      const id = nextLogId.current++;
+      setLogs((prev) => [...prev.slice(-400), { ...log, id }]);
+    });
     const stateUnlisten = onWatchState((state) =>
       onWatchingChange(state.running),
     );
