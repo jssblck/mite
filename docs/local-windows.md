@@ -60,6 +60,7 @@ cargo run -- list-windows --json --thumbnails        # JSON + base64 WGC thumbna
 cargo run -- watch                                   # OCR the foreground window while SHIFT is held
 cargo run -- watch --window-id 2100328 --auto        # pin a window, run continuously (games that eat Shift)
 cargo run -- watch --title "Target Game" --auto
+cargo run -- watch --title "Target Game" --auto --focus-only   # hide the overlay while the game is unfocused
 cargo run -- watch --title "Target Game" --enable-eval-hotkey Ctrl+Alt+F12
 ```
 
@@ -79,6 +80,16 @@ cargo run -- watch --window-id 459082 --capture-backend screenshot
 If a game window appears black or shows the wrong app under the overlay, force
 `--capture-backend wgc` (the desktop-screenshot fallback can return
 compositor-contaminated frames for fullscreen-windowed games).
+
+`--focus-only` (which requires a pinned target) draws the overlay only while
+the pinned window is focused: alt-tab away and the overlay clears within one UI
+tick, including an open hover popup, and OCR pauses until the window regains
+focus (the one exception is `--auto-eval-capture`, whose background fixture
+collection keeps the OCR loop running; presentation stays gated either way).
+Focus on a window the target owns (a file dialog it opened, for example) still
+counts as focused. Without the flag a pinned overlay keeps drawing at the
+target's screen position even while another window covers it, so the underlines
+land on top of whatever is in front.
 
 ### Latency feedback loop
 

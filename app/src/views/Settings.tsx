@@ -139,6 +139,18 @@ function AdvancedOptionsModal({
           </SettingRow>
 
           <SettingRow
+            label="Only while focused"
+            detail="Hide the overlay and pause OCR whenever the watched window is not the active window."
+          >
+            <Toggle
+              label="Only while focused"
+              checked={settings?.watchFocusOnly ?? true}
+              disabled={!settings}
+              onChange={(v) => onChange({ watchFocusOnly: v })}
+            />
+          </SettingRow>
+
+          <SettingRow
             label="Latency HUD"
             detail="Show per-stage timings overlaid while watching."
           >
@@ -203,6 +215,7 @@ export function Settings({ status, onRefresh, onOpenRuntimeSetup }: SettingsProp
     try {
       const saved = await api.setWatchOptions(
         next.watchAuto,
+        next.watchFocusOnly,
         next.watchHud,
         next.watchMetricsIntervalSecs,
       );
@@ -266,7 +279,7 @@ export function Settings({ status, onRefresh, onOpenRuntimeSetup }: SettingsProp
 
         <SettingRow
           label="Watching"
-          detail="Run mode, latency HUD, and metrics logging while watching."
+          detail="Run mode, focus gating, latency HUD, and metrics logging while watching."
         >
           <button
             className="btn btn-ghost btn-sm"

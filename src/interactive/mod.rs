@@ -11,6 +11,12 @@
 //! those, `--auto` runs the capture/OCR loop continuously with no key held
 //! (best paired with `--window-id`/`--title` to pin the game window).
 //!
+//! `--focus-only` (which requires a pinned window) gates all drawing on focus:
+//! the overlay presents only while the pinned window is foreground, so pinned
+//! ink never lingers over whatever the user alt-tabs to, and OCR pauses while
+//! the target is unfocused (unless `--auto-eval-capture` keeps the loop running
+//! for background collection; presentation stays gated either way).
+//!
 //! `--auto-eval-capture` also drives the loop continuously (it observes OCR
 //! passes to detect scene changes), so it collects fixtures hands-free without
 //! Shift or `--auto`. Presentation stays gated on Shift/`--auto`, so background
@@ -35,7 +41,9 @@ use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE, VK_SHIFT};
-use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetForegroundWindow};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GA_ROOTOWNER, GetAncestor, GetCursorPos, GetForegroundWindow,
+};
 
 use crate::capture::{
     Frame, FrameDelivery, FrameSource, WindowCapturePreference, WindowSelector, window_frame_source,
@@ -76,6 +84,15 @@ pub struct WatchRequest {
     pub backend: WindowCapturePreference,
     /// Run continuously without holding Shift (for games that intercept Shift).
     pub auto: bool,
+    /// Present the overlay only while the pinned target window is focused (it,
+    /// or a window it owns, is the foreground window). Alt-tabbing away clears
+    /// the overlay within one UI tick, including a sticky hover popup, and OCR
+    /// pauses until the target regains focus (unless `auto_eval_capture` keeps
+    /// the loop running for background fixture collection; presentation stays
+    /// gated either way). Meaningful only with `pinned_window_id`: without one
+    /// the gate fails closed and nothing ever draws, so the CLI rejects that
+    /// combination up front.
+    pub focus_only: bool,
     /// Draw the per-stage latency HUD (graph + p50/p95/p99) in the top-left.
     pub hud: bool,
     /// If non-zero, log an aggregated per-stage timing report to stderr on this
@@ -169,6 +186,9 @@ pub fn run_watch(config: &AppConfig, request: &WatchRequest) -> Result<()> {
     if request.auto {
         println!("mode: --auto (running continuously; no Shift needed). ESC to quit.");
     }
+    if request.focus_only {
+        println!("mode: --focus-only (overlay drawn only while the target window is focused).");
+    }
     let eval_hotkey_registration = match &request.eval_hotkey {
         Some(eval) => {
             let registration = GlobalHotkey::register(EVAL_CAPTURE_HOTKEY_ID, eval.combo.clone())?;
@@ -226,7 +246,16 @@ pub fn run_watch(config: &AppConfig, request: &WatchRequest) -> Result<()> {
         }
         // `--auto` makes OCR run continuously (no Shift). Otherwise Shift is the
         // hold-to-activate trigger, but games often intercept it while focused.
-        let active = request.auto || key_down(VK_SHIFT.0);
+        // `--focus-only` additionally gates everything on the pinned target
+        // being focused, checked every UI tick so alt-tabbing away clears the
+        // overlay within one poll interval. The overlay window itself is
+        // WS_EX_NOACTIVATE and can never become the foreground window, so
+        // hovering the popup does not defeat the gate.
+        let focus_allows = !request.focus_only
+            || request
+                .pinned_window_id
+                .is_some_and(|id| target_focused(id, foreground_window()));
+        let active = (request.auto || key_down(VK_SHIFT.0)) && focus_allows;
 
         if eval_hotkey_registration
             .as_ref()
@@ -328,9 +357,11 @@ pub fn run_watch(config: &AppConfig, request: &WatchRequest) -> Result<()> {
             if !over_popup {
                 update_hover(&mut overlay, snapshot.as_ref(), local);
             }
-        } else if showing && over_interactive {
+        } else if showing && over_interactive && focus_allows {
             // Sticky: keep the overlay alive while the cursor is over a word or
-            // the popup, even after Shift is released, so the popup stays readable.
+            // the popup, even after Shift is released, so the popup stays
+            // readable. The focus gate overrides stickiness: a popup pinned to
+            // an unfocused window would hang over whatever is focused instead.
             if !over_popup {
                 update_hover(&mut overlay, snapshot.as_ref(), local);
             }
@@ -716,12 +747,41 @@ fn key_down(vk: u16) -> bool {
     (unsafe { GetAsyncKeyState(vk as i32) } as u16 & KEY_DOWN_MASK) != 0
 }
 
-fn foreground_window_id() -> Option<u32> {
+/// The current foreground window's identity: the HWND itself plus its
+/// root-owner ancestor. An owned window (a game's file dialog, for example)
+/// reports the game as its root owner, so focus on it still counts as the
+/// target being focused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ForegroundWindow {
+    id: u32,
+    root_owner_id: u32,
+}
+
+fn foreground_window() -> Option<ForegroundWindow> {
     let hwnd = unsafe { GetForegroundWindow() };
     if hwnd.0.is_null() {
         return None;
     }
-    Some(hwnd.0 as usize as u32)
+    let id = hwnd.0 as usize as u32;
+    let root_owner = unsafe { GetAncestor(hwnd, GA_ROOTOWNER) };
+    let root_owner_id = if root_owner.0.is_null() {
+        id
+    } else {
+        root_owner.0 as usize as u32
+    };
+    Some(ForegroundWindow { id, root_owner_id })
+}
+
+fn foreground_window_id() -> Option<u32> {
+    foreground_window().map(|window| window.id)
+}
+
+/// Pure focus-gate decision for `--focus-only`: the target counts as focused
+/// when the foreground window is the target itself or is owned by it. No
+/// foreground window at all (mid desktop switch, a secure-desktop prompt)
+/// fails closed.
+fn target_focused(target_id: u32, foreground: Option<ForegroundWindow>) -> bool {
+    foreground.is_some_and(|window| window.id == target_id || window.root_owner_id == target_id)
 }
 
 fn cursor_position() -> Option<(i32, i32)> {
@@ -730,5 +790,42 @@ fn cursor_position() -> Option<(i32, i32)> {
         Some((point.x, point.y))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TARGET: u32 = 0x1000;
+
+    #[test]
+    fn target_focused_when_foreground_is_the_target() {
+        let foreground = ForegroundWindow {
+            id: TARGET,
+            root_owner_id: TARGET,
+        };
+        assert!(target_focused(TARGET, Some(foreground)));
+    }
+
+    #[test]
+    fn target_focused_when_foreground_is_owned_by_the_target() {
+        // A dialog owned by the target (its root owner) keeps the gate open.
+        let dialog = ForegroundWindow {
+            id: 0x2000,
+            root_owner_id: TARGET,
+        };
+        assert!(target_focused(TARGET, Some(dialog)));
+    }
+
+    #[test]
+    fn target_not_focused_for_unrelated_or_missing_foreground() {
+        let other = ForegroundWindow {
+            id: 0x3000,
+            root_owner_id: 0x3000,
+        };
+        assert!(!target_focused(TARGET, Some(other)));
+        // No foreground window at all fails closed.
+        assert!(!target_focused(TARGET, None));
     }
 }
