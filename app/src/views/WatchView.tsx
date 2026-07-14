@@ -10,6 +10,12 @@ import { WindowCard } from "../components/WindowCard";
 
 interface WatchViewProps {
   watching: boolean;
+  /**
+   * The one-shot engine warmup is running. The picker is replaced with a
+   * waiting state so a watch cannot launch mid-warmup and race the engine
+   * cache (the backend refuses that too; this keeps the UI honest).
+   */
+  preparing: boolean;
   onWatchingChange: (running: boolean) => void;
 }
 
@@ -33,7 +39,11 @@ function LogView({ logs }: { logs: WatchLog[] }) {
   );
 }
 
-export function WatchView({ watching, onWatchingChange }: WatchViewProps) {
+export function WatchView({
+  watching,
+  preparing,
+  onWatchingChange,
+}: WatchViewProps) {
   const [windows, setWindows] = useState<WindowSummary[]>([]);
   const [launchingId, setLaunchingId] = useState<number | null>(null);
   const [launched, setLaunched] = useState<WindowSummary | null>(null);
@@ -54,9 +64,11 @@ export function WatchView({ watching, onWatchingChange }: WatchViewProps) {
 
   // Keep the list current while the picker is on screen: windows open and close
   // while the user decides. Debounced so a slow enumeration never overlaps the
-  // next tick, paused while watching or while the window is hidden.
+  // next tick, paused while watching, while the engine warmup runs (window
+  // enumeration captures thumbnails, which has no business competing with a
+  // TensorRT compile), or while the window is hidden.
   useEffect(() => {
-    if (watching) return;
+    if (watching || preparing) return;
     let inFlight = false;
     const tick = async () => {
       if (inFlight || document.hidden) return;
@@ -77,7 +89,7 @@ export function WatchView({ watching, onWatchingChange }: WatchViewProps) {
       clearInterval(handle);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [watching, refreshWindows]);
+  }, [watching, preparing, refreshWindows]);
 
   useEffect(() => {
     const logUnlisten = onWatchLog((log) =>
@@ -138,6 +150,15 @@ export function WatchView({ watching, onWatchingChange }: WatchViewProps) {
             </button>
           </div>
         </div>
+      </div>
+    );
+  }
+
+  if (preparing) {
+    return (
+      <div className="empty-state">
+        <span className="inline-spinner" /> Preparing the reading engine... The
+        window picker opens when it finishes.
       </div>
     );
   }

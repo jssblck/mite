@@ -46,6 +46,26 @@ never `0.3.0`), not always-latest. When the installed engine is older than or
 outside that range, the app reconciles it on startup with no prompt. See
 [docs/releases.md](../docs/releases.md) for the full model.
 
+## Engine warmup
+
+The first engine build after an install, update, or GPU-tier change compiles
+TensorRT engines, which takes minutes; buried inside the first watch it reads as
+"watching does nothing". So the app runs `mite warmup --json` up front: once per
+launch after the engine reconcile settles, after a manual engine update or
+config reset in Settings, and after the guided GPU setup closes (a tier change
+means different engines). Warmup builds and warms exactly the sessions `watch`
+will use, for whichever backend is recorded (TensorRT, CUDA, or CPU); on an
+ordinary launch it is a seconds-long cache check.
+
+While it runs, a banner shows step-by-step progress with an indeterminate bar
+(TensorRT compilation reports no percentage), and the Watch tab and start
+buttons are disabled; once a step reports a real from-scratch compile, the
+banner explains the one-time multi-minute wait. The backend refuses to start a
+watch during warmup and vice versa, since both would race the same engine
+cache. A warmup failure never blocks watching: watch performs the same
+preparation itself at startup, so the error banner just offers a retry. stderr
+is mirrored to `logs\warmup-<pid>.log`.
+
 ## NVIDIA runtime setup
 
 Mite's GPU pipeline needs NVIDIA runtime libraries (TensorRT, the CUDA runtime,

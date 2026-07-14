@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, onWatchState, type AppStatus } from "./lib/api";
 import { useAppUpdate } from "./lib/useAppUpdate";
 import { useEngineReconcile } from "./lib/useEngineReconcile";
+import { useEngineWarmup } from "./lib/useEngineWarmup";
 import { MiteMark } from "./components/MiteMark";
 import { AppUpdateBanner } from "./components/AppUpdateBanner";
 import { EngineReconcileNotice } from "./components/EngineReconcileNotice";
+import { EngineWarmupNotice } from "./components/EngineWarmupNotice";
 import { SetupWizard } from "./views/SetupWizard";
 import { RuntimeSetup } from "./views/RuntimeSetup";
 import { Dashboard } from "./views/Dashboard";
@@ -35,6 +37,22 @@ function App() {
   const ready = Boolean(status?.cliInstalled && status?.modelsReady);
   const appUpdate = useAppUpdate(ready);
   const engineReconcile = useEngineReconcile(ready, refresh);
+  const warmup = useEngineWarmup();
+  const warming = warmup.phase === "running";
+
+  // Warm the OCR engines once per launch, after the engine reconcile settles
+  // (so a just-downloaded engine is the one that gets warmed). The first run
+  // after an install, update, or GPU change compiles TensorRT engines for
+  // minutes; every other launch this is a seconds-long cache check. The Watch
+  // tab stays disabled while it runs. Explicit reruns happen after the guided
+  // GPU setup closes and after a manual engine update in Settings.
+  const warmedThisLaunch = useRef(false);
+  useEffect(() => {
+    if (warmedThisLaunch.current || !ready || watching || runtimeSetup) return;
+    if (!engineReconcile.settled) return;
+    warmedThisLaunch.current = true;
+    warmup.run();
+  }, [ready, watching, runtimeSetup, engineReconcile.settled, warmup.run]);
 
   useEffect(() => {
     refresh();
@@ -103,6 +121,9 @@ function App() {
         onClose={() => {
           setRuntimeSetup(false);
           refresh();
+          // A tier change (say CPU -> TensorRT) means different engines; warm
+          // them now rather than during the user's first watch.
+          if (!watching) warmup.run();
         }}
       />
     );
@@ -128,6 +149,12 @@ function App() {
           <button
             className="nav-btn"
             aria-current={view === "watch"}
+            disabled={warming && !watching}
+            title={
+              warming && !watching
+                ? "Available once the reading engine is ready"
+                : undefined
+            }
             onClick={() => setView("watch")}
           >
             Watch
@@ -170,23 +197,32 @@ function App() {
             app update is pending (after an app update the engine reconciles to
             the new version anyway). */}
         {!appUpdate.pending && <EngineReconcileNotice state={engineReconcile} />}
+        <EngineWarmupNotice state={warmup} />
         {view === "dashboard" && (
           <Dashboard
             status={status}
             watching={watching}
+            warming={warming}
             onRefresh={refresh}
             onWatch={() => setView("watch")}
             onSetupGpu={() => setRuntimeSetup(true)}
           />
         )}
         {view === "watch" && (
-          <WatchView watching={watching} onWatchingChange={setWatching} />
+          <WatchView
+            watching={watching}
+            preparing={warming}
+            onWatchingChange={setWatching}
+          />
         )}
         {view === "settings" && (
           <Settings
             status={status}
             onRefresh={refresh}
             onOpenRuntimeSetup={() => setRuntimeSetup(true)}
+            onEngineUpdated={() => {
+              if (!watching) warmup.run();
+            }}
           />
         )}
       </main>
