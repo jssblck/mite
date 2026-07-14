@@ -1125,7 +1125,7 @@ async function applyForm() {
     setFormBusy(true);
     setStatus(isDetection ? "Rebuilding label metadata..." : "Applying ignored region...");
     if (isDetection) {
-      const response = await apiJson("/api/synthesize", {
+      const response = await apiJson(`/api/synthesize?${query({ bundle: state.selectedBundle.bundle_path })}`, {
         method: "POST",
         body: JSON.stringify(draft),
       });
@@ -1254,7 +1254,7 @@ async function addLabel(rect = defaultRect(), text = "TODO") {
     bounds_tolerance: null,
     notes: null,
   };
-  const response = await apiJson("/api/synthesize", {
+  const response = await apiJson(`/api/synthesize?${query({ bundle: state.selectedBundle.bundle_path })}`, {
     method: "POST",
     body: JSON.stringify(draft),
   });

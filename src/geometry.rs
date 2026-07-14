@@ -63,6 +63,20 @@ impl Rect {
         }
     }
 
+    /// Build a rect from its left/top/right/bottom edges. Width and height
+    /// clamp to zero when the edges cross: the result is a zero-size rect
+    /// anchored at (left, top), not a rect over the swapped span, so callers
+    /// that can produce inverted edges must treat a zero-size result as
+    /// degenerate rather than positioned.
+    pub fn from_edges(left: f32, top: f32, right: f32, bottom: f32) -> Self {
+        Self {
+            x: left,
+            y: top,
+            width: (right - left).max(0.0),
+            height: (bottom - top).max(0.0),
+        }
+    }
+
     pub fn right(self) -> f32 {
         self.x + self.width
     }

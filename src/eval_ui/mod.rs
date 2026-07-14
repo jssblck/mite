@@ -23,6 +23,7 @@ use crate::eval::{
 };
 use crate::geometry::Rect;
 use crate::ocr::{OcrEngine, build_ocr_engine};
+use crate::text_geometry::measure_text_geometry;
 
 const INDEX_HTML: &str = include_str!("static/index.html");
 const APP_CSS: &str = include_str!("static/app.css");
@@ -218,13 +219,30 @@ impl ServerState {
         self.load_label(bundle_rel)
     }
 
-    fn synthesize_detection(&self, draft: DraftDetectionRequest) -> Result<ExpectedDetection> {
+    fn synthesize_detection(
+        &self,
+        bundle_rel: &str,
+        draft: DraftDetectionRequest,
+    ) -> Result<ExpectedDetection> {
+        let image_path = self.resolve_bundle_image(bundle_rel)?;
+        let image = image::open(&image_path)
+            .with_context(|| format!("failed to open {}", image_path.display()))?
+            .to_rgb8();
+        let characters = draft
+            .text
+            .chars()
+            .map(|ch| ch.to_string())
+            .collect::<Vec<_>>();
+        let character_refs = characters.iter().map(String::as_str).collect::<Vec<_>>();
+        let geometry = measure_text_geometry(&image, draft.bounds, &character_refs)
+            .context("could not find reliable character geometry inside the drawn text region")?;
         self.with_dictionary(|dict| {
             eval::draft_expected_detection(
                 dict,
                 draft.id,
                 draft.text,
-                draft.bounds,
+                geometry.line_bounds,
+                geometry.character_bounds,
                 draft.bounds_tolerance,
                 draft.notes,
             )
@@ -311,12 +329,13 @@ fn route_request(request: HttpRequest, state: &ServerState) -> Result<HttpRespon
             json_response(200, &state.save_label(bundle, spec)?)
         }
         ("POST", "/api/synthesize") => {
+            let bundle = required_query(&request, "bundle")?;
             let draft = serde_json::from_slice::<DraftDetectionRequest>(&request.body)
                 .context("request body must be a draft detection JSON object")?;
             json_response(
                 200,
                 &DraftDetectionResponse {
-                    detection: state.synthesize_detection(draft)?,
+                    detection: state.synthesize_detection(bundle, draft)?,
                 },
             )
         }
@@ -631,7 +650,7 @@ fn summarize_bundle(root: &Path, bundle_path: &Path, image_path: &Path) -> Resul
 fn default_eval_spec(image_path: &Path) -> Result<EvalSpec> {
     let capture = image_path.with_file_name("capture.json");
     Ok(EvalSpec {
-        schema: 1,
+        schema: 2,
         image: Some(
             image_path
                 .file_name()
@@ -805,11 +824,23 @@ mod tests {
             "weapon",
             "武器",
             Rect::new(10.0, 20.0, 80.0, 30.0),
+            vec![
+                Rect::new(10.0, 20.0, 37.0, 30.0),
+                Rect::new(47.0, 20.0, 43.0, 30.0),
+            ],
             None,
             None,
         )
         .unwrap();
         assert_eq!(detection.characters.len(), 2);
+        assert_eq!(
+            detection.character_geometry,
+            eval::CharacterGeometrySource::PixelGradientV1
+        );
+        assert_eq!(
+            detection.characters[0].bounds,
+            Rect::new(10.0, 20.0, 37.0, 30.0)
+        );
         assert_eq!(detection.tokens.len(), 1);
         assert_eq!(detection.tokens[0].dictionary_form, "武器");
     }
