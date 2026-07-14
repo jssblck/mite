@@ -304,12 +304,14 @@ pub async fn record_runtime() -> Result<AppSettings, String> {
 #[tauri::command]
 pub async fn set_watch_options(
     auto: bool,
+    focus_only: bool,
     hud: bool,
     metrics_interval_secs: u64,
 ) -> Result<AppSettings, String> {
     blocking(move || {
         let mut saved = settings::load();
         saved.watch_auto = auto;
+        saved.watch_focus_only = focus_only;
         saved.watch_hud = hud;
         saved.watch_metrics_interval_secs = metrics_interval_secs;
         settings::save(&saved)?;

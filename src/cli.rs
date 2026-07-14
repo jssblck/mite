@@ -106,6 +106,13 @@ struct WatchArgs {
     /// Shift key while focused (pin the target with --window-id/--title).
     #[arg(long)]
     auto: bool,
+    /// Draw the overlay only while the pinned target window is focused (it is
+    /// the foreground window, or owns it). Alt-tabbing away hides the overlay
+    /// and pauses OCR until the target regains focus (--auto-eval-capture
+    /// still collects in the background). Requires pinning the target with
+    /// --title/--window-id/--pid.
+    #[arg(long)]
+    focus_only: bool,
     /// Draw a per-stage latency HUD (graph + p50/p95/p99) in the top-left.
     #[arg(long)]
     hud: bool,
@@ -747,7 +754,16 @@ fn cmd_watch(
         });
     // If any window selector is given, pin to a concrete window id so the loop
     // captures it regardless of which window is foreground.
-    let pinned_window_id = match args.window.optional_selector()? {
+    let selector = args.window.optional_selector()?;
+    // Without a pinned window the target is by definition the foreground
+    // window, so a focus gate would either be a no-op or (fail-closed) never
+    // draw; reject the combination instead of silently doing nothing.
+    if args.focus_only && selector.is_none() {
+        bail!(
+            "--focus-only requires pinning the target window with --title, --window-id, or --pid"
+        );
+    }
+    let pinned_window_id = match selector {
         Some(selector) => Some(resolve_window_id(&selector)?),
         None => None,
     };
@@ -759,6 +775,7 @@ fn cmd_watch(
         pinned_window_id,
         backend,
         auto: args.auto,
+        focus_only: args.focus_only,
         hud: args.hud,
         metrics_interval: Duration::from_secs(args.metrics_interval_secs),
         smoothing: !args.no_smoothing,
@@ -824,6 +841,7 @@ mod tests {
             "--capture-backend",
             "wgc",
             "--auto",
+            "--focus-only",
             "--hud",
             "--metrics-interval-secs",
             "5",
@@ -844,9 +862,19 @@ mod tests {
             WindowCapturePreference::WindowsGraphicsCapture
         );
         assert!(args.auto);
+        assert!(args.focus_only);
         assert!(args.hud);
         assert_eq!(args.metrics_interval_secs, 5);
         assert!(args.no_smoothing);
+    }
+
+    #[test]
+    fn focus_only_defaults_off() {
+        let cli = Cli::try_parse_from(["mite", "watch"]).expect("watch parses");
+        let Command::Watch(args) = cli.command else {
+            panic!("expected watch command");
+        };
+        assert!(!args.focus_only);
     }
 
     #[test]

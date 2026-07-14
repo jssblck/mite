@@ -73,9 +73,11 @@ Local precommit:
 ```
 
 `precommit.ps1` scopes itself to the staged changes: the Rust suite (fmt,
-nudge, test, clippy) is skipped when a commit touches only `site\**`, and the
+nudge, test, clippy) is skipped when a commit touches only `site\**`, the
 site checks (`astro check`, `vitest run`) run only when `site\**` changed and
-its `node_modules` is present. Run by hand with nothing staged, it runs both.
+its `node_modules` is present, and the app frontend tests (`vitest run` in
+`app\`) run only when `app\**` changed and its `node_modules` is present. Run
+by hand with nothing staged, it runs everything.
 
 First-time Windows setup:
 

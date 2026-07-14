@@ -43,9 +43,9 @@ pub fn is_watching(state: &State<WatchState>) -> bool {
 
 /// Start `mite watch` for the given window. Errors if one is already running.
 ///
-/// The watch flags (continuous mode, HUD, metrics interval) come from the saved
-/// app settings, which the user configures in the Settings panel; the picker
-/// only supplies the window to read.
+/// The watch flags (continuous mode, focus gating, HUD, metrics interval) come
+/// from the saved app settings, which the user configures in the Settings
+/// panel; the picker only supplies the window to read.
 pub fn start(
     app: &AppHandle,
     state: &State<WatchState>,
@@ -93,6 +93,11 @@ fn spawn_supervised(
         .arg(window_id.to_string());
     if opts.watch_auto {
         cmd.arg("--auto");
+    }
+    // Valid here unconditionally: --focus-only requires a pinned target, and
+    // the app always pins with --window-id above.
+    if opts.watch_focus_only {
+        cmd.arg("--focus-only");
     }
     if opts.watch_hud {
         cmd.arg("--hud");
@@ -170,6 +175,10 @@ fn open_log_file(pid: u32) -> Option<File> {
 
 /// Spawn a thread that reads a pipe line by line, emits each line as a
 /// `watch-log` event, and mirrors it to the log file.
+///
+/// The UI receives the line verbatim (its log panel parses and renders the
+/// ANSI colors the CLI's tracing output carries); the log file gets the line
+/// with escape sequences stripped so it stays grep-able plain text.
 fn pump(
     app: AppHandle,
     reader: impl std::io::Read + Send + 'static,
@@ -184,10 +193,56 @@ fn pump(
             };
             if let Some(log) = &log {
                 if let Ok(mut file) = log.lock() {
-                    let _ = writeln!(file, "[{stream}] {line}");
+                    let _ = writeln!(file, "[{stream}] {}", strip_ansi(&line));
                 }
             }
             let _ = app.emit("watch-log", LogLine { line, stream });
         }
     })
+}
+
+/// Remove ANSI escape sequences (CSI, OSC, and other escapes) from a line,
+/// keeping only the visible text. The vte terminal parser underneath
+/// strip-ansi-escapes handles the escape tokenization.
+fn strip_ansi(line: &str) -> String {
+    strip_ansi_escapes::strip_str(line)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_ansi;
+
+    #[test]
+    fn passes_plain_text_through() {
+        assert_eq!(strip_ansi("model warmup complete"), "model warmup complete");
+    }
+
+    #[test]
+    fn strips_tracing_sgr_sequences() {
+        let line = "\u{1b}[2m2026-07-14T00:33:54.845834Z\u{1b}[0m \u{1b}[33m WARN\u{1b}[0m \
+                    \u{1b}[2mort::logging\u{1b}[0m\u{1b}[2m:\u{1b}[0m timing cache miss";
+        assert_eq!(
+            strip_ansi(line),
+            "2026-07-14T00:33:54.845834Z  WARN ort::logging: timing cache miss"
+        );
+    }
+
+    #[test]
+    fn strips_non_sgr_csi_and_osc_sequences() {
+        assert_eq!(
+            strip_ansi("\u{1b}[2Kcleared \u{1b}]0;title\u{7}done \u{1b}]8;;x\u{1b}\\link"),
+            "cleared done link"
+        );
+    }
+
+    #[test]
+    fn drops_truncated_escape_at_end_of_line() {
+        assert_eq!(strip_ansi("done\u{1b}[3"), "done");
+        assert_eq!(strip_ansi("done\u{1b}"), "done");
+    }
+
+    #[test]
+    fn keeps_multibyte_text_intact() {
+        assert_eq!(strip_ansi("\u{1b}[32m見て\u{1b}[0m"), "見て");
+    }
 }

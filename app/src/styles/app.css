@@ -687,6 +687,51 @@ body,
   color: var(--color-faint);
 }
 
+/* ANSI palette for engine output (AnsiLine spans reference these as
+   var(--ansi-N)). The status slots reuse the app's meaning hues so tracing's
+   ERROR/WARN/INFO levels match the rest of the UI, and the remaining slots sit
+   in the same colorblind-safe lightness band on the instrument-black
+   background. Terminal "black" and "bright black" map to grays so dimmed
+   detail stays legible instead of vanishing into the panel. */
+.log-view {
+  --ansi-0: oklch(0.46 0.012 256);
+  --ansi-1: var(--bad);
+  --ansi-2: var(--ok);
+  --ansi-3: var(--warn);
+  --ansi-4: var(--pos-noun);
+  --ansi-5: var(--pos-adverb);
+  --ansi-6: oklch(0.79 0.1 205);
+  --ansi-7: var(--color-ink-2);
+  --ansi-8: var(--color-faint);
+  --ansi-9: oklch(0.76 0.17 25);
+  --ansi-10: oklch(0.86 0.14 159);
+  --ansi-11: oklch(0.84 0.155 50);
+  --ansi-12: oklch(0.82 0.115 234);
+  --ansi-13: oklch(0.82 0.13 305);
+  --ansi-14: oklch(0.85 0.1 205);
+  --ansi-15: var(--color-ink);
+}
+.ansi-bold {
+  font-weight: 700;
+}
+/* Opacity rather than a fixed gray so dim composes with any foreground color,
+   the way terminals render faint text. */
+.ansi-dim {
+  opacity: 0.62;
+}
+.ansi-italic {
+  font-style: italic;
+}
+.ansi-underline {
+  text-decoration-line: underline;
+}
+.ansi-strike {
+  text-decoration-line: line-through;
+}
+.ansi-underline.ansi-strike {
+  text-decoration-line: underline line-through;
+}
+
 /* ----------------------------------------------------------------------------
    Banners + misc
 ---------------------------------------------------------------------------- */

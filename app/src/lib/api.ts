@@ -83,6 +83,7 @@ export interface AppSettings {
   dllDirs: string[];
   runtimeSetupSeen: boolean;
   watchAuto: boolean;
+  watchFocusOnly: boolean;
   watchHud: boolean;
   watchMetricsIntervalSecs: number;
 }
@@ -171,8 +172,18 @@ export const api = {
   detectRuntime: () => invoke<DoctorReport>("detect_runtime"),
   recordRuntime: () => invoke<AppSettings>("record_runtime"),
   getSettings: () => invoke<AppSettings>("get_settings"),
-  setWatchOptions: (auto: boolean, hud: boolean, metricsIntervalSecs: number) =>
-    invoke<AppSettings>("set_watch_options", { auto, hud, metricsIntervalSecs }),
+  setWatchOptions: (
+    auto: boolean,
+    focusOnly: boolean,
+    hud: boolean,
+    metricsIntervalSecs: number,
+  ) =>
+    invoke<AppSettings>("set_watch_options", {
+      auto,
+      focusOnly,
+      hud,
+      metricsIntervalSecs,
+    }),
   pipAvailable: () => invoke<boolean>("pip_available"),
   writeDefaultConfig: () => invoke<void>("write_default_config"),
   listWindows: () => invoke<WindowSummary[]>("list_windows"),
