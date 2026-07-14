@@ -119,6 +119,7 @@ Other commands:
 
 ```powershell
 bun run build          # type-check (tsc) and build the frontend bundle
+bun run test           # vitest over the frontend's pure logic (e.g. the ANSI log parser)
 bun run tauri build    # build the Windows installer (NSIS) under src-tauri\target\release\bundle
 ```
 

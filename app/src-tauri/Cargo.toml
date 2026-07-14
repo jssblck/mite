@@ -40,6 +40,7 @@ sha2 = "0.10"
 hex = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 anyhow = "1"
+strip-ansi-escapes = "0.2.1"
 
 [dev-dependencies]
 # Hermetic temp dirs for filesystem-touching unit tests (matches the root crate).

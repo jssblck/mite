@@ -41,12 +41,17 @@ catch {
 
 $hasStaged = $staged.Count -gt 0
 $siteStaged = @($staged | Where-Object { $_ -like "site/*" })
+$appStaged = @($staged | Where-Object { $_ -like "app/*" })
 $nonSiteStaged = @($staged | Where-Object { $_ -notlike "site/*" })
 
 # Run the Rust checks unless the commit is exclusively site\** changes.
 $runRust = (-not $hasStaged) -or ($nonSiteStaged.Count -gt 0)
 # Run the site checks whenever site\** changed (or when scope is unknown).
 $runSite = (-not $hasStaged) -or ($siteStaged.Count -gt 0)
+# Run the app frontend tests whenever app\** changed (or when scope is
+# unknown). The app's Rust crate is checked by CI's `app` job instead;
+# building the Tauri dependency tree on every commit is too slow for a hook.
+$runApp = (-not $hasStaged) -or ($appStaged.Count -gt 0)
 
 if ($runRust) {
     Invoke-Step "cargo fmt --check" {
@@ -123,6 +128,33 @@ if ($runSite) {
 elseif ($hasStaged) {
     Write-Host ""
     Write-Host "==> site checks skipped (no site\** changes staged)"
+}
+
+if ($runApp) {
+    $appRoot = Join-Path $root "app"
+    if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
+        Write-Host ""
+        Write-Host "==> app checks skipped (bun not found on PATH)"
+    }
+    elseif (-not (Test-Path -LiteralPath (Join-Path $appRoot "node_modules"))) {
+        Write-Host ""
+        Write-Host "==> app checks skipped (run 'bun install' in app\ to enable them)"
+    }
+    else {
+        Push-Location $appRoot
+        try {
+            Invoke-Step "app: vitest run" {
+                bun run test
+            }
+        }
+        finally {
+            Pop-Location
+        }
+    }
+}
+elseif ($hasStaged) {
+    Write-Host ""
+    Write-Host "==> app checks skipped (no app\** changes staged)"
 }
 
 Write-Host ""
