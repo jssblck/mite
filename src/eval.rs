@@ -506,6 +506,7 @@ impl Deref for CheckedEvalSpec {
 pub struct ExpectedDetection {
     pub id: String,
     pub bounds: Rect,
+    pub character_geometry: CharacterGeometrySource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds_tolerance: Option<BoundsTolerance>,
     pub text: String,
@@ -513,6 +514,15 @@ pub struct ExpectedDetection {
     pub tokens: Vec<ExpectedToken>,
     #[serde(default)]
     pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CharacterGeometrySource {
+    /// Character cells were measured from the original frame's pixels.
+    PixelGradientV1,
+    /// Character cells were positioned by an annotator after visual review.
+    Manual,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -717,8 +727,8 @@ pub fn load_eval_spec(path: &Path) -> Result<CheckedEvalSpec> {
 }
 
 pub fn parse_eval_spec(spec: EvalSpec) -> Result<CheckedEvalSpec> {
-    if spec.schema != 1 {
-        bail!("unsupported eval schema {}; expected 1", spec.schema);
+    if spec.schema != 2 {
+        bail!("unsupported eval schema {}; expected 2", spec.schema);
     }
 
     let mut detection_ids = HashSet::new();
@@ -886,12 +896,12 @@ pub fn parse_eval_spec(spec: EvalSpec) -> Result<CheckedEvalSpec> {
     Ok(CheckedEvalSpec(spec))
 }
 
-/// Build one valid manual detection from a text string and a bounding rectangle.
+/// Build one valid manual detection from text and pixel-measured character cells.
 ///
-/// Character bounds are split evenly across `bounds`; token metadata is derived
-/// from the same dictionary, category, furigana, and popup logic used by `watch`
-/// and `eval`. This is intended for authoring tools where a human draws the
-/// text line box and enters the visible text.
+/// Token metadata is derived from the same dictionary, category, furigana, and
+/// popup logic used by `watch` and `eval`. Authoring tools must measure or draw
+/// every character cell; manufacturing equal slices from the line rectangle
+/// loses the geometry needed for accurate hover underlines and furigana.
 ///
 /// Keep this path aligned with docs/eval-metadata.md. The authored eval metadata
 /// is the executable learner-facing matrix: ambiguous forms should receive the
@@ -902,6 +912,7 @@ pub fn draft_expected_detection(
     id: impl Into<String>,
     text: impl Into<String>,
     bounds: Rect,
+    character_bounds: Vec<Rect>,
     bounds_tolerance: Option<BoundsTolerance>,
     notes: Option<String>,
 ) -> Result<ExpectedDetection> {
@@ -921,14 +932,28 @@ pub fn draft_expected_detection(
     }
 
     let chars = text.chars().map(|ch| ch.to_string()).collect::<Vec<_>>();
+    if character_bounds.len() != chars.len() {
+        bail!(
+            "detection {id} has {} characters but {} character bounds",
+            chars.len(),
+            character_bounds.len()
+        );
+    }
+    if let Some((index, _)) = character_bounds
+        .iter()
+        .enumerate()
+        .find(|(_, character_bounds)| !contains_rect(bounds, **character_bounds))
+    {
+        bail!("detection {id} character {index} bounds must be inside detection bounds");
+    }
     let token_spans = complete_token_spans(dict, &text);
     let expected_tokens = draft_expected_tokens(dict, &text);
 
-    let char_width = bounds.width / chars.len() as f32;
     let characters = chars
         .into_iter()
+        .zip(character_bounds)
         .enumerate()
-        .map(|(index, text)| {
+        .map(|(index, (text, bounds))| {
             let token_id = token_at_char(
                 &token_spans
                     .iter()
@@ -941,12 +966,7 @@ pub fn draft_expected_detection(
             .unwrap_or_else(|| expected_tokens[0].id.clone());
             ExpectedCharacter {
                 text,
-                bounds: Rect::new(
-                    bounds.x + index as f32 * char_width,
-                    bounds.y,
-                    char_width,
-                    bounds.height,
-                ),
+                bounds,
                 token_id,
                 notes: None,
             }
@@ -956,6 +976,7 @@ pub fn draft_expected_detection(
     let detection = ExpectedDetection {
         id,
         bounds,
+        character_geometry: CharacterGeometrySource::PixelGradientV1,
         bounds_tolerance,
         text,
         characters,
@@ -963,7 +984,7 @@ pub fn draft_expected_detection(
         notes,
     };
     parse_eval_spec(EvalSpec {
-        schema: 1,
+        schema: 2,
         image: None,
         source_capture: None,
         detections: vec![detection.clone()],
@@ -1901,12 +1922,13 @@ mod tests {
 
     fn water_spec() -> EvalSpec {
         EvalSpec {
-            schema: 1,
+            schema: 2,
             image: None,
             source_capture: None,
             detections: vec![ExpectedDetection {
                 id: "water".to_string(),
                 bounds: rect(10.0, 20.0, 30.0, 40.0),
+                character_geometry: CharacterGeometrySource::Manual,
                 bounds_tolerance: None,
                 text: "水".to_string(),
                 characters: vec![ExpectedCharacter {

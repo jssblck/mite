@@ -106,7 +106,7 @@ const REC_FALLBACK_ACCEPT_MIN: f32 = 0.92;
 
 /// Maximum text lines per recognizer batch. Recognizer compute scales with
 /// `batch × padded_width`, and every line in a batch is zero-padded to the
-/// batch's widest member — so a few moderate, width-sorted batches (each spanning
+/// batch's widest member, so a few moderate, width-sorted batches (each spanning
 /// a narrow width range) beat one giant batch that pads short lines out to the
 /// longest line's width. The small per-call overhead (~4 ms) is cheap next to the
 /// padding compute it saves.
@@ -336,11 +336,11 @@ impl OcrEngine for OrtOcrEngine {
     }
 
     fn recognize(&mut self, frame: &Frame, boxes: &[TextBox]) -> Result<Vec<RecognizedText>> {
-        let image = frame
+        let original_image = frame
             .pixels
             .as_ref()
             .context("real OCR requires frames with RGB pixels")?;
-        let image = maybe_contrast_stretch(image, self.contrast_stretch);
+        let image = maybe_contrast_stretch(original_image, self.contrast_stretch);
         if boxes.is_empty() {
             return Ok(Vec::new());
         }
@@ -350,7 +350,7 @@ impl OcrEngine for OrtOcrEngine {
         // `recognizer.run` per box we group boxes of similar width into batches and
         // run a handful of times. Widths vary per line, so each batch is padded to
         // its widest member (`target_w`); grouping keeps that padding small.
-        // Crop + resize every line in parallel — these are independent and the
+        // Crop + resize every line in parallel: these are independent and the
         // frame is read-only, so this scales across cores (the loop was a large
         // slice of the recognize stage on busy frames).
         let frame_image = image.as_ref();
@@ -450,6 +450,15 @@ impl OcrEngine for OrtOcrEngine {
             }
         }
 
+        // Snap every recognized line's box and character centres to the pixel
+        // extent of its rendered glyphs. Eval labels are measured the same way
+        // (docs/eval-geometry.md), so this is what aligns live boxes, hover
+        // underlines, and furigana anchors with ground truth; the detector box
+        // survives untouched whenever the measurement is not confident.
+        prof("rec.refine_geometry", || {
+            refine_recognized_geometry(original_image, &mut results)
+        });
+
         prof("rec.shape_rescue", || {
             rescue_shape_glyphs(frame_image, &mut results)
         });
@@ -462,6 +471,29 @@ impl OcrEngine for OrtOcrEngine {
         }
         Ok(recognized)
     }
+}
+
+/// Refine every non-empty recognized line against the original frame pixels.
+/// Lines are independent, so measurement runs in parallel; a line whose
+/// measurement fails any confidence or plausibility guard keeps its detector
+/// box and CTC-derived character centres.
+fn refine_recognized_geometry(image: &RgbImage, results: &mut [Option<RecognizedText>]) {
+    results
+        .par_iter_mut()
+        .flatten()
+        .filter(|line| !line.text.trim().is_empty())
+        .for_each(|line| {
+            if let Some(refined) =
+                crate::text_geometry::refine_recognized_line(image, line.text_box.rect, &line.text)
+            {
+                line.text_box.rect = refined.rect;
+                // Empty means the horizontal partition was not trustworthy;
+                // the CTC-derived centres stay.
+                if !refined.char_centers.is_empty() {
+                    line.char_centers = refined.char_centers;
+                }
+            }
+        });
 }
 
 /// Diamond list bullets (◇/◆) are real, labeled UI glyphs in the target games,
@@ -965,7 +997,7 @@ fn resize_for_detector(
 
     // Downscaling a 4K game frame with a single-threaded bicubic filter was the
     // single largest cost in the whole pipeline (~200 ms). When *both* axes
-    // shrink — the common case for 4K/1440p targets — use a rayon-parallel
+    // shrink (the common case for 4K/1440p targets) use a rayon-parallel
     // area-averaging resampler instead: each output pixel is the coverage-
     // weighted mean of the source pixels it spans. For downscaling that is both
     // faster (parallel, cache-friendly, no per-pixel transcendental weights) and
