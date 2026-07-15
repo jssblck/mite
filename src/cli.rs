@@ -106,6 +106,13 @@ struct WatchArgs {
     /// Shift key while focused (pin the target with --window-id/--title).
     #[arg(long)]
     auto: bool,
+    /// Draw the overlay only while the pinned target window is focused (it is
+    /// the foreground window, or owns it). Alt-tabbing away hides the overlay
+    /// and pauses OCR until the target regains focus (--auto-eval-capture
+    /// still collects in the background). Requires pinning the target with
+    /// --title/--window-id/--pid.
+    #[arg(long)]
+    focus_only: bool,
     /// Draw a per-stage latency HUD (graph + p50/p95/p99) in the top-left.
     #[arg(long)]
     hud: bool,
@@ -142,6 +149,15 @@ enum Command {
     /// Probe the GPU and model files and report readiness.
     Doctor {
         /// Emit the readiness report as JSON (for the desktop app) instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Build and warm the OCR engines for the configured backend so `watch`
+    /// starts instantly. The first run after an install, update, or backend
+    /// change compiles TensorRT engines and can take several minutes; with a
+    /// primed cache this completes in seconds. Idempotent.
+    Warmup {
+        /// Emit progress as JSON lines (for the desktop app) instead of text.
         #[arg(long)]
         json: bool,
     },
@@ -224,6 +240,7 @@ pub fn run() -> Result<()> {
     match cli.command {
         Command::InitConfig { force } => cmd_init_config(&cli.config, force),
         Command::Doctor { json } => cmd_doctor(&cli.config, int8, backend, json),
+        Command::Warmup { json } => cmd_warmup(&cli.config, int8, backend, json),
         Command::ListWindows {
             json,
             thumbnails,
@@ -299,6 +316,66 @@ fn cmd_doctor(
         print!("{}", report.render_text());
     }
     Ok(())
+}
+
+fn cmd_warmup(
+    config_path: &Path,
+    int8: Int8Override,
+    backend: Option<RuntimeBackend>,
+    json: bool,
+) -> Result<()> {
+    let config = load_or_default(config_path, int8, backend)?;
+    let mut emit = |event: crate::ort_engine::WarmupEvent| {
+        if json {
+            match serde_json::to_string(&event) {
+                // Rust's stdout is line-buffered, so each event reaches a
+                // supervising process (the desktop app) as soon as it happens.
+                Ok(line) => println!("{line}"),
+                Err(error) => tracing::error!("failed to serialize warmup event: {error}"),
+            }
+        } else {
+            render_warmup_event_text(&event);
+        }
+    };
+    crate::ort_engine::run_warmup(&config.models, &config.runtime, &mut emit)
+}
+
+fn render_warmup_event_text(event: &crate::ort_engine::WarmupEvent) {
+    use crate::ort_engine::WarmupEvent as Event;
+
+    let secs = |ms: u64| ms as f64 / 1000.0;
+    match event {
+        Event::Start { backend, targets } => {
+            if targets.is_empty() {
+                println!("nothing to warm for backend {backend:?}");
+            } else {
+                println!(
+                    "preparing {} OCR session(s) for backend {backend:?}",
+                    targets.len()
+                );
+            }
+        }
+        Event::BuildStarted {
+            target,
+            likely_compile: true,
+        } => println!(
+            "{target}: compiling a TensorRT engine (one-time after installs and updates; \
+             this can take several minutes)..."
+        ),
+        Event::BuildStarted { target, .. } => println!("{target}: loading..."),
+        Event::BuildFinished {
+            target,
+            provider,
+            elapsed_ms,
+        } => println!("{target}: ready on {provider} in {:.1}s", secs(*elapsed_ms)),
+        Event::WarmStarted { target } => println!("{target}: warming..."),
+        Event::WarmFinished { target, elapsed_ms } => {
+            println!("{target}: warm in {:.1}s", secs(*elapsed_ms));
+        }
+        Event::Done { elapsed_ms, .. } => {
+            println!("engines ready in {:.1}s", secs(*elapsed_ms));
+        }
+    }
 }
 
 /// One window in the `--json` output. Field names are camelCase because the
@@ -677,7 +754,16 @@ fn cmd_watch(
         });
     // If any window selector is given, pin to a concrete window id so the loop
     // captures it regardless of which window is foreground.
-    let pinned_window_id = match args.window.optional_selector()? {
+    let selector = args.window.optional_selector()?;
+    // Without a pinned window the target is by definition the foreground
+    // window, so a focus gate would either be a no-op or (fail-closed) never
+    // draw; reject the combination instead of silently doing nothing.
+    if args.focus_only && selector.is_none() {
+        bail!(
+            "--focus-only requires pinning the target window with --title, --window-id, or --pid"
+        );
+    }
+    let pinned_window_id = match selector {
         Some(selector) => Some(resolve_window_id(&selector)?),
         None => None,
     };
@@ -689,6 +775,7 @@ fn cmd_watch(
         pinned_window_id,
         backend,
         auto: args.auto,
+        focus_only: args.focus_only,
         hud: args.hud,
         metrics_interval: Duration::from_secs(args.metrics_interval_secs),
         smoothing: !args.no_smoothing,
@@ -754,6 +841,7 @@ mod tests {
             "--capture-backend",
             "wgc",
             "--auto",
+            "--focus-only",
             "--hud",
             "--metrics-interval-secs",
             "5",
@@ -774,9 +862,19 @@ mod tests {
             WindowCapturePreference::WindowsGraphicsCapture
         );
         assert!(args.auto);
+        assert!(args.focus_only);
         assert!(args.hud);
         assert_eq!(args.metrics_interval_secs, 5);
         assert!(args.no_smoothing);
+    }
+
+    #[test]
+    fn focus_only_defaults_off() {
+        let cli = Cli::try_parse_from(["mite", "watch"]).expect("watch parses");
+        let Command::Watch(args) = cli.command else {
+            panic!("expected watch command");
+        };
+        assert!(!args.focus_only);
     }
 
     #[test]
@@ -801,6 +899,25 @@ mod tests {
         let cli =
             Cli::try_parse_from(["mite", "--backend", "cpu", "watch"]).expect("cpu backend parses");
         assert_eq!(cli.backend, Some(RuntimeBackend::Cpu));
+    }
+
+    #[test]
+    fn parses_warmup_with_backend_override() {
+        // The desktop app invokes `mite --backend <tier> warmup --json`, so the
+        // global backend flag must compose with the subcommand.
+        let cli = Cli::try_parse_from(["mite", "--backend", "cuda", "warmup", "--json"])
+            .expect("warmup args parse");
+        assert_eq!(cli.backend, Some(RuntimeBackend::Cuda));
+        let Command::Warmup { json } = cli.command else {
+            panic!("expected warmup command");
+        };
+        assert!(json);
+
+        let cli = Cli::try_parse_from(["mite", "warmup"]).expect("bare warmup parses");
+        let Command::Warmup { json } = cli.command else {
+            panic!("expected warmup command");
+        };
+        assert!(!json);
     }
 
     #[test]

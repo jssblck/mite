@@ -73,9 +73,11 @@ Local precommit:
 ```
 
 `precommit.ps1` scopes itself to the staged changes: the Rust suite (fmt,
-nudge, test, clippy) is skipped when a commit touches only `site\**`, and the
+nudge, test, clippy) is skipped when a commit touches only `site\**`, the
 site checks (`astro check`, `vitest run`) run only when `site\**` changed and
-its `node_modules` is present. Run by hand with nothing staged, it runs both.
+its `node_modules` is present, and the app frontend tests (`vitest run` in
+`app\`) run only when `app\**` changed and its `node_modules` is present. Run
+by hand with nothing staged, it runs everything.
 
 First-time Windows setup:
 
@@ -114,6 +116,7 @@ Product commands:
 ```powershell
 cargo run -- list-windows
 cargo run -- list-windows --json --thumbnails   # what the desktop picker calls
+cargo run -- warmup                             # pre-build/warm the OCR engines (--json feeds the desktop app)
 cargo run -- watch
 cargo run -- watch --title "Window title" --auto
 cargo run -- watch --hud
@@ -217,9 +220,11 @@ Notes for changes here:
 - `src/capture/mod.rs`, `src/capture/window.rs`, `src/capture/image_probe.rs`,
   `src/wgc_capture.rs`: frame sources, window selection, WGC, screenshot
   fallback, and capture probe logic.
-- `src/ocr.rs`, `src/ort_engine/mod.rs`, `src/ort_engine/text.rs`: OCR trait,
-  ONNX Runtime engine, detector and recognizer pre/post-processing,
-  TensorRT/CUDA/CPU setup, timing hooks, and OCR text normalization.
+- `src/ocr.rs`, `src/ort_engine/mod.rs`, `src/ort_engine/text.rs`,
+  `src/ort_engine/warmup.rs`: OCR trait, ONNX Runtime engine, detector and
+  recognizer pre/post-processing, TensorRT/CUDA/CPU setup, timing hooks, OCR
+  text normalization, and the `warmup` engine pre-build with streamed progress
+  events (what the desktop app runs before enabling its Watch tab).
 - `src/interactive/mod.rs`, `src/interactive/smoothing.rs`,
   `src/interactive/auto_capture.rs`: `watch` orchestration, worker thread,
   capture/OCR loop, smoothing handoff, the raw eval-capture hotkey, and the
@@ -250,7 +255,8 @@ Notes for changes here:
 - `examples/`: profiling and lookup/sense stress harnesses.
 - `app/`: the Tauri desktop app (a separate, non-Rust-core surface) that
   installs, updates, and launches the CLI for non-technical users. Rust backend
-  in `app/src-tauri/src/` (downloaders, window picker, watch supervisor),
+  in `app/src-tauri/src/` (downloaders, window picker, watch and warmup
+  supervisors),
   React + Vite frontend in `app/src/`. It manages a per-user "mite home" and
   spawns the CLI with that as the working directory; it does not change CLI
   behavior. The picker does not capture windows itself: it runs `mite

@@ -60,6 +60,7 @@ cargo run -- list-windows --json --thumbnails        # JSON + base64 WGC thumbna
 cargo run -- watch                                   # OCR the foreground window while SHIFT is held
 cargo run -- watch --window-id 2100328 --auto        # pin a window, run continuously (games that eat Shift)
 cargo run -- watch --title "Target Game" --auto
+cargo run -- watch --title "Target Game" --auto --focus-only   # hide the overlay while the game is unfocused
 cargo run -- watch --title "Target Game" --enable-eval-hotkey Ctrl+Alt+F12
 ```
 
@@ -79,6 +80,16 @@ cargo run -- watch --window-id 459082 --capture-backend screenshot
 If a game window appears black or shows the wrong app under the overlay, force
 `--capture-backend wgc` (the desktop-screenshot fallback can return
 compositor-contaminated frames for fullscreen-windowed games).
+
+`--focus-only` (which requires a pinned target) draws the overlay only while
+the pinned window is focused: alt-tab away and the overlay clears within one UI
+tick, including an open hover popup, and OCR pauses until the window regains
+focus (the one exception is `--auto-eval-capture`, whose background fixture
+collection keeps the OCR loop running; presentation stays gated either way).
+Focus on a window the target owns (a file dialog it opened, for example) still
+counts as focused. Without the flag a pinned overlay keeps drawing at the
+target's screen position even while another window covers it, so the underlines
+land on top of whatever is in front.
 
 ### Latency feedback loop
 
@@ -316,12 +327,20 @@ Then build as usual:
 cargo build --release
 ```
 
-The first `watch` run builds and caches the FP16 engines under `cache\engines`
-(one-time, multi-minute, GPU-heavy); later runs load them instantly. Confirm with
-the `TensorRT execution provider active` log line. If TensorRT can't register,
-mite falls back to the CUDA execution provider, then CPU, so it always runs.
+The first engine build compiles and caches the FP16 engines under
+`cache\engines` (one-time, multi-minute, GPU-heavy); later runs load them
+instantly. Pay that cost up front with `cargo run -- warmup`, which builds and
+warms exactly the sessions `watch` would (whatever backend is configured:
+TensorRT, CUDA, or CPU) and prints per-step progress; `--json` emits the same
+progress as JSON lines, which is what the desktop app consumes. A `watch`
+started with a cold cache does the same build itself, announcing it with an
+`optimizing the text detector...` log line. Confirm the fast path with the
+`TensorRT execution provider active` log line. If TensorRT can't register, mite
+falls back to the CUDA execution provider, then CPU, so it always runs.
 `cargo run -- doctor` reports the detected runtime tier (TensorRT, CUDA, or CPU),
-which required DLLs are present, and the directories they were found in.
+which required DLLs are present, and the directories they were found in. The
+engine cache is keyed to the model, precision, and TensorRT version, so a model
+or runtime update triggers one new compile.
 
 `doctor` searches system-wide for the runtime: it checks `PATH`, the CUDA Toolkit
 install (`CUDA_PATH` and

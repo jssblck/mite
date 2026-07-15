@@ -41,6 +41,7 @@ hex = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 anyhow = "1"
 tauri-plugin-dialog = "2"
+strip-ansi-escapes = "0.2.1"
 
 [dev-dependencies]
 # Hermetic temp dirs for filesystem-touching unit tests (matches the root crate).

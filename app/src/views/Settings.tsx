@@ -11,6 +11,9 @@ interface SettingsProps {
   status: AppStatus;
   onRefresh: () => void;
   onOpenRuntimeSetup: () => void;
+  /** Called after a manual engine update or config reset, so the app can
+   * re-warm the OCR engines against the new binary/config. */
+  onEngineUpdated: () => void;
 }
 
 /** A native-style on/off toggle backed by a checkbox. */
@@ -143,6 +146,18 @@ function AdvancedOptionsModal({
           </SettingRow>
 
           <SettingRow
+            label="Only while focused"
+            detail="Hide the overlay and pause OCR whenever the watched window is not the active window."
+          >
+            <Toggle
+              label="Only while focused"
+              checked={settings?.watchFocusOnly ?? true}
+              disabled={!settings}
+              onChange={(v) => onChange({ watchFocusOnly: v })}
+            />
+          </SettingRow>
+
+          <SettingRow
             label="Latency HUD"
             detail="Show per-stage timings overlaid while watching."
           >
@@ -230,7 +245,12 @@ function AdvancedOptionsModal({
   );
 }
 
-export function Settings({ status, onRefresh, onOpenRuntimeSetup }: SettingsProps) {
+export function Settings({
+  status,
+  onRefresh,
+  onOpenRuntimeSetup,
+  onEngineUpdated,
+}: SettingsProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmWipe, setConfirmWipe] = useState(false);
@@ -265,6 +285,7 @@ export function Settings({ status, onRefresh, onOpenRuntimeSetup }: SettingsProp
       try {
         const saved = await api.setWatchOptions(
           next.watchAuto,
+          next.watchFocusOnly,
           next.watchHud,
           next.watchMetricsIntervalSecs,
           next.autoEvalCapture,
@@ -303,14 +324,17 @@ export function Settings({ status, onRefresh, onOpenRuntimeSetup }: SettingsProp
     }
   }
 
-  async function run(key: string, action: () => Promise<void>) {
+  /** Run one settings action; resolves true only when it succeeded. */
+  async function run(key: string, action: () => Promise<void>): Promise<boolean> {
     setBusy(key);
     setError(null);
     try {
       await action();
       onRefresh();
+      return true;
     } catch (err) {
       setError(String(err));
+      return false;
     } finally {
       setBusy(null);
     }
@@ -329,14 +353,22 @@ export function Settings({ status, onRefresh, onOpenRuntimeSetup }: SettingsProp
         >
           <button
             className="btn btn-ghost btn-sm"
-            onClick={() => run("cli", () => api.installOrUpdateCli())}
+            onClick={() =>
+              run("cli", () => api.installOrUpdateCli()).then((ok) => {
+                if (ok) onEngineUpdated();
+              })
+            }
             disabled={busy !== null}
           >
             {busy === "cli" ? "Updating..." : "Update"}
           </button>
           <button
             className="btn btn-ghost btn-sm"
-            onClick={() => run("config", () => api.writeDefaultConfig())}
+            onClick={() =>
+              run("config", () => api.writeDefaultConfig()).then((ok) => {
+                if (ok) onEngineUpdated();
+              })
+            }
             disabled={busy !== null}
           >
             {busy === "config" ? "Resetting..." : "Reset config"}
@@ -357,7 +389,7 @@ export function Settings({ status, onRefresh, onOpenRuntimeSetup }: SettingsProp
 
         <SettingRow
           label="Watching"
-          detail="Run mode, latency HUD, and metrics logging while watching."
+          detail="Run mode, focus gating, latency HUD, and metrics logging while watching."
         >
           <button
             className="btn btn-ghost btn-sm"

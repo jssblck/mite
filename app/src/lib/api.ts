@@ -84,6 +84,7 @@ export interface AppSettings {
   dllDirs: string[];
   runtimeSetupSeen: boolean;
   watchAuto: boolean;
+  watchFocusOnly: boolean;
   watchHud: boolean;
   watchMetricsIntervalSecs: number;
   autoEvalCapture: boolean;
@@ -138,6 +139,32 @@ export interface WatchStateEvent {
   code: number | null;
 }
 
+/**
+ * One progress event from `mite warmup --json`, forwarded verbatim by the
+ * backend supervisor. `target` names a model session ("detector",
+ * "recognizer", "fallback_recognizer"); `provider` is the execution provider
+ * it landed on ("tensor_rt", "cuda", "cpu").
+ */
+export type WarmupEvent =
+  | { event: "start"; backend: string; targets: string[] }
+  | { event: "build_started"; target: string; likelyCompile: boolean }
+  | {
+      event: "build_finished";
+      target: string;
+      provider: string;
+      elapsedMs: number;
+    }
+  | { event: "warm_started"; target: string }
+  | { event: "warm_finished"; target: string; elapsedMs: number }
+  | { event: "done"; elapsedMs: number; providers: Record<string, string> };
+
+/** Warmup child lifecycle: start, and exit with a stderr tail on failure. */
+export interface WarmupStateEvent {
+  running: boolean;
+  code: number | null;
+  error: string | null;
+}
+
 export const api = {
   appVersion: () => invoke<string>("app_version"),
   miteHomePath: () => invoke<string>("mite_home_path"),
@@ -150,6 +177,7 @@ export const api = {
   getSettings: () => invoke<AppSettings>("get_settings"),
   setWatchOptions: (
     auto: boolean,
+    focusOnly: boolean,
     hud: boolean,
     metricsIntervalSecs: number,
     autoEvalCapture: boolean,
@@ -157,6 +185,7 @@ export const api = {
   ) =>
     invoke<AppSettings>("set_watch_options", {
       auto,
+      focusOnly,
       hud,
       metricsIntervalSecs,
       autoEvalCapture,
@@ -175,6 +204,8 @@ export const api = {
     invoke<void>("start_watch", { windowId, windowTitle }),
   stopWatch: () => invoke<void>("stop_watch"),
   isWatching: () => invoke<boolean>("is_watching"),
+  startWarmup: () => invoke<void>("start_warmup"),
+  isWarming: () => invoke<boolean>("is_warming"),
   openMiteHome: () => invoke<void>("open_mite_home"),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   uninstallData: () => invoke<void>("uninstall_data"),
@@ -194,6 +225,18 @@ export function onWatchState(
   cb: (state: WatchStateEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<WatchStateEvent>("watch-state", (event) => cb(event.payload));
+}
+
+export function onWarmupEvent(
+  cb: (event: WarmupEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<WarmupEvent>("warmup-event", (event) => cb(event.payload));
+}
+
+export function onWarmupState(
+  cb: (state: WarmupStateEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<WarmupStateEvent>("warmup-state", (event) => cb(event.payload));
 }
 
 /** Handle to a pending signed app update returned by `appUpdater.check()`. */

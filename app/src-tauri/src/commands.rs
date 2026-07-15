@@ -9,11 +9,12 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_opener::OpenerExt;
 
+use crate::engine_use::EngineUse;
 use crate::release::{self, normalize_version};
 use crate::settings::{self, AppSettings};
 use crate::status::{self, AppStatus};
 use crate::watch::{self, WatchState};
-use crate::{cli, download, home, models, windows};
+use crate::{cli, download, home, models, warmup, windows};
 
 /// Run blocking work off the async executor and flatten errors to strings.
 async fn blocking<T, F>(f: F) -> Result<T, String>
@@ -303,6 +304,7 @@ pub async fn record_runtime() -> Result<AppSettings, String> {
 #[tauri::command]
 pub async fn set_watch_options(
     auto: bool,
+    focus_only: bool,
     hud: bool,
     metrics_interval_secs: u64,
     auto_eval_capture: bool,
@@ -311,6 +313,7 @@ pub async fn set_watch_options(
     blocking(move || {
         let mut saved = settings::load();
         saved.watch_auto = auto;
+        saved.watch_focus_only = focus_only;
         saved.watch_hud = hud;
         saved.watch_metrics_interval_secs = metrics_interval_secs;
         saved.auto_eval_capture = auto_eval_capture;
@@ -362,10 +365,24 @@ pub async fn list_windows() -> Result<Vec<windows::WindowSummary>, String> {
 pub fn start_watch(
     app: AppHandle,
     state: State<WatchState>,
+    engine: State<EngineUse>,
     window_id: u32,
     window_title: String,
 ) -> Result<(), String> {
-    watch::start(&app, &state, window_id, &window_title).map_err(|err| format!("{err:#}"))
+    watch::start(&app, &state, &engine, window_id, &window_title).map_err(|err| format!("{err:#}"))
+}
+
+/// Kick off the one-shot engine warmup (`mite warmup --json`). Progress arrives
+/// as `warmup-event` / `warmup-state` events; a call while one is already
+/// running joins it instead of spawning a second child.
+#[tauri::command]
+pub fn start_warmup(app: AppHandle, engine: State<EngineUse>) -> Result<(), String> {
+    warmup::start(&app, &engine).map_err(|err| format!("{err:#}"))
+}
+
+#[tauri::command]
+pub fn is_warming(engine: State<EngineUse>) -> bool {
+    warmup::is_warming(&engine)
 }
 
 #[tauri::command]

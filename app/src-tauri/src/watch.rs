@@ -16,6 +16,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
+use crate::engine_use::{EngineUse, EngineUser};
 use crate::{cli, eval_capture, home, settings};
 
 /// The single supervised `watch` child, shared with the reaper thread.
@@ -42,19 +43,43 @@ pub fn is_watching(state: &State<WatchState>) -> bool {
 
 /// Start `mite watch` for the given window. Errors if one is already running.
 ///
-/// The watch flags (continuous mode, HUD, metrics interval) come from the saved
-/// app settings, which the user configures in the Settings panel; the picker
-/// only supplies the window to read.
+/// Saved app settings provide the watch flags and capture destination; the
+/// picker only supplies the window to read and its title.
 pub fn start(
     app: &AppHandle,
     state: &State<WatchState>,
+    engine: &State<EngineUse>,
     window_id: u32,
     window_title: &str,
 ) -> Result<()> {
-    if is_watching(state) {
-        anyhow::bail!("watch is already running");
+    // Claim the engine atomically: watch and warmup both compile into the same
+    // TensorRT engine cache, so exactly one may run. The frontend gates the
+    // Watch tab during warmup; this backstops commands racing past that gate.
+    match engine.try_claim(EngineUser::Watching) {
+        Ok(()) => {}
+        Err(EngineUser::Warming) => {
+            anyhow::bail!("the reading engine is still being prepared; try again in a moment")
+        }
+        Err(_) => anyhow::bail!("watch is already running"),
     }
 
+    if let Err(error) = spawn_supervised(app, state, engine, window_id, window_title) {
+        engine.release(EngineUser::Watching);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Spawn the watch child and its pump/reaper threads. The caller has already
+/// claimed the engine; on success the reaper thread owns releasing the claim,
+/// on error the caller releases it.
+fn spawn_supervised(
+    app: &AppHandle,
+    state: &State<WatchState>,
+    engine: &State<EngineUse>,
+    window_id: u32,
+    window_title: &str,
+) -> Result<()> {
     if !home::cli_exe()?.exists() {
         anyhow::bail!("the mite CLI is not installed yet");
     }
@@ -71,8 +96,14 @@ pub fn start(
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = cmd.spawn().context("failed to launch mite watch")?;
-    let stdout = child.stdout.take().context("missing stdout pipe")?;
-    let stderr = child.stderr.take().context("missing stderr pipe")?;
+    let (stdout, stderr) = match (child.stdout.take(), child.stderr.take()) {
+        (Some(stdout), Some(stderr)) => (stdout, stderr),
+        _ => {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("missing watch pipes");
+        }
+    };
 
     let log = open_log_file(child.id()).map(|file| Arc::new(Mutex::new(file)));
     let out_handle = pump(app.clone(), stdout, "stdout", log.clone());
@@ -87,9 +118,11 @@ pub fn start(
         },
     );
 
-    // Reaper: once both pipes close (the process has exited), reap it, report
-    // the exit code, and clear the slot so a fresh start is allowed.
+    // Reaper: once both pipes close (the process has exited), reap it, clear
+    // the slot and the engine claim so a fresh start is allowed, and report
+    // the exit code.
     let slot = state.0.clone();
+    let claim = engine.inner().clone();
     let reaper_app = app.clone();
     std::thread::spawn(move || {
         let _ = out_handle.join();
@@ -100,6 +133,7 @@ pub fn start(
             .and_then(|mut guard| guard.take())
             .and_then(|mut child| child.wait().ok())
             .and_then(|status| status.code());
+        claim.release(EngineUser::Watching);
         let _ = reaper_app.emit(
             "watch-state",
             WatchStateEvent {
@@ -124,6 +158,10 @@ fn apply_watch_options(
 ) -> Result<()> {
     if opts.watch_auto {
         cmd.arg("--auto");
+    }
+    // Valid here because the app always pins a target with --window-id.
+    if opts.watch_focus_only {
+        cmd.arg("--focus-only");
     }
     if opts.watch_hud {
         cmd.arg("--hud");
@@ -208,6 +246,10 @@ fn open_log_file(pid: u32) -> Option<File> {
 
 /// Spawn a thread that reads a pipe line by line, emits each line as a
 /// `watch-log` event, and mirrors it to the log file.
+///
+/// The UI receives the line verbatim (its log panel parses and renders the
+/// ANSI colors the CLI's tracing output carries); the log file gets the line
+/// with escape sequences stripped so it stays grep-able plain text.
 fn pump(
     app: AppHandle,
     reader: impl std::io::Read + Send + 'static,
@@ -222,12 +264,19 @@ fn pump(
             };
             if let Some(log) = &log {
                 if let Ok(mut file) = log.lock() {
-                    let _ = writeln!(file, "[{stream}] {line}");
+                    let _ = writeln!(file, "[{stream}] {}", strip_ansi(&line));
                 }
             }
             let _ = app.emit("watch-log", LogLine { line, stream });
         }
     })
+}
+
+/// Remove ANSI escape sequences (CSI, OSC, and other escapes) from a line,
+/// keeping only the visible text. The vte terminal parser underneath
+/// strip-ansi-escapes handles the escape tokenization.
+fn strip_ansi(line: &str) -> String {
+    strip_ansi_escapes::strip_str(line)
 }
 
 #[cfg(test)]
@@ -248,6 +297,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let opts = settings::AppSettings {
             watch_auto: false,
+            watch_focus_only: false,
             auto_eval_capture: true,
             eval_capture_root: Some(root.path().to_path_buf()),
             ..settings::AppSettings::default()
@@ -276,7 +326,10 @@ mod tests {
 
         apply_watch_options(&mut cmd, &opts, 42, "Grace's Game").unwrap();
 
-        assert_eq!(args(&cmd), vec!["--auto".to_string()]);
+        assert_eq!(
+            args(&cmd),
+            vec!["--auto".to_string(), "--focus-only".to_string()]
+        );
     }
 
     #[test]
@@ -296,5 +349,39 @@ mod tests {
         assert!(error
             .to_string()
             .contains("preparing eval capture directory"));
+    }
+
+    #[test]
+    fn passes_plain_text_through() {
+        assert_eq!(strip_ansi("model warmup complete"), "model warmup complete");
+    }
+
+    #[test]
+    fn strips_tracing_sgr_sequences() {
+        let line = "\u{1b}[2m2026-07-14T00:33:54.845834Z\u{1b}[0m \u{1b}[33m WARN\u{1b}[0m \
+                    \u{1b}[2mort::logging\u{1b}[0m\u{1b}[2m:\u{1b}[0m timing cache miss";
+        assert_eq!(
+            strip_ansi(line),
+            "2026-07-14T00:33:54.845834Z  WARN ort::logging: timing cache miss"
+        );
+    }
+
+    #[test]
+    fn strips_non_sgr_csi_and_osc_sequences() {
+        assert_eq!(
+            strip_ansi("\u{1b}[2Kcleared \u{1b}]0;title\u{7}done \u{1b}]8;;x\u{1b}\\link"),
+            "cleared done link"
+        );
+    }
+
+    #[test]
+    fn drops_truncated_escape_at_end_of_line() {
+        assert_eq!(strip_ansi("done\u{1b}[3"), "done");
+        assert_eq!(strip_ansi("done\u{1b}"), "done");
+    }
+
+    #[test]
+    fn keeps_multibyte_text_intact() {
+        assert_eq!(strip_ansi("\u{1b}[32m見て\u{1b}[0m"), "見て");
     }
 }
