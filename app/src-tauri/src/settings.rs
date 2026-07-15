@@ -36,6 +36,10 @@ pub struct AppSettings {
     /// flag requires). On by default: without it, an app-launched overlay in
     /// continuous mode keeps drawing over whatever the user alt-tabs to.
     pub watch_focus_only: bool,
+    /// Draw the coloured per-word underlines while watching. Off by default:
+    /// the app launches the invisible hover-only reading mode (passing
+    /// `watch --no-word-underlines`) unless the user opts in.
+    pub watch_word_underlines: bool,
     /// Show the per-stage latency HUD (`watch --hud`).
     pub watch_hud: bool,
     /// Log aggregate metrics every N seconds (`watch --metrics-interval-secs`);
@@ -58,6 +62,7 @@ impl Default for AppSettings {
             // overlay disappears while the watched window is unfocused.
             watch_auto: true,
             watch_focus_only: true,
+            watch_word_underlines: false,
             watch_hud: false,
             watch_metrics_interval_secs: 0,
             auto_eval_capture: false,
@@ -151,6 +156,7 @@ mod tests {
             runtime_setup_seen: true,
             watch_auto: false,
             watch_focus_only: false,
+            watch_word_underlines: true,
             watch_hud: true,
             watch_metrics_interval_secs: 5,
             auto_eval_capture: true,
@@ -163,6 +169,7 @@ mod tests {
         assert!(decoded.runtime_setup_seen);
         assert!(!decoded.watch_auto);
         assert!(!decoded.watch_focus_only);
+        assert!(decoded.watch_word_underlines);
         assert!(decoded.watch_hud);
         assert_eq!(decoded.watch_metrics_interval_secs, 5);
         assert!(decoded.auto_eval_capture);
@@ -178,6 +185,8 @@ mod tests {
         let decoded: AppSettings = serde_json::from_str(legacy).unwrap();
         assert!(decoded.watch_auto);
         assert!(decoded.watch_focus_only);
+        // Underlines default off: the app's reading mode is hover-only.
+        assert!(!decoded.watch_word_underlines);
         assert!(!decoded.watch_hud);
         assert_eq!(decoded.watch_metrics_interval_secs, 0);
         assert!(!decoded.auto_eval_capture);

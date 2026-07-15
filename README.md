@@ -105,9 +105,11 @@ focused, so alt-tabbing away never leaves underlines over another app.
 ## Features
 
 - Window OCR overlay for Japanese text in native Windows apps and games, with
-  POS-coloured per-word underlines (`overlay.word_underlines`, on by default)
-  and optional always-on furigana (`overlay.furigana`, off by default). Turn
-  underlines off for an invisible overlay that only shows a popup on hover.
+  POS-coloured per-word underlines (`overlay.word_underlines`, on by default;
+  `watch --no-word-underlines` disables them per run) and optional always-on
+  furigana (`overlay.furigana`, off by default). Turn underlines off for an
+  invisible overlay that only shows a popup on hover; the desktop app launches
+  this hover-only mode unless its underlines toggle is on.
 - Hover popups with dictionary forms, a plain-language grammar pill, glosses,
   inflection notes, and furigana.
 - Click-through layered Win32 overlay that keeps game input uninterrupted.

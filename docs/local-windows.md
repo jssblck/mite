@@ -61,6 +61,7 @@ cargo run -- watch                                   # OCR the foreground window
 cargo run -- watch --window-id 2100328 --auto        # pin a window, run continuously (games that eat Shift)
 cargo run -- watch --title "Target Game" --auto
 cargo run -- watch --title "Target Game" --auto --focus-only   # hide the overlay while the game is unfocused
+cargo run -- watch --title "Target Game" --auto --no-word-underlines   # hover-only: no underlines, popups still work
 cargo run -- watch --title "Target Game" --enable-eval-hotkey Ctrl+Alt+F12
 ```
 

@@ -305,6 +305,7 @@ pub async fn record_runtime() -> Result<AppSettings, String> {
 pub async fn set_watch_options(
     auto: bool,
     focus_only: bool,
+    word_underlines: bool,
     hud: bool,
     metrics_interval_secs: u64,
     auto_eval_capture: bool,
@@ -314,6 +315,7 @@ pub async fn set_watch_options(
         let mut saved = settings::load();
         saved.watch_auto = auto;
         saved.watch_focus_only = focus_only;
+        saved.watch_word_underlines = word_underlines;
         saved.watch_hud = hud;
         saved.watch_metrics_interval_secs = metrics_interval_secs;
         saved.auto_eval_capture = auto_eval_capture;

@@ -123,6 +123,11 @@ struct WatchArgs {
     /// Disable temporal smoothing (force a full pass each time).
     #[arg(long)]
     no_smoothing: bool,
+    /// Do not draw the coloured per-word underlines (overrides
+    /// `overlay.word_underlines`). Hover lookups still work: the overlay stays
+    /// invisible until the cursor rests on a word.
+    #[arg(long)]
+    no_word_underlines: bool,
     /// Developer fixture tool: register a global hotkey that saves the raw
     /// captured frame without OCR, e.g. Ctrl+Alt+F12.
     #[arg(long, value_name = "COMBO")]
@@ -722,7 +727,10 @@ fn cmd_watch(
     backend: Option<RuntimeBackend>,
     args: WatchArgs,
 ) -> Result<()> {
-    let config = load_or_default(config_path, int8, backend)?;
+    let mut config = load_or_default(config_path, int8, backend)?;
+    if args.no_word_underlines {
+        config.overlay.word_underlines = false;
+    }
     let backend = args.window.capture_backend;
     // Both the manual hotkey and the automatic capture write to the same eval
     // folder, defaulting to the shared capture root when no directory is given.
@@ -846,6 +854,7 @@ mod tests {
             "--metrics-interval-secs",
             "5",
             "--no-smoothing",
+            "--no-word-underlines",
         ])
         .expect("watch args parse");
 
@@ -866,6 +875,7 @@ mod tests {
         assert!(args.hud);
         assert_eq!(args.metrics_interval_secs, 5);
         assert!(args.no_smoothing);
+        assert!(args.no_word_underlines);
     }
 
     #[test]
@@ -875,6 +885,8 @@ mod tests {
             panic!("expected watch command");
         };
         assert!(!args.focus_only);
+        // Underlines stay on the config default unless the flag disables them.
+        assert!(!args.no_word_underlines);
     }
 
     #[test]

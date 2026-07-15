@@ -85,6 +85,7 @@ export interface AppSettings {
   runtimeSetupSeen: boolean;
   watchAuto: boolean;
   watchFocusOnly: boolean;
+  watchWordUnderlines: boolean;
   watchHud: boolean;
   watchMetricsIntervalSecs: number;
   autoEvalCapture: boolean;
@@ -178,6 +179,7 @@ export const api = {
   setWatchOptions: (
     auto: boolean,
     focusOnly: boolean,
+    wordUnderlines: boolean,
     hud: boolean,
     metricsIntervalSecs: number,
     autoEvalCapture: boolean,
@@ -186,6 +188,7 @@ export const api = {
     invoke<AppSettings>("set_watch_options", {
       auto,
       focusOnly,
+      wordUnderlines,
       hud,
       metricsIntervalSecs,
       autoEvalCapture,
