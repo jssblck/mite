@@ -158,6 +158,18 @@ function AdvancedOptionsModal({
           </SettingRow>
 
           <SettingRow
+            label="Word underlines"
+            detail="Underline each recognized word, colored by part of speech. When off, the overlay stays invisible until you hover a word."
+          >
+            <Toggle
+              label="Word underlines"
+              checked={settings?.watchWordUnderlines ?? false}
+              disabled={!settings}
+              onChange={(v) => onChange({ watchWordUnderlines: v })}
+            />
+          </SettingRow>
+
+          <SettingRow
             label="Latency HUD"
             detail="Show per-stage timings overlaid while watching."
           >
@@ -286,6 +298,7 @@ export function Settings({
         const saved = await api.setWatchOptions(
           next.watchAuto,
           next.watchFocusOnly,
+          next.watchWordUnderlines,
           next.watchHud,
           next.watchMetricsIntervalSecs,
           next.autoEvalCapture,
@@ -389,7 +402,7 @@ export function Settings({
 
         <SettingRow
           label="Watching"
-          detail="Run mode, focus gating, latency HUD, and metrics logging while watching."
+          detail="Run mode, focus gating, word underlines, latency HUD, and metrics logging while watching."
         >
           <button
             className="btn btn-ghost btn-sm"

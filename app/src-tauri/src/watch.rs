@@ -163,6 +163,11 @@ fn apply_watch_options(
     if opts.watch_focus_only {
         cmd.arg("--focus-only");
     }
+    // The CLI's config default draws underlines; the app's default is the
+    // hover-only mode, so it must pass the disabling flag explicitly.
+    if !opts.watch_word_underlines {
+        cmd.arg("--no-word-underlines");
+    }
     if opts.watch_hud {
         cmd.arg("--hud");
     }
@@ -312,6 +317,7 @@ mod tests {
         assert_eq!(
             args(&cmd),
             vec![
+                "--no-word-underlines".to_string(),
                 "--auto-eval-capture".to_string(),
                 "--eval-capture-dir".to_string(),
                 expected.to_string_lossy().into_owned(),
@@ -322,6 +328,26 @@ mod tests {
     #[test]
     fn disabled_eval_capture_omits_capture_arguments() {
         let opts = settings::AppSettings::default();
+        let mut cmd = Command::new("mite");
+
+        apply_watch_options(&mut cmd, &opts, 42, "Grace's Game").unwrap();
+
+        assert_eq!(
+            args(&cmd),
+            vec![
+                "--auto".to_string(),
+                "--focus-only".to_string(),
+                "--no-word-underlines".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn enabled_underlines_omit_the_disabling_flag() {
+        let opts = settings::AppSettings {
+            watch_word_underlines: true,
+            ..settings::AppSettings::default()
+        };
         let mut cmd = Command::new("mite");
 
         apply_watch_options(&mut cmd, &opts, 42, "Grace's Game").unwrap();
