@@ -307,6 +307,8 @@ pub async fn set_watch_options(
     focus_only: bool,
     hud: bool,
     metrics_interval_secs: u64,
+    auto_eval_capture: bool,
+    eval_capture_root: Option<std::path::PathBuf>,
 ) -> Result<AppSettings, String> {
     blocking(move || {
         let mut saved = settings::load();
@@ -314,6 +316,9 @@ pub async fn set_watch_options(
         saved.watch_focus_only = focus_only;
         saved.watch_hud = hud;
         saved.watch_metrics_interval_secs = metrics_interval_secs;
+        saved.auto_eval_capture = auto_eval_capture;
+        saved.eval_capture_root = eval_capture_root;
+        saved.eval_capture_root()?;
         settings::save(&saved)?;
         Ok(saved)
     })
@@ -362,8 +367,9 @@ pub fn start_watch(
     state: State<WatchState>,
     engine: State<EngineUse>,
     window_id: u32,
+    window_title: String,
 ) -> Result<(), String> {
-    watch::start(&app, &state, &engine, window_id).map_err(|err| format!("{err:#}"))
+    watch::start(&app, &state, &engine, window_id, &window_title).map_err(|err| format!("{err:#}"))
 }
 
 /// Kick off the one-shot engine warmup (`mite warmup --json`). Progress arrives

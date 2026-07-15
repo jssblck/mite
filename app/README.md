@@ -18,7 +18,7 @@ The app owns a single per-user directory, the "mite home", at
 %LOCALAPPDATA%\Mite\
   bin\mite.exe          downloaded from the GitHub release feed
   mite.toml             default config (written via `mite init-config`)
-  app-settings.json     recorded runtime tier + DLL dirs (guided setup writes this)
+  app-settings.json     runtime, watch, and automatic eval-capture settings
   models\               detector/recognizer/dict/JMdict/jpdb-freq
   cache\engines\        TensorRT engine cache (CLI writes on first GPU run)
   nvidia-runtime\       optional: pip-install NVIDIA wheels here (the app watches it)
@@ -45,6 +45,12 @@ within the app's own caret/semver range (a `0.2.0` app takes engine `0.2.x` but
 never `0.3.0`), not always-latest. When the installed engine is older than or
 outside that range, the app reconciles it on startup with no prompt. See
 [docs/releases.md](../docs/releases.md) for the full model.
+
+Advanced watch settings can enable the CLI's automatic eval-capture mode. The
+user chooses a root folder with the native folder picker, and each watched
+window writes to a normalized title folder below it. For example, watching a
+window titled `Grace's Game: Deluxe Edition` with `C:\work\mite\eval` selected
+writes captures under `C:\work\mite\eval\grace-s-game-deluxe-edition\`.
 
 ## Engine warmup
 

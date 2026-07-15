@@ -10,6 +10,7 @@ mod cli;
 mod commands;
 mod download;
 mod engine_use;
+mod eval_capture;
 mod home;
 mod models;
 mod release;
@@ -25,7 +26,9 @@ use watch::WatchState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let mut builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+    let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init());
 
     // Self-update: the updater downloads and verifies the next signed installer,
     // and the process plugin lets the frontend relaunch into it. The window-state

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   api,
   type AppSettings,
@@ -89,10 +89,14 @@ export function SettingRow({
 function AdvancedOptionsModal({
   settings,
   onChange,
+  onChooseEvalRoot,
+  error,
   onClose,
 }: {
   settings: AppSettings | null;
   onChange: (patch: Partial<AppSettings>) => void;
+  onChooseEvalRoot: (enableAfterSelection: boolean) => void;
+  error: string | null;
   onClose: () => void;
 }) {
   return (
@@ -186,7 +190,50 @@ function AdvancedOptionsModal({
               }
             />
           </SettingRow>
+
+          <SettingRow
+            label="Automatic eval capture"
+            detail="Save a raw frame when the recognized text or layout changes enough to be a new scene."
+          >
+            <Toggle
+              label="Automatic eval capture"
+              checked={settings?.autoEvalCapture ?? false}
+              disabled={!settings}
+              onChange={(enabled) => {
+                if (enabled && !settings?.evalCaptureRoot) {
+                  onChooseEvalRoot(true);
+                } else {
+                  onChange({ autoEvalCapture: enabled });
+                }
+              }}
+            />
+          </SettingRow>
+
+          {settings?.autoEvalCapture && (
+            <SettingRow
+              label="Eval capture root"
+              detail="Each watched window gets a normalized subfolder here."
+            >
+              <div className="folder-control">
+                <div className="folder-path" title={settings.evalCaptureRoot ?? ""}>
+                  {settings.evalCaptureRoot ?? "No folder selected"}
+                </div>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => onChooseEvalRoot(false)}
+                >
+                  Choose folder
+                </button>
+              </div>
+            </SettingRow>
+          )}
         </div>
+
+        {error && (
+          <div className="error-text" role="alert">
+            {error}
+          </div>
+        )}
 
         <div className="btn-row modal-actions">
           <button className="btn btn-primary" onClick={onClose}>
@@ -208,26 +255,70 @@ export function Settings({
   const [error, setError] = useState<string | null>(null);
   const [confirmWipe, setConfirmWipe] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const settingsRef = useRef<AppSettings | null>(null);
+  const savedSettingsRef = useRef<AppSettings | null>(null);
+  const watchSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   useEffect(() => {
-    api.getSettings().then(setSettings).catch(() => undefined);
+    api
+      .getSettings()
+      .then((loaded) => {
+        savedSettingsRef.current = loaded;
+        settingsRef.current = loaded;
+        setSettings(loaded);
+      })
+      .catch(() => undefined);
   }, []);
 
   // Persist a watch-option change and reflect the saved settings the backend
   // returns, so the UI stays in lockstep with what the next launch will use.
   async function saveWatch(patch: Partial<AppSettings>) {
-    if (!settings) return;
-    const next = { ...settings, ...patch };
+    const current = settingsRef.current;
+    if (!current) return;
+    const next = { ...current, ...patch };
+    settingsRef.current = next;
     setSettings(next);
+    setError(null);
+
+    const operation = watchSaveQueue.current.then(async () => {
+      try {
+        const saved = await api.setWatchOptions(
+          next.watchAuto,
+          next.watchFocusOnly,
+          next.watchHud,
+          next.watchMetricsIntervalSecs,
+          next.autoEvalCapture,
+          next.evalCaptureRoot,
+        );
+        savedSettingsRef.current = saved;
+        if (settingsRef.current === next) {
+          settingsRef.current = saved;
+          setSettings(saved);
+          setError(null);
+        }
+      } catch (err) {
+        const saved = savedSettingsRef.current;
+        if (settingsRef.current === next && saved) {
+          settingsRef.current = saved;
+          setSettings(saved);
+          setError(String(err));
+        }
+      }
+    });
+    watchSaveQueue.current = operation;
+    await operation;
+  }
+
+  async function chooseEvalRoot(enableAfterSelection: boolean) {
+    setError(null);
     try {
-      const saved = await api.setWatchOptions(
-        next.watchAuto,
-        next.watchFocusOnly,
-        next.watchHud,
-        next.watchMetricsIntervalSecs,
-      );
-      setSettings(saved);
+      const selected = await api.chooseEvalCaptureRoot();
+      if (typeof selected !== "string") return;
+      await saveWatch({
+        evalCaptureRoot: selected,
+        ...(enableAfterSelection ? { autoEvalCapture: true } : {}),
+      });
     } catch (err) {
       setError(String(err));
     }
@@ -358,6 +449,8 @@ export function Settings({
         <AdvancedOptionsModal
           settings={settings}
           onChange={saveWatch}
+          onChooseEvalRoot={chooseEvalRoot}
+          error={error}
           onClose={() => setAdvancedOpen(false)}
         />
       )}
