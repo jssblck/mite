@@ -305,12 +305,17 @@ pub async fn set_watch_options(
     auto: bool,
     hud: bool,
     metrics_interval_secs: u64,
+    auto_eval_capture: bool,
+    eval_capture_root: Option<std::path::PathBuf>,
 ) -> Result<AppSettings, String> {
     blocking(move || {
         let mut saved = settings::load();
         saved.watch_auto = auto;
         saved.watch_hud = hud;
         saved.watch_metrics_interval_secs = metrics_interval_secs;
+        saved.auto_eval_capture = auto_eval_capture;
+        saved.eval_capture_root = eval_capture_root;
+        saved.eval_capture_root()?;
         settings::save(&saved)?;
         Ok(saved)
     })
@@ -354,8 +359,13 @@ pub async fn list_windows() -> Result<Vec<windows::WindowSummary>, String> {
 }
 
 #[tauri::command]
-pub fn start_watch(app: AppHandle, state: State<WatchState>, window_id: u32) -> Result<(), String> {
-    watch::start(&app, &state, window_id).map_err(|err| format!("{err:#}"))
+pub fn start_watch(
+    app: AppHandle,
+    state: State<WatchState>,
+    window_id: u32,
+    window_title: String,
+) -> Result<(), String> {
+    watch::start(&app, &state, window_id, &window_title).map_err(|err| format!("{err:#}"))
 }
 
 #[tauri::command]

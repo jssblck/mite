@@ -98,7 +98,7 @@ export function WatchView({ watching, onWatchingChange }: WatchViewProps) {
     setLogs([]);
     setLaunchingId(target.id);
     try {
-      await api.startWatch(target.id);
+      await api.startWatch(target.id, target.title);
       setLaunched(target);
       onWatchingChange(true);
     } catch (err) {

@@ -6,9 +6,9 @@
 //! binaries; this only remembers where the user installed them and which tier
 //! that supports.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::home;
@@ -36,6 +36,10 @@ pub struct AppSettings {
     /// Log aggregate metrics every N seconds (`watch --metrics-interval-secs`);
     /// `0` disables it.
     pub watch_metrics_interval_secs: u64,
+    /// Automatically save new OCR scenes while a window is being watched.
+    pub auto_eval_capture: bool,
+    /// User-selected parent directory for per-window eval capture folders.
+    pub eval_capture_root: Option<PathBuf>,
 }
 
 impl Default for AppSettings {
@@ -49,6 +53,8 @@ impl Default for AppSettings {
             watch_auto: true,
             watch_hud: false,
             watch_metrics_interval_secs: 0,
+            auto_eval_capture: false,
+            eval_capture_root: None,
         }
     }
 }
@@ -63,6 +69,25 @@ impl AppSettings {
             Some("cpu") => Some("cpu"),
             _ => None,
         }
+    }
+
+    /// Parse the persisted eval-capture fields into the launch-ready root.
+    ///
+    /// Disabled settings may retain a previous root for easy re-enabling. When
+    /// enabled, the root must be an absolute path selected by the native folder
+    /// dialog; this prevents a tampered settings file from redirecting captures
+    /// relative to the app's mite home.
+    pub fn eval_capture_root(&self) -> Result<Option<&Path>> {
+        if !self.auto_eval_capture {
+            return Ok(None);
+        }
+        let Some(root) = self.eval_capture_root.as_deref() else {
+            bail!("automatic eval capture requires a capture root folder");
+        };
+        if !root.is_absolute() {
+            bail!("eval capture root must be an absolute path");
+        }
+        Ok(Some(root))
     }
 }
 
@@ -120,6 +145,8 @@ mod tests {
             watch_auto: false,
             watch_hud: true,
             watch_metrics_interval_secs: 5,
+            auto_eval_capture: true,
+            eval_capture_root: Some(PathBuf::from("C:\\eval")),
         };
         let text = serde_json::to_string(&settings).unwrap();
         let decoded: AppSettings = serde_json::from_str(&text).unwrap();
@@ -129,6 +156,8 @@ mod tests {
         assert!(!decoded.watch_auto);
         assert!(decoded.watch_hud);
         assert_eq!(decoded.watch_metrics_interval_secs, 5);
+        assert!(decoded.auto_eval_capture);
+        assert_eq!(decoded.eval_capture_root, Some(PathBuf::from("C:\\eval")));
     }
 
     #[test]
@@ -140,5 +169,29 @@ mod tests {
         assert!(decoded.watch_auto);
         assert!(!decoded.watch_hud);
         assert_eq!(decoded.watch_metrics_interval_secs, 0);
+        assert!(!decoded.auto_eval_capture);
+        assert!(decoded.eval_capture_root.is_none());
+    }
+
+    #[test]
+    fn enabled_eval_capture_requires_an_absolute_root() {
+        let missing = AppSettings {
+            auto_eval_capture: true,
+            ..AppSettings::default()
+        };
+        assert!(missing.eval_capture_root().is_err());
+
+        let relative = AppSettings {
+            auto_eval_capture: true,
+            eval_capture_root: Some(PathBuf::from("eval")),
+            ..AppSettings::default()
+        };
+        assert!(relative.eval_capture_root().is_err());
+
+        let disabled = AppSettings {
+            eval_capture_root: Some(PathBuf::from("eval")),
+            ..AppSettings::default()
+        };
+        assert!(disabled.eval_capture_root().unwrap().is_none());
     }
 }

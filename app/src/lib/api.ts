@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { check, type Update, type DownloadEvent } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { open } from "@tauri-apps/plugin-dialog";
 
 /** The detected runtime tier, slowest-safe to fastest. */
 export type RuntimeTier = "cpu" | "cuda" | "tensor_rt";
@@ -85,6 +86,8 @@ export interface AppSettings {
   watchAuto: boolean;
   watchHud: boolean;
   watchMetricsIntervalSecs: number;
+  autoEvalCapture: boolean;
+  evalCaptureRoot: string | null;
 }
 
 /** How the installed engine relates to the engine this app build wants. */
@@ -145,12 +148,31 @@ export const api = {
   detectRuntime: () => invoke<DoctorReport>("detect_runtime"),
   recordRuntime: () => invoke<AppSettings>("record_runtime"),
   getSettings: () => invoke<AppSettings>("get_settings"),
-  setWatchOptions: (auto: boolean, hud: boolean, metricsIntervalSecs: number) =>
-    invoke<AppSettings>("set_watch_options", { auto, hud, metricsIntervalSecs }),
+  setWatchOptions: (
+    auto: boolean,
+    hud: boolean,
+    metricsIntervalSecs: number,
+    autoEvalCapture: boolean,
+    evalCaptureRoot: string | null,
+  ) =>
+    invoke<AppSettings>("set_watch_options", {
+      auto,
+      hud,
+      metricsIntervalSecs,
+      autoEvalCapture,
+      evalCaptureRoot,
+    }),
+  chooseEvalCaptureRoot: () =>
+    open({
+      directory: true,
+      multiple: false,
+      title: "Choose eval capture root",
+    }),
   pipAvailable: () => invoke<boolean>("pip_available"),
   writeDefaultConfig: () => invoke<void>("write_default_config"),
   listWindows: () => invoke<WindowSummary[]>("list_windows"),
-  startWatch: (windowId: number) => invoke<void>("start_watch", { windowId }),
+  startWatch: (windowId: number, windowTitle: string) =>
+    invoke<void>("start_watch", { windowId, windowTitle }),
   stopWatch: () => invoke<void>("stop_watch"),
   isWatching: () => invoke<boolean>("is_watching"),
   openMiteHome: () => invoke<void>("open_mite_home"),

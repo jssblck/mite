@@ -244,6 +244,24 @@ body,
   display: flex;
   gap: 0.5rem;
 }
+.folder-control {
+  width: min(16rem, 42vw);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.45rem;
+}
+.folder-path {
+  width: 100%;
+  overflow: hidden;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .setting-note {
   margin: 0 0 0.85rem;
 }
@@ -957,7 +975,7 @@ body,
   padding: 1.35rem 1.4rem;
 }
 .modal-wide {
-  max-width: 32rem;
+  max-width: 36rem;
 }
 .modal-head {
   display: flex;
